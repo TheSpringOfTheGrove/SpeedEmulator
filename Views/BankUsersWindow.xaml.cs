@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,12 +15,15 @@ namespace SpeedEmulator.Views;
 
 public partial class BankUsersWindow : Window
 {
+    private static readonly IValueConverter ExtraDateFieldConverter = new ExtraDateStringConverter();
+
     private readonly BankUsersViewModel viewModel;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowGenerationRepository flowGenerationRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly ITableExcelService tableExcelService;
 
     public BankUsersWindow(
         BankUsersViewModel viewModel,
@@ -26,7 +31,8 @@ public partial class BankUsersWindow : Window
         IBankUserColumnSettingsRepository columnSettingsRepository,
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowGenerationRepository flowGenerationRepository,
-        IFlowRecordRepository flowRecordRepository)
+        IFlowRecordRepository flowRecordRepository,
+        ITableExcelService tableExcelService)
     {
         InitializeComponent();
         this.viewModel = viewModel;
@@ -35,6 +41,7 @@ public partial class BankUsersWindow : Window
         this.interestSettingsRepository = interestSettingsRepository;
         this.flowGenerationRepository = flowGenerationRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.tableExcelService = tableExcelService;
         DataContext = viewModel;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenAutoGenerateFlow += ViewModel_RequestOpenAutoGenerateFlow;
@@ -47,7 +54,10 @@ public partial class BankUsersWindow : Window
     {
         await viewModel.ApplyColumnSettingsAsync();
         BuildDynamicColumns(viewModel.Bank);
+        BuildEditorFields(viewModel.Bank);
         await viewModel.LoadAsync();
+        UsersGrid.SelectedIndex = -1;
+        UsersGrid.CurrentCell = default;
     }
 
     protected override void OnClosed(EventArgs e)
@@ -78,12 +88,12 @@ public partial class BankUsersWindow : Window
                 interestSettingsRepository,
                 new FlowRuleExcelService());
 
-            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository)
+            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService)
             {
                 Owner = this
             };
 
-            window.ShowDialog();
+            WindowNavigation.ShowDialogAsCurrent(this, window);
         }
         catch (Exception ex)
         {
@@ -98,13 +108,13 @@ public partial class BankUsersWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
         };
 
-        window.ShowDialog();
+        WindowNavigation.ShowDialogAsCurrent(this, window);
     }
 
     private async void ViewModel_RequestOpenColumnSettings(object? sender, EventArgs e)
@@ -126,6 +136,7 @@ public partial class BankUsersWindow : Window
         {
             await viewModel.ApplyColumnSettingsAsync();
             BuildDynamicColumns(viewModel.Bank);
+            BuildEditorFields(viewModel.Bank);
             viewModel.NotifyColumnSettingsSaved();
         }
     }
@@ -217,6 +228,99 @@ public partial class BankUsersWindow : Window
         }
     }
 
+    private void BuildEditorFields(Bank bank)
+    {
+        EditorFieldsPanel.Children.Clear();
+
+        foreach (var item in bank.Columns
+                     .Select((column, index) => new { Column = column, Index = index })
+                     .Where(item => !IsIdColumn(item.Column) && !string.IsNullOrWhiteSpace(item.Column.Field))
+                     .OrderBy(item => item.Column.Order)
+                     .ThenBy(item => item.Index))
+        {
+            EditorFieldsPanel.Children.Add(CreateEditorRow(item.Column));
+        }
+    }
+
+    private Grid CreateEditorRow(SpeedEmulator.Models.ColumnDefinition column)
+    {
+        var columnName = column.Name ?? string.Empty;
+        var labelWidth = columnName.Length >= 5 ? 92d : 66d;
+        var row = new Grid
+        {
+            Style = TryFindResource("FormRowStyle") as Style
+        };
+        row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new GridLength(labelWidth) });
+        row.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var label = new TextBlock
+        {
+            Text = columnName,
+            Width = labelWidth,
+            Style = TryFindResource("FieldLabelStyle") as Style
+        };
+        row.Children.Add(label);
+
+        var editor = CreateEditorControl(column);
+        Grid.SetColumn(editor, 1);
+        row.Children.Add(editor);
+
+        return row;
+    }
+
+    private FrameworkElement CreateEditorControl(SpeedEmulator.Models.ColumnDefinition column)
+    {
+        var bindingPath = CreateEditorBindingPath(column.Field!);
+        if (string.Equals(column.Type, "Boolean", StringComparison.OrdinalIgnoreCase))
+        {
+            var checkBox = new CheckBox
+            {
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            checkBox.SetBinding(ToggleButton.IsCheckedProperty, new Binding(bindingPath)
+            {
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+            });
+            return checkBox;
+        }
+
+        if (string.Equals(column.Type, "Date", StringComparison.OrdinalIgnoreCase))
+        {
+            var picker = new FormattedDatePicker
+            {
+                Style = TryFindResource("EditorDateStyle") as Style
+            };
+            var dateBinding = new Binding(bindingPath)
+            {
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+            };
+            ApplyExtraDateFieldConverter(dateBinding, column.Field!);
+            picker.SetBinding(FormattedDatePicker.SelectedDateProperty, dateBinding);
+            return picker;
+        }
+
+        var textBox = new TextBox
+        {
+            Style = TryFindResource("EditorTextBoxStyle") as Style
+        };
+        var binding = new Binding(bindingPath)
+        {
+            Mode = BindingMode.TwoWay,
+            UpdateSourceTrigger = string.Equals(column.Type, "Money", StringComparison.OrdinalIgnoreCase)
+                ? UpdateSourceTrigger.LostFocus
+                : UpdateSourceTrigger.PropertyChanged
+        };
+        if (string.Equals(column.Type, "Money", StringComparison.OrdinalIgnoreCase))
+        {
+            binding.StringFormat = "F2";
+        }
+
+        textBox.SetBinding(TextBox.TextProperty, binding);
+        return textBox;
+    }
+
     private void UsersGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var source = (DependencyObject)e.OriginalSource;
@@ -249,11 +353,13 @@ public partial class BankUsersWindow : Window
     {
         static FrameworkElementFactory CreatePickerFactory(string field)
         {
-            var binding = new Binding(CreateBindingPath(field))
+            var bindingPath = CreateBindingPath(field);
+            var binding = new Binding(bindingPath)
             {
                 Mode = BindingMode.TwoWay,
                 UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
             };
+            ApplyExtraDateFieldConverter(binding, field);
 
             var picker = new FrameworkElementFactory(typeof(FormattedDatePicker));
             picker.SetBinding(FormattedDatePicker.SelectedDateProperty, binding);
@@ -303,6 +409,25 @@ public partial class BankUsersWindow : Window
         return typeof(BankUser).GetProperty(field) is null ? $"[{field}]" : field;
     }
 
+    private static void ApplyExtraDateFieldConverter(Binding binding, string field)
+    {
+        if (IsExtraFieldPath(field))
+        {
+            binding.Converter = ExtraDateFieldConverter;
+        }
+    }
+
+    private static bool IsExtraFieldPath(string field)
+    {
+        return field.StartsWith('[') && field.EndsWith(']');
+    }
+
+    private static string CreateEditorBindingPath(string field)
+    {
+        var path = CreateBindingPath(field);
+        return path.StartsWith('[') ? $"EditableUser{path}" : $"EditableUser.{path}";
+    }
+
     private static bool IsIdColumn(SpeedEmulator.Models.ColumnDefinition column)
     {
         return string.Equals(column.Name, "ID", StringComparison.OrdinalIgnoreCase);
@@ -318,6 +443,48 @@ public partial class BankUsersWindow : Window
         public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
         {
             return Binding.DoNothing;
+        }
+    }
+
+    private sealed class ExtraDateStringConverter : IValueConverter
+    {
+        private static readonly string[] ParseFormats =
+        [
+            "yyyy年MM月dd日 HH:mm:ss",
+            "yyyy年M月d日 H:mm:ss",
+            "yyyy/M/d H:mm:ss",
+            "yyyy/M/d",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd"
+        ];
+
+        public object? Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            if (value is DateTime dateTime)
+            {
+                return dateTime;
+            }
+
+            if (value is string text && TryParseDateTime(text, out var parsed))
+            {
+                return parsed;
+            }
+
+            return null;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            return value is DateTime dateTime
+                ? dateTime.ToString("yyyy年MM月dd日 HH:mm:ss", CultureInfo.GetCultureInfo("zh-CN"))
+                : string.Empty;
+        }
+
+        private static bool TryParseDateTime(string value, out DateTime parsed)
+        {
+            var culture = CultureInfo.GetCultureInfo("zh-CN");
+            return DateTime.TryParseExact(value, ParseFormats, culture, DateTimeStyles.None, out parsed)
+                || DateTime.TryParse(value, culture, DateTimeStyles.None, out parsed);
         }
     }
 }

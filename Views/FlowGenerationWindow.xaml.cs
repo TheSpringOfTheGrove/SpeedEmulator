@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using SpeedEmulator.Models;
 using SpeedEmulator.Repositories;
+using SpeedEmulator.Services;
 using SpeedEmulator.ViewModels;
 
 namespace SpeedEmulator.Views;
@@ -17,18 +18,24 @@ public partial class FlowGenerationWindow : Window
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IBankUserRepository bankUserRepository;
+    private readonly ITableExcelService tableExcelService;
 
     public FlowGenerationWindow(
         FlowGenerationViewModel viewModel,
         IBankUserColumnSettingsRepository columnSettingsRepository,
         IBankInterestSettingsRepository interestSettingsRepository,
-        IFlowRecordRepository flowRecordRepository)
+        IFlowRecordRepository flowRecordRepository,
+        IBankUserRepository bankUserRepository,
+        ITableExcelService tableExcelService)
     {
         InitializeComponent();
         this.viewModel = viewModel;
         this.columnSettingsRepository = columnSettingsRepository;
         this.interestSettingsRepository = interestSettingsRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.bankUserRepository = bankUserRepository;
+        this.tableExcelService = tableExcelService;
         DataContext = viewModel;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenMonthDetails += ViewModel_RequestOpenMonthDetails;
@@ -123,13 +130,13 @@ public partial class FlowGenerationWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
         };
 
-        window.ShowDialog();
+        WindowNavigation.ShowDialogAsCurrent(this, window);
     }
 
     private async Task ApplyColumnSettingsAsync(string scope, IEnumerable<SpeedEmulator.Models.ColumnDefinition> columns)

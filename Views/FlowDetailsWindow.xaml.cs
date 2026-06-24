@@ -17,6 +17,7 @@ public partial class FlowDetailsWindow : Window
 {
     private readonly FlowDetailsViewModel viewModel;
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
+    private FlowStatisticsWindow? statisticsWindow;
 
     public FlowDetailsWindow(
         FlowDetailsViewModel viewModel,
@@ -29,6 +30,8 @@ public partial class FlowDetailsWindow : Window
         WindowState = WindowState.Maximized;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
+        viewModel.RequestScrollToRecord += ViewModel_RequestScrollToRecord;
+        viewModel.RequestOpenStatistics += ViewModel_RequestOpenStatistics;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -48,12 +51,40 @@ public partial class FlowDetailsWindow : Window
     {
         viewModel.RequestClose -= ViewModel_RequestClose;
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
+        viewModel.RequestScrollToRecord -= ViewModel_RequestScrollToRecord;
+        viewModel.RequestOpenStatistics -= ViewModel_RequestOpenStatistics;
+        statisticsWindow?.Close();
+        statisticsWindow = null;
         base.OnClosed(e);
     }
 
     private void ViewModel_RequestClose(object? sender, EventArgs e)
     {
         Close();
+    }
+
+    private void ViewModel_RequestScrollToRecord(FlowRecord record)
+    {
+        FlowGrid.ScrollIntoView(record);
+        FlowGrid.SelectedItem = record;
+        FlowGrid.UpdateLayout();
+    }
+
+    private void ViewModel_RequestOpenStatistics(object? sender, EventArgs e)
+    {
+        if (statisticsWindow is not null)
+        {
+            statisticsWindow.Close();
+            statisticsWindow = null;
+        }
+
+        statisticsWindow = new FlowStatisticsWindow(new FlowStatisticsViewModel(viewModel.Records))
+        {
+            Owner = this
+        };
+        statisticsWindow.Closed += (_, _) => statisticsWindow = null;
+
+        statisticsWindow.Show();
     }
 
     private async void ViewModel_RequestOpenColumnSettings(object? sender, EventArgs e)

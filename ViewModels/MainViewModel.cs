@@ -120,39 +120,12 @@ public sealed class MainViewModel : ObservableObject
     private void SeedBanks()
     {
         var knownBanks = CreateKnownBanks();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var authorizedBank in session.AuthorizedBanks)
+        foreach (var bank in knownBanks)
         {
-            var name = authorizedBank.Name?.Trim();
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                continue;
-            }
-
-            var type = NormalizeBankType(authorizedBank.Category);
-            var key = $"{type}|{name}";
-            if (!seen.Add(key))
-            {
-                continue;
-            }
-
-            var bank = knownBanks.FirstOrDefault(item =>
-                string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(item.Type, type, StringComparison.OrdinalIgnoreCase));
-
-            bank ??= CreateBank(CreateAuthorizedBankId(authorizedBank, type), name, type, false);
-            if (!string.IsNullOrWhiteSpace(authorizedBank.Code))
-            {
-                bank.Code = authorizedBank.Code.Trim();
-            }
-
             AddAuthorizedBank(bank);
         }
 
-        StatusMessage = TotalBankCount == 0
-            ? "当前账号没有授权银行，请联系后台管理员配置授权。"
-            : $"{AccountDisplay} 已登录，已加载授权银行 {TotalBankCount} 个。";
+        StatusMessage = $"{AccountDisplay} 已登录，已加载全部银行 {TotalBankCount} 个。";
 
         OnPropertyChanged(nameof(TotalBankCount));
     }
@@ -162,7 +135,9 @@ public sealed class MainViewModel : ObservableObject
         var banks = new List<Bank>();
 
         AddRange(banks, BankTypes.Personal,
-            "支付宝", "工行", "农行", "微信", "光大", "平安", "广发", "浦发", "华夏", "兴业", "建行", "邮政", "交行", "招行", "个人农商", "民生", "中信", "中行");
+            "支付宝", "微信", "个人农商",
+            "工行", "光大", "广发", "华夏", "建行", "交行", "民生",
+            "农行", "平安", "浦发", "兴业", "邮政", "招行", "中信", "中行");
 
         AddRange(banks, BankTypes.Corporate,
             "对公农商", "民生对公", "中信对公", "工行对公", "农行对公", "中行对公", "光大对公", "平安对公", "广发对公", "浦发对公", "华夏对公", "兴业对公", "建行对公", "邮政对公", "交行对公", "招行对公");
@@ -307,7 +282,7 @@ public sealed class MainViewModel : ObservableObject
             if (field is null || ShouldUseExtraField(field, usedFixedFields))
             {
                 field = CreateExtraFieldPath(bankName, columnName, index);
-                type = "Text";
+                type = InferExtraBankUserFieldType(columnName);
             }
 
             yield return Column((index + 1) * 10, columnName, field, GetBankUserColumnWidth(columnName, type), type);
@@ -347,6 +322,18 @@ public sealed class MainViewModel : ObservableObject
             "自动计算利息" => (nameof(BankUser.AutoCalculateInterest), "Boolean"),
             _ => (null, "Text")
         };
+    }
+
+    private static string InferExtraBankUserFieldType(string columnName)
+    {
+        return IsDateLikeBankUserColumn(columnName) ? "Date" : "Text";
+    }
+
+    private static bool IsDateLikeBankUserColumn(string columnName)
+    {
+        return columnName.Contains("日期", StringComparison.Ordinal)
+            || columnName.Contains("时间", StringComparison.Ordinal)
+            || columnName.EndsWith("日", StringComparison.Ordinal);
     }
 
     private static string CreateExtraFieldPath(string bankName, string columnName, int columnIndex)
@@ -731,6 +718,12 @@ public sealed class MainViewModel : ObservableObject
 
     private static void ConfigureFlowRecordColumns(Bank bank)
     {
+        if (FlowRecordColumnCatalog.TryGetFlowColumns(bank.Name, out var configuredColumns))
+        {
+            AddColumns(bank.FlowColumns, CreateFlowRecordColumns(bank.Name, configuredColumns).ToArray());
+            return;
+        }
+
         if (bank.Name == "支付宝")
         {
             ConfigureAlipayFlowRecordColumns(bank);
@@ -738,6 +731,46 @@ public sealed class MainViewModel : ObservableObject
         }
 
         ConfigureDefaultBankFlowRecordColumns(bank);
+    }
+
+    private static IEnumerable<ColumnDefinition> CreateFlowRecordColumns(string bankName, IReadOnlyList<string> columnNames)
+    {
+        var usedFixedFields = new HashSet<string>(StringComparer.Ordinal)
+        {
+            nameof(FlowRecord.Index)
+        };
+
+        yield return Column(-1, "ID", nameof(FlowRecord.Index), 48);
+
+        for (var index = 0; index < columnNames.Count; index++)
+        {
+            var columnName = columnNames[index];
+            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            if (field is null || ShouldUseExtraFlowRecordField(field, usedFixedFields))
+            {
+                field = CreateFlowRecordExtraFieldPath(bankName, columnName, index);
+                type = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName).Type;
+            }
+
+            yield return Column(
+                (index + 1) * 10,
+                columnName,
+                field,
+                ExcelColumnFieldResolver.GetFlowRecordColumnWidth(columnName, type),
+                type);
+        }
+    }
+
+    private static bool ShouldUseExtraFlowRecordField(string field, HashSet<string> usedFixedFields)
+    {
+        return !usedFixedFields.Add(field);
+    }
+
+    private static string CreateFlowRecordExtraFieldPath(string bankName, string columnName, int columnIndex)
+    {
+        var raw = $"{bankName}|FlowRecord|{columnIndex}|{columnName}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        return $"[FlowField_{Convert.ToHexString(hash)[..12]}]";
     }
 
     private static void ConfigureAlipayFlowRecordColumns(Bank bank)

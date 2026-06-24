@@ -141,6 +141,8 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
+                        <StackPanel x:Name="EditorFieldsPanel" />
+                        <StackPanel Visibility="Collapsed">
                         <Grid Style="{StaticResource FormRowStyle}">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="66" />
@@ -298,6 +300,8 @@
                                       IsChecked="{Binding EditableUser.AutoCalculateInterest}"
                                       VerticalAlignment="Center" />
                         </Grid>
+
+                        </StackPanel>
 
                         <Border Width="150"
                                 Height="100"

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
 using SpeedEmulator.Repositories;
@@ -13,6 +14,8 @@ public sealed class BankUsersViewModel : ObservableObject
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IFrontApiClient frontApiClient;
     private readonly IImageFilePickerService imageFilePickerService;
+    private readonly ITableExcelService tableExcelService;
+    private readonly IFlowRecordRepository flowRecordRepository;
     private BankUser editableUser;
     private BankUser? selectedUser;
     private bool isNewRecord = true;
@@ -26,13 +29,17 @@ public sealed class BankUsersViewModel : ObservableObject
         IBankUserRepository repository,
         IBankUserColumnSettingsRepository columnSettingsRepository,
         IFrontApiClient frontApiClient,
-        IImageFilePickerService imageFilePickerService)
+        IImageFilePickerService imageFilePickerService,
+        ITableExcelService tableExcelService,
+        IFlowRecordRepository flowRecordRepository)
     {
         Bank = bank;
         this.repository = repository;
         this.columnSettingsRepository = columnSettingsRepository;
         this.frontApiClient = frontApiClient;
         this.imageFilePickerService = imageFilePickerService;
+        this.tableExcelService = tableExcelService;
+        this.flowRecordRepository = flowRecordRepository;
         editableUser = BankUser.CreateDraft(bank);
         statusMessage = $"正在维护 {bank.Name} 用户资料";
 
@@ -52,6 +59,8 @@ public sealed class BankUsersViewModel : ObservableObject
         CopySealPathCommand = new RelayCommand(CopySealPath);
         ClearSealCommand = new RelayCommand(ClearSealPath);
         BackCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
+        ImportXlsxCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromXlsxAsync);
+        ExportXlsxCommand = new AsyncRelayCommand(ExportSelectedUserFlowsToXlsxAsync);
     }
 
     public event EventHandler? RequestClose;
@@ -130,9 +139,9 @@ public sealed class BankUsersViewModel : ObservableObject
 
     public RelayCommand PrintCommand { get; }
 
-    public RelayCommand ImportXlsxCommand { get; }
+    public ICommand ImportXlsxCommand { get; }
 
-    public RelayCommand ExportXlsxCommand { get; }
+    public ICommand ExportXlsxCommand { get; }
 
     public RelayCommand AutoGenerateFlowCommand { get; }
 
@@ -168,15 +177,16 @@ public sealed class BankUsersViewModel : ObservableObject
                 Users.Add(user);
             }
 
+            SelectedUser = null;
+            LoadEditor(BankUser.CreateDraft(Bank), true);
+
             if (Users.Count > 0)
             {
-                SelectedUser = Users[0];
-                StatusMessage = $"已载入 {Users.Count} 个 {Bank.Name} 用户";
+                StatusMessage = $"已载入 {Users.Count} 个 {Bank.Name} 用户，请选择用户或点击新增。";
             }
             else
             {
-                StartNew();
-                StatusMessage = $"{Bank.Name} 暂无用户，已进入新增模式";
+                StatusMessage = $"{Bank.Name} 暂无用户，请点击新增后再录入。";
             }
         }
         finally
@@ -430,6 +440,210 @@ public sealed class BankUsersViewModel : ObservableObject
         catch
         {
             // Backend sync is best-effort. Local data is already saved, so there is nothing to show here.
+        }
+    }
+
+    private async Task ImportSelectedUserFlowsFromXlsxAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        if (SelectedUser is null)
+        {
+            StatusMessage = "请选择数据";
+            MessageBox.Show("请选择数据", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var path = tableExcelService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var imported = tableExcelService.ImportFlowRecords(path, Bank, SelectedUser);
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有读取到可导入的流水数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var overwriteResult = MessageBox.Show(
+                $"已读取 {imported.Count} 条流水数据。\n\n是否覆盖当前用户流水？\n是：覆盖；否：追加；取消：放弃导入。",
+                "导入xlsx",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (overwriteResult == MessageBoxResult.Cancel)
+            {
+                return;
+            }
+
+            var nextRecords = new List<FlowRecord>();
+            if (overwriteResult == MessageBoxResult.No)
+            {
+                var existing = await flowRecordRepository.ListByUserAsync(Bank.Id, SelectedUser.Id);
+                nextRecords.AddRange(existing.Select(item => item.Clone()));
+            }
+
+            foreach (var record in imported)
+            {
+                record.Id = 0;
+                record.BankId = Bank.Id;
+                record.BankUserId = SelectedUser.Id;
+                nextRecords.Add(record);
+            }
+
+            ReindexFlowRecords(nextRecords);
+            await flowRecordRepository.SaveAllAsync(Bank.Id, SelectedUser.Id, nextRecords);
+            await repository.SaveAsync(SelectedUser);
+            LoadEditor(SelectedUser, false);
+
+            StatusMessage = $"导入成功：{imported.Count} 条流水";
+            MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导入失败：{ex.Message}";
+            MessageBox.Show($"导入失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task ExportSelectedUserFlowsToXlsxAsync()
+    {
+        if (SelectedUser is null)
+        {
+            StatusMessage = "请选择数据";
+            MessageBox.Show("请选择数据", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            var accountName = string.IsNullOrWhiteSpace(SelectedUser.AccountName) ? SelectedUser.AccountNo : SelectedUser.AccountName;
+            var path = tableExcelService.PickExportFile($"{Bank.Name}-{accountName}.xlsx");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            var records = await flowRecordRepository.ListByUserAsync(Bank.Id, SelectedUser.Id);
+            tableExcelService.ExportFlowRecords(path, records, Bank, SelectedUser);
+            StatusMessage = $"导出成功：{path}";
+            MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导出失败：{ex.Message}";
+            MessageBox.Show($"导出失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static void ReindexFlowRecords(IList<FlowRecord> records)
+    {
+        for (var index = 0; index < records.Count; index++)
+        {
+            records[index].Index = index + 1;
+        }
+    }
+
+    private async Task ImportUsersFromXlsxAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var path = tableExcelService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var imported = tableExcelService.ImportBankUsers(path, Bank);
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有读取到可导入的用户数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var overwriteResult = MessageBox.Show(
+                $"已读取 {imported.Count} 条用户数据。\n\n是否覆盖当前银行现有用户？\n是：覆盖；否：追加；取消：放弃导入。",
+                "导入xlsx",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (overwriteResult == MessageBoxResult.Cancel)
+            {
+                return;
+            }
+
+            if (overwriteResult == MessageBoxResult.Yes)
+            {
+                foreach (var user in Users.Where(user => user.Id > 0).ToList())
+                {
+                    await repository.DeleteAsync(user.Id);
+                }
+
+                Users.Clear();
+            }
+
+            foreach (var user in imported)
+            {
+                user.Id = 0;
+                user.BackendId = 0;
+                user.BankId = Bank.Id;
+                user.BankName = Bank.Name;
+                var saved = await repository.SaveAsync(user);
+                Users.Add(saved);
+                _ = SyncBackendUserAsync(saved);
+            }
+
+            SelectedUser = Users.LastOrDefault();
+            StatusMessage = $"导入成功：{imported.Count} 条用户";
+            MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导入失败：{ex.Message}";
+            MessageBox.Show($"导入失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private void ExportUsersToXlsx()
+    {
+        try
+        {
+            var path = tableExcelService.PickExportFile($"{Bank.Name}-用户列表.xlsx");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            tableExcelService.ExportBankUsers(path, Users, Bank);
+            StatusMessage = $"导出成功：{path}";
+            MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导出失败：{ex.Message}";
+            MessageBox.Show($"导出失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

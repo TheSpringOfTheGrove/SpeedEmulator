@@ -86,9 +86,12 @@ public sealed class FlowAutoGenerator
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateSeed(request, start, end));
         var records = new List<FlowRecord>();
+        var targetIncome = RoundMoney(Math.Max(0, request.Config.AllInMoney));
+        var plannedExpense = RoundMoney(Math.Max(0, openingBalance + targetIncome - request.Config.LastMoney));
+        var monthlyPlan = CreateMonthlyAmountPlan(request.Config, start, end, targetIncome, plannedExpense, random);
 
-        GenerateReferenceRecords(request, start, end, random, records);
         GenerateConstRecords(request, start, end, random, records);
+        GenerateReferenceRecords(request, start, end, random, records, monthlyPlan);
 
         if (request.BankUser.AutoCalculateInterest)
         {
@@ -100,14 +103,14 @@ public sealed class FlowAutoGenerator
             return CreateEmptyResult(openingBalance, request.Config.LastMoney);
         }
 
-        NormalizeIncomeTotal(records, request, start, end, random);
+        NormalizeIncomeTotal(records, request, start, end, random, monthlyPlan);
         var targetExpense = CalculateTargetExpense(openingBalance, records, request.Config.LastMoney);
         if (targetExpense < 0)
         {
             return BuildResult(records, openingBalance, request.Config.LastMoney, true, request.Config.LastMoney - SumIncome(records));
         }
 
-        NormalizeExpenseTotal(records, targetExpense, request, start, end, random);
+        NormalizeExpenseTotal(records, targetExpense, request, start, end, random, monthlyPlan);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -212,12 +215,39 @@ public sealed class FlowAutoGenerator
         };
     }
 
+    private sealed class MonthlyAmountPlan
+    {
+        public required IReadOnlyList<(DateTime Start, DateTime End)> Months { get; init; }
+
+        public required double[] IncomeTargets { get; init; }
+
+        public required double[] ExpenseTargets { get; init; }
+    }
+
+    private static MonthlyAmountPlan CreateMonthlyAmountPlan(
+        FlowGenerationConfig config,
+        DateTime start,
+        DateTime end,
+        double targetIncome,
+        double targetExpense,
+        Random random)
+    {
+        var months = EnumerateMonths(start, end).ToList();
+        return new MonthlyAmountPlan
+        {
+            Months = months,
+            IncomeTargets = CreateMonthlyTargets(config, months, targetIncome, true, random),
+            ExpenseTargets = CreateMonthlyTargets(config, months, targetExpense, false, random)
+        };
+    }
+
     private static void GenerateReferenceRecords(
         FlowAutoGenerationRequest request,
         DateTime start,
         DateTime end,
         Random random,
-        ICollection<FlowRecord> records)
+        ICollection<FlowRecord> records,
+        MonthlyAmountPlan monthlyPlan)
     {
         var selectedRules = request.References.Where(item => item.IsCheck).ToList();
         if (selectedRules.Count == 0)
@@ -225,28 +255,149 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        foreach (var month in EnumerateMonths(start, end))
+        var months = monthlyPlan.Months;
+        if (months.Count == 0)
         {
-            foreach (var rule in selectedRules)
-            {
-                var count = Math.Max(0, rule.PercentMonth ?? 1);
-                for (var index = 0; index < count; index++)
-                {
-                    var amount = CreateSignedAmount(rule, random);
-                    if (Math.Abs(amount) < 0.009d)
-                    {
-                        continue;
-                    }
+            return;
+        }
 
-                    records.Add(CreateRecordFromRule(
-                        request,
-                        rule,
-                        request.Bank.ReferenceColumns,
-                        PickTime(month.Start, month.End, rule, random),
-                        amount));
+        var incomeTargets = monthlyPlan.IncomeTargets;
+        var expenseTargets = monthlyPlan.ExpenseTargets;
+        var incomeRules = selectedRules.Where(IsIncomeRule).ToList();
+        var expenseRules = selectedRules.Where(item => !IsIncomeRule(item)).ToList();
+
+        for (var monthIndex = 0; monthIndex < months.Count; monthIndex++)
+        {
+            var month = months[monthIndex];
+            var existingIncome = SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End)));
+            var existingExpense = SumExpense(records.Where(item => IsRecordInRange(item, month.Start, month.End)));
+
+            GenerateReferenceRecordsForMonth(
+                request,
+                month.Start,
+                month.End,
+                incomeRules,
+                RoundMoney(incomeTargets[monthIndex] - existingIncome),
+                true,
+                random,
+                records);
+
+            GenerateReferenceRecordsForMonth(
+                request,
+                month.Start,
+                month.End,
+                expenseRules,
+                RoundMoney(expenseTargets[monthIndex] - existingExpense),
+                false,
+                random,
+                records);
+        }
+    }
+
+    private static void GenerateReferenceRecordsForMonth(
+        FlowAutoGenerationRequest request,
+        DateTime monthStart,
+        DateTime monthEnd,
+        IReadOnlyList<GenerateReferenceRule> rules,
+        double targetAmount,
+        bool isIncome,
+        Random random,
+        ICollection<FlowRecord> records)
+    {
+        targetAmount = RoundMoney(Math.Max(0, targetAmount));
+        if (rules.Count == 0 || targetAmount <= 0)
+        {
+            return;
+        }
+
+        var targetCount = CalculateReferenceTargetCount(rules, targetAmount, random);
+        var runningTotal = 0d;
+        for (var index = 0; index < targetCount; index++)
+        {
+            var rule = PickWeightedReferenceRule(rules, random);
+            var amount = Math.Abs(CreateSignedAmount(rule, random));
+            var remaining = RoundMoney(targetAmount - runningTotal);
+            if (remaining <= 0.009d)
+            {
+                break;
+            }
+
+            if (index == targetCount - 1 || amount > remaining)
+            {
+                amount = RoundAmountByFloutLength(remaining, rule.FloutLength);
+            }
+
+            if (amount <= 0.009d)
+            {
+                continue;
+            }
+
+            runningTotal = RoundMoney(runningTotal + amount);
+            records.Add(CreateRecordFromRule(
+                request,
+                rule,
+                request.Bank.ReferenceColumns,
+                PickTime(monthStart, monthEnd, rule, random),
+                isIncome ? amount : -amount));
+        }
+    }
+
+    private static int CalculateReferenceTargetCount(IReadOnlyList<GenerateReferenceRule> rules, double targetAmount, Random random)
+    {
+        var configuredCount = rules.Sum(item => Math.Max(0, item.PercentMonth ?? 1));
+        if (configuredCount <= 0)
+        {
+            configuredCount = rules.Count;
+        }
+
+        var averageAmount = EstimateAverageAmount(rules);
+        var amountCount = averageAmount <= 0
+            ? configuredCount
+            : (int)Math.Ceiling(targetAmount / averageAmount);
+        var variedConfiguredCount = (int)Math.Round(configuredCount * CreateCountFactor(random), MidpointRounding.AwayFromZero);
+        var targetCount = Math.Max(1, Math.Max(variedConfiguredCount, amountCount));
+        return Math.Clamp(targetCount, 1, Math.Max(configuredCount * 4, rules.Count));
+    }
+
+    private static double EstimateAverageAmount(IEnumerable<GenerateReferenceRule> rules)
+    {
+        var averages = rules
+            .Select(item =>
+            {
+                var min = Math.Max(0.01d, item.MinMoney ?? 10d);
+                var max = Math.Max(min, item.MaxMoney ?? min);
+                if (max < min)
+                {
+                    (min, max) = (max, min);
                 }
+
+                return (min + max) / 2d;
+            })
+            .Where(item => item > 0)
+            .ToList();
+
+        return averages.Count == 0 ? 0 : averages.Average();
+    }
+
+    private static double CreateCountFactor(Random random)
+    {
+        return 0.55d + (random.NextDouble() * 0.9d);
+    }
+
+    private static GenerateReferenceRule PickWeightedReferenceRule(IReadOnlyList<GenerateReferenceRule> rules, Random random)
+    {
+        var totalWeight = rules.Sum(item => Math.Max(1, item.PercentMonth ?? 1));
+        var cursor = random.NextDouble() * totalWeight;
+        foreach (var rule in rules)
+        {
+            cursor -= Math.Max(1, rule.PercentMonth ?? 1);
+            if (cursor <= 0)
+            {
+                return rule;
             }
         }
+
+        return rules[^1];
     }
 
     private static void GenerateConstRecords(
@@ -423,25 +574,12 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         DateTime start,
         DateTime end,
-        Random random)
+        Random random,
+        MonthlyAmountPlan monthlyPlan)
     {
         var targetIncome = RoundMoney(Math.Max(0, request.Config.AllInMoney));
-        var incomeRecords = records.Where(item => item.TradeMoney > 0).ToList();
-        var currentIncome = SumIncome(records);
+        NormalizeSignedRecordsByMonth(records, request, start, end, random, targetIncome, true, "鏀跺叆琛ヨ冻", monthlyPlan.Months, monthlyPlan.IncomeTargets);
 
-        if (targetIncome <= 0)
-        {
-            RebalanceSignedRecords(incomeRecords, 0);
-            return;
-        }
-
-        if (incomeRecords.Count > 0)
-        {
-            RebalanceSignedRecords(incomeRecords, targetIncome);
-            return;
-        }
-
-        records.Add(CreateBalancingRecord(request, PickTime(start, end, null, random), targetIncome, "收入补足"));
     }
 
     private static void NormalizeExpenseTotal(
@@ -450,25 +588,388 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         DateTime start,
         DateTime end,
-        Random random)
+        Random random,
+        MonthlyAmountPlan monthlyPlan)
     {
         targetExpense = RoundMoney(Math.Max(0, targetExpense));
-        var expenseRecords = records.Where(item => item.TradeMoney < 0).ToList();
-        var currentExpense = SumExpense(records);
+        NormalizeSignedRecordsByMonth(records, request, start, end, random, targetExpense, false, "支出补足", monthlyPlan.Months, monthlyPlan.ExpenseTargets);
 
-        if (targetExpense <= 0)
+    }
+
+    private static void NormalizeSignedRecordsByMonth(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        Random random,
+        double targetTotal,
+        bool isIncome,
+        string balancingBrief,
+        IReadOnlyList<(DateTime Start, DateTime End)> plannedMonths,
+        IReadOnlyList<double> plannedTargets)
+    {
+        targetTotal = RoundMoney(Math.Max(0, targetTotal));
+        var signedRecords = GetSignedRecords(records, isIncome);
+        if (targetTotal <= 0)
         {
-            RebalanceSignedRecords(expenseRecords, 0);
+            RebalanceSignedRecords(signedRecords, 0);
             return;
         }
 
-        if (expenseRecords.Count > 0)
+        var hasPlannedTargets = plannedMonths.Count == plannedTargets.Count
+            && Math.Abs(RoundMoney(plannedTargets.Sum()) - targetTotal) <= 0.009d;
+        var months = hasPlannedTargets
+            ? plannedMonths
+            : EnumerateMonths(start, end).ToList();
+        if (months.Count == 0)
         {
-            RebalanceSignedRecords(expenseRecords, targetExpense);
+            if (signedRecords.Count > 0)
+            {
+                RebalanceSignedRecords(signedRecords, targetTotal);
+            }
+            else
+            {
+                records.Add(CreateBalancingRecord(
+                    request,
+                    PickTime(start, end, null, random),
+                    isIncome ? targetTotal : -targetTotal,
+                    balancingBrief));
+            }
+
             return;
         }
 
-        records.Add(CreateBalancingRecord(request, PickTime(start, end, null, random), -targetExpense, "支出补足"));
+        var monthlyTargets = hasPlannedTargets
+            ? plannedTargets.ToArray()
+            : CreateMonthlyTargets(request.Config, months, targetTotal, isIncome, random);
+        for (var index = 0; index < months.Count; index++)
+        {
+            var month = months[index];
+            var target = monthlyTargets[index];
+            var monthRecords = GetSignedRecords(records, isIncome)
+                .Where(item => IsRecordInRange(item, month.Start, month.End))
+                .ToList();
+
+            if (target <= 0)
+            {
+                RebalanceSignedRecords(monthRecords, 0);
+                continue;
+            }
+
+            if (monthRecords.Count > 0)
+            {
+                RebalanceSignedRecords(monthRecords, target);
+                continue;
+            }
+
+            records.Add(CreateBalancingRecord(
+                request,
+                PickTime(month.Start, month.End, null, random),
+                isIncome ? target : -target,
+                balancingBrief));
+        }
+
+        CorrectSignedTotal(records, request, start, end, random, targetTotal, isIncome, balancingBrief);
+    }
+
+    private static List<FlowRecord> GetSignedRecords(IEnumerable<FlowRecord> records, bool isIncome)
+    {
+        return records
+            .Where(item => isIncome ? item.TradeMoney > 0 : item.TradeMoney < 0)
+            .ToList();
+    }
+
+    private static bool IsRecordInRange(FlowRecord record, DateTime start, DateTime end)
+    {
+        var accountTime = record.AccountTime;
+        return accountTime.HasValue && accountTime.Value >= start && accountTime.Value <= end;
+    }
+
+    private static double[] CreateMonthlyTargets(
+        FlowGenerationConfig config,
+        IReadOnlyList<(DateTime Start, DateTime End)> months,
+        double targetTotal,
+        bool isIncome,
+        Random random)
+    {
+        targetTotal = RoundMoney(Math.Max(0, targetTotal));
+        if (months.Count == 0 || targetTotal <= 0)
+        {
+            return new double[months.Count];
+        }
+
+        var rawTargets = config.SelectIndex switch
+        {
+            2 => CreateMonthDetailRawTargets(config, months, isIncome),
+            1 => CreateRangeRawTargets(config, months.Count, targetTotal, isIncome, true, random),
+            _ => CreateRangeRawTargets(config, months.Count, targetTotal, isIncome, false, random)
+        };
+
+        if (rawTargets.Sum() <= 0.009d)
+        {
+            rawTargets = CreateDefaultVolatileRawTargets(months.Count, targetTotal, isIncome, random);
+        }
+
+        return NormalizeRawTargets(rawTargets, targetTotal);
+    }
+
+    private static double[] CreateMonthDetailRawTargets(
+        FlowGenerationConfig config,
+        IReadOnlyList<(DateTime Start, DateTime End)> months,
+        bool isIncome)
+    {
+        var rawTargets = new double[months.Count];
+        foreach (var detail in config.MonthGenData)
+        {
+            var detailStart = detail.StartTime.Date;
+            var detailEnd = NormalizeEndDate(detail.EndTime);
+            var amount = Math.Max(0, isIncome ? detail.InMoney : detail.OutMoney);
+            if (amount <= 0)
+            {
+                continue;
+            }
+
+            for (var index = 0; index < months.Count; index++)
+            {
+                var month = months[index];
+                if (month.End >= detailStart && month.Start <= detailEnd)
+                {
+                    rawTargets[index] = RoundMoney(rawTargets[index] + amount);
+                }
+            }
+        }
+
+        return rawTargets;
+    }
+
+    private static double[] CreateRangeRawTargets(
+        FlowGenerationConfig config,
+        int monthCount,
+        double targetTotal,
+        bool isIncome,
+        bool useSecondMonthlyRange,
+        Random random)
+    {
+        var average = targetTotal / monthCount;
+        var min = isIncome
+            ? useSecondMonthlyRange ? config.MinInMoneyMonth2 : config.MinInMoneyMonth1
+            : useSecondMonthlyRange ? config.MinOutMoneyMonth2 : config.MinOutMoneyMonth1;
+        var max = isIncome
+            ? useSecondMonthlyRange ? config.MaxInMoneyMonth2 : config.MaxInMoneyMonth1
+            : useSecondMonthlyRange ? config.MaxOutMoneyMonth2 : config.MaxOutMoneyMonth1;
+
+        if (min <= 0 && max <= 0)
+        {
+            return CreateDefaultVolatileRawTargets(monthCount, targetTotal, isIncome, random);
+        }
+
+        if (max < min)
+        {
+            (min, max) = (max, min);
+        }
+
+        if (!useSecondMonthlyRange && Math.Abs(max - min) <= 0.009d)
+        {
+            min = Math.Max(0.01d, average * 0.35d);
+            max = Math.Max(min, average * 1.9d);
+        }
+
+        return CreateSpikyRawTargets(monthCount, targetTotal, min, max, isIncome, random);
+    }
+
+    private static double[] CreateDefaultVolatileRawTargets(int monthCount, double targetTotal, bool isIncome, Random random)
+    {
+        var average = targetTotal / monthCount;
+        var min = Math.Max(0.01d, average * 0.12d);
+        var max = Math.Max(min, average * 2.8d);
+        return CreateSpikyRawTargets(monthCount, targetTotal, min, max, isIncome, random);
+    }
+
+    private static double[] CreateSpikyRawTargets(
+        int monthCount,
+        double targetTotal,
+        double min,
+        double max,
+        bool isIncome,
+        Random random)
+    {
+        if (monthCount <= 0)
+        {
+            return [];
+        }
+
+        min = Math.Max(0.01d, min);
+        max = Math.Max(min, max);
+        var targets = Enumerable.Range(0, monthCount)
+            .Select(_ => CreateVolatileAmount(min, max, random) * CreateMonthlySpikeFactor(isIncome, random))
+            .ToArray();
+
+        if (monthCount >= 4)
+        {
+            foreach (var index in PickDistinctIndexes(monthCount, Math.Max(1, monthCount / 5), random))
+            {
+                targets[index] *= isIncome
+                    ? 2.25d + random.NextDouble() * 1.75d
+                    : 2.7d + random.NextDouble() * 2.2d;
+            }
+
+            foreach (var index in PickDistinctIndexes(monthCount, Math.Max(1, monthCount / 4), random))
+            {
+                targets[index] *= 0.08d + random.NextDouble() * 0.28d;
+            }
+        }
+
+        if (targets.Sum() <= 0.009d)
+        {
+            var average = targetTotal / monthCount;
+            Array.Fill(targets, average);
+        }
+
+        return targets;
+    }
+
+    private static IEnumerable<int> PickDistinctIndexes(int count, int take, Random random)
+    {
+        return Enumerable.Range(0, count)
+            .OrderBy(_ => random.Next())
+            .Take(Math.Min(count, take));
+    }
+
+    private static double CreateVolatileAmount(double min, double max, Random random)
+    {
+        if (max <= min)
+        {
+            return Math.Max(0, min);
+        }
+
+        var ratio = random.NextDouble();
+        if (random.NextDouble() < 0.28d)
+        {
+            ratio = 1d - Math.Pow(random.NextDouble(), 2d);
+        }
+        else
+        {
+            ratio = Math.Pow(ratio, 0.72d);
+        }
+
+        return min + ((max - min) * ratio);
+    }
+
+    private static double CreateMonthlySpikeFactor(bool isIncome, Random random)
+    {
+        var ratio = random.NextDouble();
+        if (ratio < 0.28d)
+        {
+            return 0.10d + random.NextDouble() * 0.35d;
+        }
+
+        if (ratio < 0.78d)
+        {
+            return 0.55d + random.NextDouble() * 0.85d;
+        }
+
+        return isIncome
+            ? 1.8d + random.NextDouble() * 2.1d
+            : 2.1d + random.NextDouble() * 2.4d;
+    }
+
+    private static double[] NormalizeRawTargets(IReadOnlyList<double> rawTargets, double targetTotal)
+    {
+        var targets = new double[rawTargets.Count];
+        if (rawTargets.Count == 0)
+        {
+            return targets;
+        }
+
+        var rawTotal = rawTargets.Sum(item => Math.Max(0, item));
+        if (rawTotal <= 0)
+        {
+            rawTotal = rawTargets.Count;
+            rawTargets = Enumerable.Repeat(1d, rawTargets.Count).ToArray();
+        }
+
+        var runningTotal = 0d;
+        for (var index = 0; index < rawTargets.Count; index++)
+        {
+            var target = index == rawTargets.Count - 1
+                ? RoundMoney(targetTotal - runningTotal)
+                : RoundMoney(targetTotal * (Math.Max(0, rawTargets[index]) / rawTotal));
+
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            targets[index] = target;
+            runningTotal = RoundMoney(runningTotal + target);
+        }
+
+        var diff = RoundMoney(targetTotal - targets.Sum());
+        if (Math.Abs(diff) > 0.009d)
+        {
+            var targetIndex = targets
+                .Select((value, index) => new { value, index })
+                .OrderByDescending(item => item.value)
+                .First().index;
+            targets[targetIndex] = RoundMoney(Math.Max(0, targets[targetIndex] + diff));
+        }
+
+        return targets;
+    }
+
+    private static void CorrectSignedTotal(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        Random random,
+        double targetTotal,
+        bool isIncome,
+        string balancingBrief)
+    {
+        var signedRecords = GetSignedRecords(records, isIncome)
+            .OrderByDescending(item => item.AccountTime ?? DateTime.MinValue)
+            .ToList();
+        var currentTotal = RoundMoney(signedRecords.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var diff = RoundMoney(targetTotal - currentTotal);
+        if (Math.Abs(diff) <= 0.009d)
+        {
+            return;
+        }
+
+        if (signedRecords.Count == 0)
+        {
+            records.Add(CreateBalancingRecord(
+                request,
+                PickTime(start, end, null, random),
+                isIncome ? targetTotal : -targetTotal,
+                balancingBrief));
+            return;
+        }
+
+        if (diff > 0)
+        {
+            var record = signedRecords
+                .OrderBy(item => GetRecordAmountUnit(item))
+                .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
+                .First();
+            ApplySignedAmount(record, isIncome ? 1d : -1d, Math.Abs(record.TradeMoney ?? 0) + diff);
+            return;
+        }
+
+        var remaining = Math.Abs(diff);
+        foreach (var record in signedRecords.OrderByDescending(item => Math.Abs(item.TradeMoney ?? 0)))
+        {
+            if (remaining <= 0.009d)
+            {
+                break;
+            }
+
+            var absolute = Math.Abs(record.TradeMoney ?? 0);
+            var reduction = Math.Min(absolute, remaining);
+            ApplySignedAmount(record, isIncome ? 1d : -1d, absolute - reduction);
+            remaining = RoundMoney(remaining - reduction);
+        }
     }
 
     private static void RebalanceSignedRecords(IReadOnlyList<FlowRecord> signedRecords, double targetTotal)
@@ -516,6 +1017,16 @@ public sealed class FlowAutoGenerator
             record.DebitAmount = record.TradeMoney < 0 ? Math.Abs(record.TradeMoney.Value) : null;
             record.IncomeFlag = sign > 0 ? "C" : "D";
         }
+    }
+
+    private static void ApplySignedAmount(FlowRecord record, double sign, double absoluteAmount)
+    {
+        var amount = RoundMoney(Math.Max(0, absoluteAmount));
+        record.TradeMoney = sign > 0 ? amount : -amount;
+        record.IncomeAttribute = sign > 0 ? "鏀跺叆" : "鏀嚭";
+        record.CreditAmount = sign > 0 && amount > 0 ? amount : null;
+        record.DebitAmount = sign < 0 && amount > 0 ? amount : null;
+        record.IncomeFlag = sign > 0 ? "C" : "D";
     }
 
     private static void AdjustRoundedAmountsToTarget(IReadOnlyList<FlowRecord> records, double[] amounts, double targetTotal)

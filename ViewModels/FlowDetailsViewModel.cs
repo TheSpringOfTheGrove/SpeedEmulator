@@ -1,25 +1,36 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
 using SpeedEmulator.Repositories;
+using SpeedEmulator.Services;
 
 namespace SpeedEmulator.ViewModels;
 
 public sealed class FlowDetailsViewModel : ObservableObject
 {
     private readonly IFlowRecordRepository repository;
+    private readonly ITableExcelService tableExcelService;
+    private readonly IBankUserRepository? bankUserRepository;
     private FlowRecord? selectedRecord;
     private double openingBalance;
     private bool autoCalculateInterest;
     private bool isBusy;
     private string statusMessage = "正在加载流水明细";
 
-    public FlowDetailsViewModel(Bank bank, BankUser bankUser, IFlowRecordRepository repository)
+    public FlowDetailsViewModel(
+        Bank bank,
+        BankUser bankUser,
+        IFlowRecordRepository repository,
+        ITableExcelService tableExcelService,
+        IBankUserRepository? bankUserRepository = null)
     {
         Bank = bank;
         BankUser = bankUser;
         this.repository = repository;
+        this.tableExcelService = tableExcelService;
+        this.bankUserRepository = bankUserRepository;
         openingBalance = (double)bankUser.OpeningBalance;
         autoCalculateInterest = bankUser.AutoCalculateInterest;
 
@@ -37,14 +48,20 @@ public sealed class FlowDetailsViewModel : ObservableObject
         OpenFilterCommand = new RelayCommand(() => MarkReserved("开启筛选"));
         SetColumnFieldCommand = new RelayCommand(() => RequestOpenColumnSettings?.Invoke(this, EventArgs.Empty));
         ConvertFormulaCommand = new RelayCommand(() => MarkReserved("转换公式"));
-        ShowStaticCommand = new RelayCommand(() => MarkReserved("查看统计"));
-        ReComputeBalanceCommand = new RelayCommand(RecomputeBalance);
+        ShowStaticCommand = new RelayCommand(() => RequestOpenStatistics?.Invoke(this, EventArgs.Empty));
+        ReComputeBalanceCommand = new AsyncRelayCommand(RecomputeBalanceAsync);
         CloseCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
+        ImportRecordCommand = new AsyncRelayCommand(ImportRecordsFromXlsxAsync);
+        ExportRecordCommand = new RelayCommand(ExportRecordsToXlsx);
     }
 
     public event EventHandler? RequestClose;
 
     public event EventHandler? RequestOpenColumnSettings;
+
+    public event Action<FlowRecord>? RequestScrollToRecord;
+
+    public event EventHandler? RequestOpenStatistics;
 
     public Bank Bank { get; }
 
@@ -99,13 +116,13 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public RelayCommand ReSortByDateCommand { get; }
     public AsyncRelayCommand SaveAllRecordCommand { get; }
     public RelayCommand PrintRecordCommand { get; }
-    public RelayCommand ImportRecordCommand { get; }
-    public RelayCommand ExportRecordCommand { get; }
+    public ICommand ImportRecordCommand { get; }
+    public ICommand ExportRecordCommand { get; }
     public RelayCommand OpenFilterCommand { get; }
     public RelayCommand SetColumnFieldCommand { get; }
     public RelayCommand ConvertFormulaCommand { get; }
     public RelayCommand ShowStaticCommand { get; }
-    public RelayCommand ReComputeBalanceCommand { get; }
+    public AsyncRelayCommand ReComputeBalanceCommand { get; }
     public RelayCommand CloseCommand { get; }
 
     public async Task LoadAsync()
@@ -235,7 +252,6 @@ public sealed class FlowDetailsViewModel : ObservableObject
         var selected = SelectedRecord;
         var sorted = Records
             .OrderBy(item => item.AccountTime ?? DateTime.MaxValue)
-            .ThenBy(item => item.Id)
             .ToList();
 
         Records.Clear();
@@ -245,8 +261,11 @@ public sealed class FlowDetailsViewModel : ObservableObject
         }
 
         Reindex();
-        SelectedRecord = selected;
-        StatusMessage = "已按记账时间排序";
+        SelectedRecord = selected is not null && Records.Contains(selected)
+            ? selected
+            : Records.FirstOrDefault();
+        StatusMessage = "时间排序成功";
+        MessageBox.Show("时间排序成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private async Task SaveAllAsync()
@@ -264,22 +283,76 @@ public sealed class FlowDetailsViewModel : ObservableObject
         }
     }
 
-    private void RecomputeBalance()
+    private async Task RecomputeBalanceAsync()
     {
-        var balance = OpeningBalance;
-        foreach (var record in Records.OrderBy(item => item.AccountTime ?? DateTime.MaxValue))
+        if (IsBusy)
         {
-            if (record.TradeMoney.HasValue)
-            {
-                balance += record.TradeMoney.Value;
-                record.Balance = Math.Round(balance, 2);
-                record.BalanceAmount = record.Balance;
-                record.IncomeAttribute = record.TradeMoney.Value >= 0 ? "收入" : "支出";
-            }
+            return;
         }
 
-        RefreshTotals();
-        StatusMessage = $"余额已重算，期末余额 {balance:N2}";
+        IsBusy = true;
+        try
+        {
+            BankUser.OpeningBalance = (decimal)OpeningBalance;
+            BankUser.AutoCalculateInterest = AutoCalculateInterest;
+
+            var previewBalance = RoundMoney(OpeningBalance);
+            for (var i = 0; i < Records.Count; i++)
+            {
+                var record = Records[i];
+                if (!record.TradeMoney.HasValue)
+                {
+                    continue;
+                }
+
+                previewBalance = RoundMoney(previewBalance + RoundMoney(record.TradeMoney.Value));
+                if (previewBalance < 0)
+                {
+                    SelectedRecord = record;
+                    RequestScrollToRecord?.Invoke(record);
+                    StatusMessage = $"第 {i + 1} 行余额为负，请调整金额或期初余额";
+                    MessageBox.Show(
+                        $"第 {i + 1} 行重新计算后余额为负：{previewBalance:N2}，请调整金额或期初余额。",
+                        "提示",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+            }
+
+            var balance = RoundMoney(OpeningBalance);
+            foreach (var record in Records)
+            {
+                if (!record.TradeMoney.HasValue)
+                {
+                    continue;
+                }
+
+                var amount = RoundMoney(record.TradeMoney.Value);
+                record.TradeMoney = amount;
+                balance = RoundMoney(balance + amount);
+                record.Balance = balance;
+                record.BalanceAmount = balance;
+                record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
+                record.CreditAmount = amount > 0 ? amount : null;
+                record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
+                record.IncomeFlag = amount >= 0 ? "收入" : "支出";
+            }
+
+            RefreshTotals();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, Records);
+            StatusMessage = "重新计算成功";
+            MessageBox.Show("重新计算成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"重新计算失败：{ex.Message}";
+            MessageBox.Show($"重新计算失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     private void InsertAfterSelected(FlowRecord record)
@@ -328,8 +401,104 @@ public sealed class FlowDetailsViewModel : ObservableObject
         OnPropertyChanged(nameof(AllOut));
     }
 
+    private async Task ImportRecordsFromXlsxAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var path = tableExcelService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var imported = tableExcelService.ImportFlowRecords(path, Bank, BankUser);
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有读取到可导入的流水数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var overwriteResult = MessageBox.Show(
+                $"已读取 {imported.Count} 条流水数据。\n\n是否覆盖当前流水？\n是：覆盖；否：追加；取消：放弃导入。",
+                "导入xlsx",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (overwriteResult == MessageBoxResult.Cancel)
+            {
+                return;
+            }
+
+            if (overwriteResult == MessageBoxResult.Yes)
+            {
+                Records.Clear();
+            }
+
+            foreach (var record in imported)
+            {
+                record.Id = 0;
+                record.BankId = Bank.Id;
+                record.BankUserId = BankUser.Id;
+                Records.Add(record);
+            }
+
+            Reindex();
+            SelectedRecord = Records.LastOrDefault();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, Records);
+            if (bankUserRepository is not null)
+            {
+                await bankUserRepository.SaveAsync(BankUser);
+            }
+
+            StatusMessage = $"导入成功：{imported.Count} 条流水";
+            MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导入失败：{ex.Message}";
+            MessageBox.Show($"导入失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private void ExportRecordsToXlsx()
+    {
+        try
+        {
+            var accountName = string.IsNullOrWhiteSpace(BankUser.AccountName) ? BankUser.AccountNo : BankUser.AccountName;
+            var path = tableExcelService.PickExportFile($"{Bank.Name}-{accountName}.xlsx");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            tableExcelService.ExportFlowRecords(path, Records, Bank, BankUser);
+            StatusMessage = $"导出成功：{path}";
+            MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导出失败：{ex.Message}";
+            MessageBox.Show($"导出失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void MarkReserved(string featureName)
     {
         StatusMessage = $"{featureName}入口已预留：{BankUser.AccountName}";
+    }
+
+    private static double RoundMoney(double value)
+    {
+        return Math.Round(value, 2);
     }
 }

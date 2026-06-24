@@ -1,0 +1,91 @@
+<Window x:Class="SpeedEmulator.Views.FlowStatisticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding WindowTitle, FallbackValue=水晶报表}"
+        Width="780"
+        Height="450"
+        MinWidth="620"
+        MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        Background="White"
+        FontFamily="Microsoft YaHei UI"
+        FontSize="14">
+    <Grid Margin="22,18,22,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="34" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="42" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+            <StackPanel x:Name="IncomeLegend"
+                        Orientation="Horizontal"
+                        Cursor="Hand"
+                        Margin="0,0,28,0"
+                        MouseLeftButtonDown="IncomeLegend_MouseLeftButtonDown">
+                <Ellipse x:Name="IncomeLegendMarker"
+                         Width="14"
+                         Height="14"
+                         Stroke="#053BFF"
+                         StrokeThickness="3"
+                         Fill="#48A3FF"
+                         Margin="0,0,6,0" />
+                <TextBlock x:Name="IncomeLegendText"
+                           Text="收入"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel x:Name="ExpenseLegend"
+                        Orientation="Horizontal"
+                        Cursor="Hand"
+                        MouseLeftButtonDown="ExpenseLegend_MouseLeftButtonDown">
+                <Ellipse x:Name="ExpenseLegendMarker"
+                         Width="14"
+                         Height="14"
+                         Stroke="#053BFF"
+                         StrokeThickness="3"
+                         Fill="#FF4040"
+                         Margin="0,0,6,0" />
+                <TextBlock x:Name="ExpenseLegendText"
+                           Text="支出"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </StackPanel>
+
+        <Grid Grid.Row="1" PreviewMouseWheel="ChartArea_PreviewMouseWheel">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="16" />
+            </Grid.RowDefinitions>
+            <Canvas x:Name="ChartCanvas"
+                    Grid.Row="0"
+                    Background="White"
+                    SizeChanged="ChartCanvas_SizeChanged" />
+            <TextBlock x:Name="EmptyText"
+                       Grid.Row="0"
+                       Text="暂无可统计流水"
+                       Visibility="Collapsed"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       Foreground="#667780"
+                       FontSize="16" />
+            <ScrollBar x:Name="ChartRangeBar"
+                       Grid.Row="1"
+                       Orientation="Horizontal"
+                       Visibility="Collapsed"
+                       Minimum="0"
+                       Height="12"
+                       Margin="58,2,18,0"
+                       ValueChanged="ChartRangeBar_ValueChanged" />
+        </Grid>
+
+        <TextBlock Grid.Row="2"
+                   Text="收入/支出统计图"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Bottom"
+                   FontSize="22"
+                   Foreground="#111" />
+    </Grid>
+</Window>
