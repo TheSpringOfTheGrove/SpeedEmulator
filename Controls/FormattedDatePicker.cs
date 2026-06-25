@@ -42,6 +42,7 @@ public sealed class FormattedDatePicker : UserControl
     private readonly Popup popup;
     private readonly System.Windows.Controls.Calendar calendar;
     private bool isSyncing;
+    private bool isApplying;
 
     public FormattedDatePicker()
     {
@@ -242,14 +243,17 @@ public sealed class FormattedDatePicker : UserControl
             Height = 24,
             MinWidth = 46,
             Margin = new Thickness(8, 0, 0, 0),
-            Padding = new Thickness(6, 0, 6, 0)
+            Padding = new Thickness(6, 0, 6, 0),
+            ClickMode = ClickMode.Press,
+            Focusable = false,
+            IsTabStop = false
         };
         applyButton.PreviewMouseLeftButtonDown += (_, e) =>
         {
-            CommitTimeBoxes();
-            popup.IsOpen = false;
+            ApplyAndClose();
             e.Handled = true;
         };
+        applyButton.Click += (_, _) => ApplyAndClose();
         panel.Children.Add(applyButton);
 
         return panel;
@@ -291,14 +295,19 @@ public sealed class FormattedDatePicker : UserControl
         };
         box.PreviewTextInput += (_, e) => e.Handled = !e.Text.All(char.IsDigit);
         DataObject.AddPastingHandler(box, OnTimeBoxPaste);
-        box.LostKeyboardFocus += (_, _) => CommitTimeBoxes();
+        box.LostKeyboardFocus += (_, _) =>
+        {
+            if (!isApplying)
+            {
+                CommitTimeBoxes();
+            }
+        };
         box.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter)
             {
-                CommitTimeBoxes();
+                ApplyAndClose();
                 e.Handled = true;
-                popup.IsOpen = false;
             }
             else if (e.Key == Key.Escape)
             {
@@ -344,6 +353,19 @@ public sealed class FormattedDatePicker : UserControl
 
         SelectedDate = current.Date.Add(new TimeSpan(hour, minute, second));
         RefreshText();
+    }
+
+    private void ApplyAndClose()
+    {
+        if (isApplying)
+        {
+            return;
+        }
+
+        isApplying = true;
+        CommitTimeBoxes();
+        popup.IsOpen = false;
+        Dispatcher.BeginInvoke(new Action(() => isApplying = false));
     }
 
     private static int ParsePart(string value)

@@ -128,7 +128,7 @@ public sealed class TableExcelService : ITableExcelService
             return [];
         }
 
-        var columns = GetFlowRecordColumns(bank.FlowColumns).ToList();
+        var columns = GetFlowExportColumns(bank).ToList();
         var flowHeaderRowIndex = FindHeaderRow(sheet, columns);
         if (flowHeaderRowIndex < 0)
         {
@@ -174,7 +174,7 @@ public sealed class TableExcelService : ITableExcelService
     public void ExportFlowRecords(string path, IEnumerable<FlowRecord> rows, Bank bank, BankUser bankUser)
     {
         var userColumns = GetFlowExportUserColumns(bank).ToList();
-        var flowColumns = GetFlowRecordColumns(bank.FlowColumns).ToList();
+        var flowColumns = GetFlowExportColumns(bank).ToList();
         var table = new List<List<object?>>
         {
             userColumns.Select(column => (object?)(column.Name ?? string.Empty)).ToList(),
@@ -209,6 +209,42 @@ public sealed class TableExcelService : ITableExcelService
                 && !string.IsNullOrWhiteSpace(column.Field))
             .OrderBy(column => column.Order)
             .ThenBy(column => column.Name);
+    }
+
+    private static IEnumerable<ColumnDefinition> GetFlowExportColumns(Bank bank)
+    {
+        if (!FlowRecordColumnCatalog.TryGetExportFlowColumns(bank.Name, out var columnNames))
+        {
+            return GetFlowRecordColumns(bank.FlowColumns);
+        }
+
+        var result = new List<ColumnDefinition>();
+        var usedFixedFields = new HashSet<string>(StringComparer.Ordinal)
+        {
+            nameof(FlowRecord.Index)
+        };
+
+        for (var index = 0; index < columnNames.Count; index++)
+        {
+            var columnName = columnNames[index];
+            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            if (field is null || !usedFixedFields.Add(field))
+            {
+                field = CreateExportFlowExtraFieldPath(bank.Name, columnName, index);
+            }
+
+            result.Add(new ColumnDefinition
+            {
+                Name = columnName,
+                Field = field,
+                Type = type,
+                Width = ExcelColumnFieldResolver.GetFlowRecordColumnWidth(columnName, type),
+                Order = (index + 1) * 10,
+                Show = true
+            });
+        }
+
+        return result;
     }
 
     private static IEnumerable<ColumnDefinition> GetFlowExportUserColumns(Bank bank)
@@ -622,6 +658,13 @@ public sealed class TableExcelService : ITableExcelService
         var raw = $"{bankName}|ExportUser|{columnIndex}|{columnName}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
         return $"[ExportUserField_{Convert.ToHexString(hash)[..12]}]";
+    }
+
+    private static string CreateExportFlowExtraFieldPath(string bankName, string columnName, int columnIndex)
+    {
+        var raw = $"{bankName}|ExportFlow|{columnIndex}|{columnName}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        return $"[ExportFlowField_{Convert.ToHexString(hash)[..12]}]";
     }
 
     private static bool? ParseBoolean(string value)

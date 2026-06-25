@@ -17,7 +17,7 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
     {
         this.bank = bank;
         this.repository = repository;
-        setting = CreateDefaultSetting(bank);
+        setting = BankInterestSettingDefaults.CreateDefault(bank);
 
         SaveCommand = new AsyncRelayCommand(SaveAsync);
         DeleteCommand = new AsyncRelayCommand(DeleteAsync);
@@ -57,7 +57,7 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
     public async Task LoadAsync()
     {
         var stored = await repository.LoadAsync(bank.Id);
-        Setting = MergeWithCurrentFlowColumns(stored ?? CreateDefaultSetting(bank));
+        Setting = MergeWithCurrentFlowColumns(stored ?? BankInterestSettingDefaults.CreateDefault(bank));
     }
 
     private async Task SaveAsync()
@@ -82,7 +82,7 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
     private async Task DeleteAsync()
     {
         await repository.DeleteAsync(bank.Id);
-        Setting = MergeWithCurrentFlowColumns(CreateDefaultSetting(bank));
+        Setting = MergeWithCurrentFlowColumns(BankInterestSettingDefaults.CreateDefault(bank));
         StatusMessage = "利息设置已删除";
     }
 
@@ -171,36 +171,4 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
         return string.Equals(type, "Money", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static BankInterestSetting CreateDefaultSetting(Bank bank)
-    {
-        var setting = new BankInterestSetting
-        {
-            BankId = bank.Id,
-            BankName = bank.Name,
-            BankType = bank.Type
-        };
-
-        if (IsAgriculturalBank(bank))
-        {
-            setting.SettlementDay = "21";
-            setting.Months = "3;6;9;12";
-            setting.StartTime = "0";
-            setting.EndTime = "23";
-            setting.RatePercent = "0.15";
-            setting.Fields.Add(new BankInterestFieldValue
-            {
-                Name = "摘要",
-                Field = nameof(FlowRecord.ProductBrief),
-                Value = "结息"
-            });
-        }
-
-        return setting;
-    }
-
-    private static bool IsAgriculturalBank(Bank bank)
-    {
-        return bank.Name.Contains("农行", StringComparison.Ordinal)
-            || bank.Name.Contains("农业", StringComparison.Ordinal);
-    }
 }

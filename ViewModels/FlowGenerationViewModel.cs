@@ -527,7 +527,14 @@ public sealed class FlowGenerationViewModel : ObservableObject
             }
 
             SetGenerationProgress(25, "正在读取结息配置");
-            var interestSetting = await interestSettingsRepository.LoadAsync(Bank.Id);
+            var interestSetting = await LoadInterestSettingForGenerationAsync();
+            if (BankUser.AutoCalculateInterest && !BankInterestSettingDefaults.HasEffectiveConfig(interestSetting))
+            {
+                SetGenerationProgress(0, "请先设置利息配置");
+                MessageBox.Show("当前用户已勾选自动计算利息，请先设置利息配置", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
             await Task.Yield();
 
             SetGenerationProgress(40, "正在生成临时流水");
@@ -609,6 +616,20 @@ public sealed class FlowGenerationViewModel : ObservableObject
             InterestSetting = interestSetting,
             OpeningBalanceOverride = openingBalanceOverride
         });
+    }
+
+    private async Task<BankInterestSetting?> LoadInterestSettingForGenerationAsync()
+    {
+        var stored = await interestSettingsRepository.LoadAsync(Bank.Id);
+        if (BankInterestSettingDefaults.HasEffectiveConfig(stored))
+        {
+            return stored;
+        }
+
+        var defaultSetting = BankInterestSettingDefaults.CreateDefault(Bank);
+        return BankInterestSettingDefaults.HasEffectiveConfig(defaultSetting)
+            ? defaultSetting
+            : stored;
     }
 
     private FlowAutoGenerationResult CorrectGeneratedResult(

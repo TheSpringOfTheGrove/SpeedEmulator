@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
@@ -13,6 +15,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     private readonly IFlowRecordRepository repository;
     private readonly ITableExcelService tableExcelService;
     private readonly IBankUserRepository? bankUserRepository;
+    private readonly List<FlowRecord> allRecords = [];
+    private List<FlowFilterCondition> activeFilterConditions = [];
     private FlowRecord? selectedRecord;
     private double openingBalance;
     private bool autoCalculateInterest;
@@ -45,7 +49,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         PrintRecordCommand = new RelayCommand(() => MarkReserved("打印"));
         ImportRecordCommand = new RelayCommand(() => MarkReserved("导入xlsx"));
         ExportRecordCommand = new RelayCommand(() => MarkReserved("导出xlsx"));
-        OpenFilterCommand = new RelayCommand(() => MarkReserved("开启筛选"));
+        OpenFilterCommand = new RelayCommand(() => RequestOpenFilter?.Invoke(this, EventArgs.Empty));
         SetColumnFieldCommand = new RelayCommand(() => RequestOpenColumnSettings?.Invoke(this, EventArgs.Empty));
         ConvertFormulaCommand = new RelayCommand(() => MarkReserved("转换公式"));
         ShowStaticCommand = new RelayCommand(() => RequestOpenStatistics?.Invoke(this, EventArgs.Empty));
@@ -62,6 +66,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public event Action<FlowRecord>? RequestScrollToRecord;
 
     public event EventHandler? RequestOpenStatistics;
+
+    public event EventHandler? RequestOpenFilter;
 
     public Bank Bank { get; }
 
@@ -135,14 +141,15 @@ public sealed class FlowDetailsViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            Records.Clear();
+            allRecords.Clear();
+            activeFilterConditions = [];
             var records = await repository.ListByUserAsync(Bank.Id, BankUser.Id);
             foreach (var item in records)
             {
-                Records.Add(item);
+                allRecords.Add(item);
             }
 
-            Reindex();
+            RefreshDisplay();
             SelectedRecord = Records.FirstOrDefault();
             RefreshTotals();
             StatusMessage = $"已载入 {Records.Count} 条 {Bank.Name} 流水明细";
@@ -161,10 +168,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     private void AddRecord()
     {
         var record = CreateDraftRecord();
-        Records.Add(record);
-        Reindex();
-        SelectedRecord = record;
-        RefreshTotals();
+        allRecords.Add(record);
+        RefreshDisplay(record);
         StatusMessage = "已新增一条流水";
     }
 
@@ -202,8 +207,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
         }
 
         var index = Records.IndexOf(SelectedRecord);
-        Records.Remove(SelectedRecord);
-        Reindex();
+        allRecords.Remove(SelectedRecord);
+        RefreshDisplay();
         SelectedRecord = Records.Count == 0 ? null : Records[Math.Clamp(index, 0, Records.Count - 1)];
         RefreshTotals();
         StatusMessage = "已删除选中流水";
@@ -223,8 +228,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
             return;
         }
 
-        Records.Move(index, index - 1);
-        Reindex();
+        MoveInMaster(SelectedRecord, -1);
+        RefreshDisplay(SelectedRecord);
         StatusMessage = "已上移";
     }
 
@@ -242,25 +247,21 @@ public sealed class FlowDetailsViewModel : ObservableObject
             return;
         }
 
-        Records.Move(index, index + 1);
-        Reindex();
+        MoveInMaster(SelectedRecord, 1);
+        RefreshDisplay(SelectedRecord);
         StatusMessage = "已下移";
     }
 
     private void SortByDate()
     {
         var selected = SelectedRecord;
-        var sorted = Records
+        var sorted = allRecords
             .OrderBy(item => item.AccountTime ?? DateTime.MaxValue)
             .ToList();
 
-        Records.Clear();
-        foreach (var item in sorted)
-        {
-            Records.Add(item);
-        }
-
-        Reindex();
+        allRecords.Clear();
+        allRecords.AddRange(sorted);
+        RefreshDisplay(selected);
         SelectedRecord = selected is not null && Records.Contains(selected)
             ? selected
             : Records.FirstOrDefault();
@@ -268,12 +269,15 @@ public sealed class FlowDetailsViewModel : ObservableObject
         MessageBox.Show("时间排序成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private async Task SaveAllAsync()
+    public async Task SaveAllAsync()
     {
         try
         {
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, Records);
-            StatusMessage = $"已保存全部流水：{Records.Count} 条";
+            var selected = SelectedRecord;
+            ReindexAllRecords();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            RefreshDisplay(selected);
+            StatusMessage = $"已保存全部流水：{allRecords.Count} 条";
             MessageBox.Show("保存成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
@@ -297,9 +301,9 @@ public sealed class FlowDetailsViewModel : ObservableObject
             BankUser.AutoCalculateInterest = AutoCalculateInterest;
 
             var previewBalance = RoundMoney(OpeningBalance);
-            for (var i = 0; i < Records.Count; i++)
+            for (var i = 0; i < allRecords.Count; i++)
             {
-                var record = Records[i];
+                var record = allRecords[i];
                 if (!record.TradeMoney.HasValue)
                 {
                     continue;
@@ -321,7 +325,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
             }
 
             var balance = RoundMoney(OpeningBalance);
-            foreach (var record in Records)
+            foreach (var record in allRecords)
             {
                 if (!record.TradeMoney.HasValue)
                 {
@@ -339,8 +343,10 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 record.IncomeFlag = amount >= 0 ? "收入" : "支出";
             }
 
-            RefreshTotals();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, Records);
+            var selected = SelectedRecord;
+            ReindexAllRecords();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            RefreshDisplay(selected);
             StatusMessage = "重新计算成功";
             MessageBox.Show("重新计算成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -357,16 +363,14 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private void InsertAfterSelected(FlowRecord record)
     {
-        var index = SelectedRecord is null ? Records.Count - 1 : Records.IndexOf(SelectedRecord);
-        Records.Insert(Math.Clamp(index + 1, 0, Records.Count), record);
-        Reindex();
-        SelectedRecord = record;
-        RefreshTotals();
+        var index = SelectedRecord is null ? allRecords.Count - 1 : allRecords.IndexOf(SelectedRecord);
+        allRecords.Insert(Math.Clamp(index + 1, 0, allRecords.Count), record);
+        RefreshDisplay(record);
     }
 
     private FlowRecord CreateDraftRecord()
     {
-        var last = Records.LastOrDefault();
+        var last = allRecords.LastOrDefault();
         return new FlowRecord
         {
             BankId = Bank.Id,
@@ -382,6 +386,205 @@ public sealed class FlowDetailsViewModel : ObservableObject
             Currency = "RMB",
             TradeCurrency = "RMB"
         };
+    }
+
+    public IReadOnlyList<string> GetFilterFieldNames()
+    {
+        return GetFilterFields()
+            .Select(item => item.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public void ApplyFilters(IEnumerable<FlowFilterCondition> conditions)
+    {
+        activeFilterConditions = conditions
+            .Where(item => item.IsValid())
+            .Select(item => item.Clone())
+            .ToList();
+
+        RefreshDisplay(SelectedRecord);
+        StatusMessage = activeFilterConditions.Count == 0
+            ? "已显示全部流水"
+            : $"已筛选流水：{Records.Count} 条";
+    }
+
+    public void ClearFilters()
+    {
+        if (activeFilterConditions.Count == 0)
+        {
+            return;
+        }
+
+        activeFilterConditions = [];
+        RefreshDisplay(SelectedRecord);
+        StatusMessage = "已关闭筛选";
+    }
+
+    public int ReplaceCurrentFilterValues(string fieldName, string source, string target)
+    {
+        var count = 0;
+        foreach (var record in Records)
+        {
+            if (TryReplaceFieldValue(record, fieldName, source, target))
+            {
+                count++;
+            }
+        }
+
+        StatusMessage = $"已替换 {count} 条流水";
+        return count;
+    }
+
+    private IReadOnlyList<FlowFilterField> GetFilterFields()
+    {
+        var fields = new List<FlowFilterField>
+        {
+            new("ID", nameof(FlowRecord.Index))
+        };
+
+        foreach (var column in Bank.FlowColumns)
+        {
+            if (string.IsNullOrWhiteSpace(column.Name) || string.IsNullOrWhiteSpace(column.Field))
+            {
+                continue;
+            }
+
+            if (fields.Any(item => string.Equals(item.Name, column.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            fields.Add(new FlowFilterField(column.Name, column.Field));
+        }
+
+        return fields;
+    }
+
+    private void RefreshDisplay(FlowRecord? preferredRecord = null)
+    {
+        var previous = preferredRecord ?? SelectedRecord;
+        var source = activeFilterConditions.Count == 0
+            ? allRecords
+            : allRecords.Where(MatchesActiveFilters).ToList();
+
+        Records.Clear();
+        foreach (var item in source)
+        {
+            Records.Add(item);
+        }
+
+        Reindex();
+        SelectedRecord = previous is not null && Records.Contains(previous)
+            ? previous
+            : null;
+    }
+
+    private bool MatchesActiveFilters(FlowRecord record)
+    {
+        return activeFilterConditions.All(condition => MatchesCondition(record, condition));
+    }
+
+    private bool MatchesCondition(FlowRecord record, FlowFilterCondition condition)
+    {
+        var value = GetFieldValue(record, condition.FieldName);
+        var compareText = condition.Value.Trim();
+        var actualText = FormatFilterValue(value);
+
+        return condition.OperatorName switch
+        {
+            "等于" => CompareValue(value, compareText) == 0,
+            "不等于" => CompareValue(value, compareText) != 0,
+            "模糊匹配" => actualText.Contains(compareText, StringComparison.OrdinalIgnoreCase),
+            "以开头" => actualText.StartsWith(compareText, StringComparison.OrdinalIgnoreCase),
+            "以结尾" => actualText.EndsWith(compareText, StringComparison.OrdinalIgnoreCase),
+            "属于" => SplitConditionValues(compareText).Any(item => string.Equals(actualText, item, StringComparison.OrdinalIgnoreCase)),
+            "大于" => CompareValue(value, compareText) > 0,
+            "绝对值大于" => TryParseDouble(value, out var actualAbsGreater) && TryParseDouble(compareText, out var compareAbsGreater) && Math.Abs(actualAbsGreater) > Math.Abs(compareAbsGreater),
+            "小于" => CompareValue(value, compareText) < 0,
+            "绝对值小于" => TryParseDouble(value, out var actualAbsLess) && TryParseDouble(compareText, out var compareAbsLess) && Math.Abs(actualAbsLess) < Math.Abs(compareAbsLess),
+            _ => false
+        };
+    }
+
+    private object? GetFieldValue(FlowRecord record, string fieldName)
+    {
+        var field = ResolveFilterField(fieldName)?.Field ?? fieldName;
+        if (string.Equals(field, nameof(FlowRecord.Index), StringComparison.OrdinalIgnoreCase))
+        {
+            return record.Index;
+        }
+
+        var extraField = NormalizeExtraFieldName(field);
+        if (extraField is not null)
+        {
+            return record[extraField];
+        }
+
+        var property = typeof(FlowRecord).GetProperty(field, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        return property is null ? record[field] : property.GetValue(record);
+    }
+
+    private bool TryReplaceFieldValue(FlowRecord record, string fieldName, string source, string target)
+    {
+        var field = ResolveFilterField(fieldName)?.Field ?? fieldName;
+        var extraField = NormalizeExtraFieldName(field);
+        if (extraField is not null)
+        {
+            var oldExtraValue = record[extraField];
+            if (!oldExtraValue.Contains(source, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            record[extraField] = ReplaceIgnoreCase(oldExtraValue, source, target);
+            return true;
+        }
+
+        var property = typeof(FlowRecord).GetProperty(field, BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+        if (property is null || property.PropertyType != typeof(string) || !property.CanRead || !property.CanWrite)
+        {
+            return false;
+        }
+
+        if (property.GetValue(record) is not string oldValue || !oldValue.Contains(source, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        property.SetValue(record, ReplaceIgnoreCase(oldValue, source, target));
+        return true;
+    }
+
+    private FlowFilterField? ResolveFilterField(string fieldName)
+    {
+        return GetFilterFields().FirstOrDefault(item => string.Equals(item.Name, fieldName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void MoveInMaster(FlowRecord record, int offset)
+    {
+        var index = allRecords.IndexOf(record);
+        if (index < 0)
+        {
+            return;
+        }
+
+        var nextIndex = index + offset;
+        if (nextIndex < 0 || nextIndex >= allRecords.Count)
+        {
+            return;
+        }
+
+        allRecords.RemoveAt(index);
+        allRecords.Insert(nextIndex, record);
+    }
+
+    private void ReindexAllRecords()
+    {
+        for (var i = 0; i < allRecords.Count; i++)
+        {
+            allRecords[i].Index = i + 1;
+        }
     }
 
     private void Reindex()
@@ -437,25 +640,27 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
             if (overwriteResult == MessageBoxResult.Yes)
             {
-                Records.Clear();
+                allRecords.Clear();
             }
 
+            FlowRecord? lastImported = null;
             foreach (var record in imported)
             {
                 record.Id = 0;
                 record.BankId = Bank.Id;
                 record.BankUserId = BankUser.Id;
-                Records.Add(record);
+                allRecords.Add(record);
+                lastImported = record;
             }
 
-            Reindex();
-            SelectedRecord = Records.LastOrDefault();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, Records);
+            ReindexAllRecords();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
             if (bankUserRepository is not null)
             {
                 await bankUserRepository.SaveAsync(BankUser);
             }
 
+            RefreshDisplay(lastImported);
             StatusMessage = $"导入成功：{imported.Count} 条流水";
             MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -490,6 +695,109 @@ public sealed class FlowDetailsViewModel : ObservableObject
             StatusMessage = $"导出失败：{ex.Message}";
             MessageBox.Show($"导出失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private static int CompareValue(object? actualValue, string compareText)
+    {
+        if (TryParseDouble(actualValue, out var actualNumber) && TryParseDouble(compareText, out var compareNumber))
+        {
+            return actualNumber.CompareTo(compareNumber);
+        }
+
+        if (TryParseDateTime(actualValue, out var actualDate) && TryParseDateTime(compareText, out var compareDate))
+        {
+            return actualDate.CompareTo(compareDate);
+        }
+
+        return string.Compare(
+            FormatFilterValue(actualValue),
+            compareText,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatFilterValue(object? value)
+    {
+        return value switch
+        {
+            null => string.Empty,
+            DateTime dateTime => dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            double number => number.ToString("0.##", CultureInfo.InvariantCulture),
+            decimal number => number.ToString("0.##", CultureInfo.InvariantCulture),
+            float number => number.ToString("0.##", CultureInfo.InvariantCulture),
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
+        };
+    }
+
+    private static bool TryParseDouble(object? value, out double number)
+    {
+        if (value is double doubleValue)
+        {
+            number = doubleValue;
+            return true;
+        }
+
+        if (value is decimal decimalValue)
+        {
+            number = (double)decimalValue;
+            return true;
+        }
+
+        if (value is int intValue)
+        {
+            number = intValue;
+            return true;
+        }
+
+        var text = Convert.ToString(value, CultureInfo.InvariantCulture)?.Trim().Replace(",", string.Empty);
+        return double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out number)
+            || double.TryParse(text, NumberStyles.Any, CultureInfo.CurrentCulture, out number);
+    }
+
+    private static bool TryParseDateTime(object? value, out DateTime dateTime)
+    {
+        if (value is DateTime typedDateTime)
+        {
+            dateTime = typedDateTime;
+            return true;
+        }
+
+        var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+        return DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out dateTime)
+            || DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out dateTime);
+    }
+
+    private static IEnumerable<string> SplitConditionValues(string value)
+    {
+        return value
+            .Split([',', ';', '，', '；', ':', '：', '|', '、', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static string? NormalizeExtraFieldName(string field)
+    {
+        if (field.StartsWith('[') && field.EndsWith(']') && field.Length > 2)
+        {
+            return field[1..^1];
+        }
+
+        return null;
+    }
+
+    private static string ReplaceIgnoreCase(string text, string source, string target)
+    {
+        var index = text.IndexOf(source, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            return text;
+        }
+
+        var result = text;
+        while (index >= 0)
+        {
+            result = result.Remove(index, source.Length).Insert(index, target);
+            index = result.IndexOf(source, index + target.Length, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return result;
     }
 
     private void MarkReserved(string featureName)

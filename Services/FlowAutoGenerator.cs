@@ -44,6 +44,9 @@ public sealed class FlowAutoGenerationResult
 public sealed class FlowAutoGenerator
 {
     private const string AmountUnitField = "__GeneratedAmountUnit";
+    private const string SystemRowKindField = "__GeneratedSystemRowKind";
+    private const string InterestRowKind = "Interest";
+    private const string InterestTaxRowKind = "InterestTax";
     private static readonly string[] TokenSeparators = [",", ";", ":", "，", "；", "：", "|", "、", " "];
 
     private static readonly HashSet<string> IgnoredRuleProperties = new(StringComparer.Ordinal)
@@ -96,6 +99,7 @@ public sealed class FlowAutoGenerator
         if (request.BankUser.AutoCalculateInterest)
         {
             GenerateInterestRecords(request, openingBalance, start, end, random, records);
+            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
         }
 
         if (records.Count == 0)
@@ -104,6 +108,12 @@ public sealed class FlowAutoGenerator
         }
 
         NormalizeIncomeTotal(records, request, start, end, random, monthlyPlan);
+        if (request.BankUser.AutoCalculateInterest)
+        {
+            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            NormalizeIncomeTotal(records, request, start, end, random, monthlyPlan);
+        }
+
         var targetExpense = CalculateTargetExpense(openingBalance, records, request.Config.LastMoney);
         if (targetExpense < 0)
         {
@@ -111,6 +121,13 @@ public sealed class FlowAutoGenerator
         }
 
         NormalizeExpenseTotal(records, targetExpense, request, start, end, random, monthlyPlan);
+        if (request.BankUser.AutoCalculateInterest)
+        {
+            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            targetExpense = CalculateTargetExpense(openingBalance, records, request.Config.LastMoney);
+            NormalizeExpenseTotal(records, targetExpense, request, start, end, random, monthlyPlan);
+        }
+
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -482,21 +499,150 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            var balanceBeforeInterest = CalculateBalanceBefore(records, openingBalance, time);
-            var interest = RoundMoney(Math.Max(0, balanceBeforeInterest) * (ratePercent.Value / 100d));
-            if (interest <= 0)
+            var interest = CalculateDailyProductInterest(records, openingBalance, start, time, ratePercent.Value);
+            records.Add(CreateInterestRecord(request, setting, time, interest, InterestRowKind, "结息"));
+
+            if (ShouldAppendInterestTaxRecord(request.Bank))
+            {
+                records.Add(CreateInterestRecord(request, setting, time, 0, InterestTaxRowKind, "利息税"));
+            }
+        }
+    }
+
+    private static FlowRecord CreateInterestRecord(
+        FlowAutoGenerationRequest request,
+        BankInterestSetting setting,
+        DateTime accountTime,
+        double amount,
+        string rowKind,
+        string brief)
+    {
+        var record = CreateBaseRecord(request, accountTime, Math.Max(0, amount));
+        record.MoveFlag = false;
+        record.ProductBrief = brief;
+        record.Remark = "个人活期结息";
+        record.CashCheck = "转账";
+        record.TradeChannel = request.Bank.Name == "支付宝" ? "电子商务" : "柜面";
+        record.SerialNum = rowKind == InterestTaxRowKind ? "0000000002" : "0000000001";
+        record.LogNum = "0000000001";
+        record.ExtraFields[AmountUnitField] = "0.01";
+        record.ExtraFields[SystemRowKindField] = rowKind;
+
+        ApplyInterestFields(record, setting);
+        record.ProductBrief = brief;
+        if (string.IsNullOrWhiteSpace(record.Remark) || record.Remark == "结息")
+        {
+            record.Remark = "个人活期结息";
+        }
+
+        if (string.IsNullOrWhiteSpace(record.LogNum))
+        {
+            record.LogNum = "0000000001";
+        }
+
+        return record;
+    }
+
+    private static double CalculateDailyProductInterest(
+        IEnumerable<FlowRecord> records,
+        double openingBalance,
+        DateTime start,
+        DateTime settlementTime,
+        double ratePercent)
+    {
+        var settlementDate = settlementTime.Date;
+        var dayAmounts = records
+            .Where(item => item.AccountTime.HasValue && item.AccountTime.Value.Date <= settlementDate)
+            .GroupBy(item => item.AccountTime!.Value.Date)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Sum(item => item.TradeMoney ?? 0));
+
+        if (!dayAmounts.ContainsKey(settlementDate))
+        {
+            dayAmounts[settlementDate] = 0;
+        }
+
+        var orderedDays = dayAmounts
+            .OrderBy(item => item.Key)
+            .ToList();
+        if (orderedDays.Count == 0)
+        {
+            return 0;
+        }
+
+        var firstDate = orderedDays[0].Key;
+        var productStart = start.Date < firstDate ? start.Date : firstDate;
+        var dailyProduct = openingBalance * (firstDate - productStart).Days;
+        var balance = openingBalance + orderedDays[0].Value;
+
+        for (var index = 1; index < orderedDays.Count; index++)
+        {
+            var current = orderedDays[index];
+            var previous = orderedDays[index - 1];
+            dailyProduct += balance * (current.Key - previous.Key).Days;
+            balance += current.Value;
+            if (current.Key >= settlementDate)
+            {
+                return RoundMoney(Math.Max(0, dailyProduct) * ratePercent / 36500d);
+            }
+        }
+
+        return 0;
+    }
+
+    private static void RecalculateInterestRecords(
+        List<FlowRecord> records,
+        double openingBalance,
+        DateTime start,
+        BankInterestSetting? setting)
+    {
+        var ratePercent = ParseDouble(setting?.RatePercent);
+        if (ratePercent is null || ratePercent <= 0)
+        {
+            return;
+        }
+
+        var interestRows = records
+            .Where(item => item.ExtraFields.TryGetValue(SystemRowKindField, out var value) && value == InterestRowKind)
+            .OrderBy(item => item.AccountTime ?? DateTime.MinValue)
+            .ToList();
+        if (interestRows.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var systemRow in records.Where(IsSystemInterestRecord))
+        {
+            SetSystemInterestAmount(systemRow, 0);
+        }
+
+        foreach (var interestRow in interestRows)
+        {
+            if (!interestRow.AccountTime.HasValue)
             {
                 continue;
             }
 
-            var record = CreateBaseRecord(request, time, interest);
-            record.ProductBrief = "结息";
-            record.Remark = "结息";
-            record.CashCheck = "转账";
-            record.TradeChannel = request.Bank.Name == "支付宝" ? "电子商务" : "柜面";
-            ApplyInterestFields(record, setting);
-            records.Add(record);
+            var interest = CalculateDailyProductInterest(records, openingBalance, start, interestRow.AccountTime.Value, ratePercent.Value);
+            SetSystemInterestAmount(interestRow, interest);
         }
+    }
+
+    private static void SetSystemInterestAmount(FlowRecord record, double amount)
+    {
+        amount = RoundMoney(Math.Max(0, amount));
+        record.TradeMoney = amount;
+        record.CreditAmount = amount > 0 ? amount : null;
+        record.DebitAmount = null;
+        record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
+        record.IncomeFlag = amount >= 0 ? "C" : "D";
+    }
+
+    private static bool ShouldAppendInterestTaxRecord(Bank bank)
+    {
+        return bank.Name.Contains("农行", StringComparison.Ordinal)
+            || bank.Name.Contains("农业", StringComparison.Ordinal);
     }
 
     private static FlowRecord CreateRecordFromRule(
@@ -548,6 +694,7 @@ public sealed class FlowAutoGenerator
             record.SerialNum = RandomDigits(accountTime.Millisecond + accountTime.Second + record.GetHashCode(), 8);
         }
 
+        ApplyAutoGeneratedSystemFields(request, record);
         return record;
     }
 
@@ -609,8 +756,10 @@ public sealed class FlowAutoGenerator
         IReadOnlyList<double> plannedTargets)
     {
         targetTotal = RoundMoney(Math.Max(0, targetTotal));
+        var fixedSystemTotal = SumSignedSystemRecords(records, isIncome);
+        var adjustableTargetTotal = RoundMoney(Math.Max(0, targetTotal - fixedSystemTotal));
         var signedRecords = GetSignedRecords(records, isIncome);
-        if (targetTotal <= 0)
+        if (adjustableTargetTotal <= 0)
         {
             RebalanceSignedRecords(signedRecords, 0);
             return;
@@ -625,14 +774,14 @@ public sealed class FlowAutoGenerator
         {
             if (signedRecords.Count > 0)
             {
-                RebalanceSignedRecords(signedRecords, targetTotal);
+                RebalanceSignedRecords(signedRecords, adjustableTargetTotal);
             }
             else
             {
                 records.Add(CreateBalancingRecord(
                     request,
                     PickTime(start, end, null, random),
-                    isIncome ? targetTotal : -targetTotal,
+                    isIncome ? adjustableTargetTotal : -adjustableTargetTotal,
                     balancingBrief));
             }
 
@@ -645,7 +794,10 @@ public sealed class FlowAutoGenerator
         for (var index = 0; index < months.Count; index++)
         {
             var month = months[index];
-            var target = monthlyTargets[index];
+            var fixedMonthTotal = SumSignedSystemRecords(
+                records.Where(item => IsRecordInRange(item, month.Start, month.End)),
+                isIncome);
+            var target = RoundMoney(Math.Max(0, monthlyTargets[index] - fixedMonthTotal));
             var monthRecords = GetSignedRecords(records, isIncome)
                 .Where(item => IsRecordInRange(item, month.Start, month.End))
                 .ToList();
@@ -669,14 +821,29 @@ public sealed class FlowAutoGenerator
                 balancingBrief));
         }
 
-        CorrectSignedTotal(records, request, start, end, random, targetTotal, isIncome, balancingBrief);
+        CorrectSignedTotal(records, request, start, end, random, adjustableTargetTotal, isIncome, balancingBrief);
     }
 
     private static List<FlowRecord> GetSignedRecords(IEnumerable<FlowRecord> records, bool isIncome)
     {
         return records
+            .Where(item => !IsSystemInterestRecord(item))
             .Where(item => isIncome ? item.TradeMoney > 0 : item.TradeMoney < 0)
             .ToList();
+    }
+
+    private static double SumSignedSystemRecords(IEnumerable<FlowRecord> records, bool isIncome)
+    {
+        return RoundMoney(records
+            .Where(IsSystemInterestRecord)
+            .Where(item => isIncome ? item.TradeMoney > 0 : item.TradeMoney < 0)
+            .Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+    }
+
+    private static bool IsSystemInterestRecord(FlowRecord record)
+    {
+        return record.ExtraFields.TryGetValue(SystemRowKindField, out var value)
+            && (value == InterestRowKind || value == InterestTaxRowKind);
     }
 
     private static bool IsRecordInRange(FlowRecord record, DateTime start, DateTime end)
@@ -1100,6 +1267,7 @@ public sealed class FlowAutoGenerator
         record.TradeChannel = request.Bank.Name == "支付宝" ? "电子商务" : "柜面";
         record.SerialNum = RandomDigits(accountTime.DayOfYear + accountTime.Second, 8);
         record.ExtraFields[AmountUnitField] = "0.01";
+        ApplyAutoGeneratedSystemFields(request, record);
         return record;
     }
 
@@ -1414,6 +1582,136 @@ public sealed class FlowAutoGenerator
         if (string.IsNullOrWhiteSpace(record.ProductBrief))
         {
             record.ProductBrief = "结息";
+        }
+    }
+
+    private static void ApplyAutoGeneratedSystemFields(FlowAutoGenerationRequest request, FlowRecord record)
+    {
+        if (HasFlowRecordField(request.Bank, nameof(FlowRecord.LogNum))
+            && string.IsNullOrWhiteSpace(record.LogNum))
+        {
+            record.LogNum = CreateGeneratedLogNumber(request.Bank, record);
+        }
+
+        if (HasFlowRecordField(request.Bank, nameof(FlowRecord.Remark)))
+        {
+            var generatedPostscript = CreateGeneratedPostscript(request.Bank, record);
+            if (generatedPostscript is not null)
+            {
+                record.Remark = generatedPostscript;
+            }
+        }
+    }
+
+    private static bool HasFlowRecordField(Bank bank, string field)
+    {
+        return bank.FlowColumns.Any(item => string.Equals(item.Field, field, StringComparison.Ordinal));
+    }
+
+    private static string CreateGeneratedLogNumber(Bank bank, FlowRecord record)
+    {
+        var time = record.AccountTime ?? DateTime.Today;
+        var seed = CreateRecordSeed(bank, record, 17);
+        var digits = RandomDigits(seed, 9);
+        if (time < new DateTime(2024, 3, 15))
+        {
+            return digits;
+        }
+
+        if (time < new DateTime(2024, 8, 15))
+        {
+            return $"U{digits}";
+        }
+
+        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        var index = Math.Abs(seed % letters.Length);
+        return $"{letters[index]}{digits}";
+    }
+
+    private static string? CreateGeneratedPostscript(Bank bank, FlowRecord record)
+    {
+        if (!bank.Name.Contains("农行", StringComparison.Ordinal)
+            && !bank.Name.Contains("农业", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var originalPostscript = record.Remark?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(originalPostscript))
+        {
+            return string.Empty;
+        }
+
+        if (HasGeneratedAgriculturalPostscriptPrefix(originalPostscript))
+        {
+            return originalPostscript;
+        }
+
+        var time = record.AccountTime ?? DateTime.Today;
+        var seed = CreateRecordSeed(bank, record, 31);
+        var brief = record.ProductBrief?.Trim() ?? string.Empty;
+        var channel = record.TradeChannel?.Trim() ?? string.Empty;
+
+        if (brief.Contains("抖音", StringComparison.Ordinal)
+            || originalPostscript.Contains("抖音", StringComparison.Ordinal))
+        {
+            return $"NA{time:yyyyMMdd}{RandomDigits(seed, 23)}{originalPostscript}";
+        }
+
+        if (brief.Contains("代付", StringComparison.Ordinal)
+            && originalPostscript.Contains("零钱提现", StringComparison.Ordinal))
+        {
+            return $"NG{time:yyyyMMdd}{RandomDigits(seed, 23)}{originalPostscript}";
+        }
+
+        if (string.Equals(channel, "EPAY", StringComparison.OrdinalIgnoreCase)
+            && (brief.Contains("财付通", StringComparison.Ordinal)
+                || originalPostscript.Contains("微信", StringComparison.Ordinal)
+                || originalPostscript.Contains("财付通", StringComparison.Ordinal)))
+        {
+            return $"UA{time:MMdd}{RandomDigits(seed, 12)}{originalPostscript}";
+        }
+
+        return originalPostscript;
+    }
+
+    private static bool HasGeneratedAgriculturalPostscriptPrefix(string value)
+    {
+        return HasPrefixWithDigitCount(value, "UA", 16)
+            || HasPrefixWithDigitCount(value, "NA", 31)
+            || HasPrefixWithDigitCount(value, "NG", 31);
+    }
+
+    private static bool HasPrefixWithDigitCount(string value, string prefix, int digitCount)
+    {
+        if (!value.StartsWith(prefix, StringComparison.Ordinal) || value.Length < prefix.Length + digitCount)
+        {
+            return false;
+        }
+
+        for (var i = prefix.Length; i < prefix.Length + digitCount; i++)
+        {
+            if (!char.IsDigit(value[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static int CreateRecordSeed(Bank bank, FlowRecord record, int salt)
+    {
+        unchecked
+        {
+            return HashCode.Combine(
+                bank.Id,
+                record.AccountTime?.Ticks ?? 0,
+                record.TradeMoney ?? 0,
+                record.SerialNum,
+                record.ProductBrief,
+                record.OppositeAccount,
+                salt);
         }
     }
 

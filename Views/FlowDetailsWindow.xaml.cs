@@ -18,6 +18,7 @@ public partial class FlowDetailsWindow : Window
     private readonly FlowDetailsViewModel viewModel;
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private FlowStatisticsWindow? statisticsWindow;
+    private FlowFilterWindow? filterWindow;
 
     public FlowDetailsWindow(
         FlowDetailsViewModel viewModel,
@@ -32,6 +33,7 @@ public partial class FlowDetailsWindow : Window
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
         viewModel.RequestScrollToRecord += ViewModel_RequestScrollToRecord;
         viewModel.RequestOpenStatistics += ViewModel_RequestOpenStatistics;
+        viewModel.RequestOpenFilter += ViewModel_RequestOpenFilter;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -53,8 +55,11 @@ public partial class FlowDetailsWindow : Window
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
         viewModel.RequestScrollToRecord -= ViewModel_RequestScrollToRecord;
         viewModel.RequestOpenStatistics -= ViewModel_RequestOpenStatistics;
+        viewModel.RequestOpenFilter -= ViewModel_RequestOpenFilter;
         statisticsWindow?.Close();
         statisticsWindow = null;
+        filterWindow?.Close();
+        filterWindow = null;
         base.OnClosed(e);
     }
 
@@ -85,6 +90,33 @@ public partial class FlowDetailsWindow : Window
         statisticsWindow.Closed += (_, _) => statisticsWindow = null;
 
         statisticsWindow.Show();
+    }
+
+    private void ViewModel_RequestOpenFilter(object? sender, EventArgs e)
+    {
+        if (filterWindow is not null)
+        {
+            filterWindow.Activate();
+            if (filterWindow.WindowState == WindowState.Minimized)
+            {
+                filterWindow.WindowState = WindowState.Normal;
+            }
+
+            return;
+        }
+
+        var filterViewModel = new FlowFilterViewModel(viewModel);
+        filterWindow = new FlowFilterWindow(filterViewModel)
+        {
+            Owner = this
+        };
+        filterWindow.Closed += (_, _) =>
+        {
+            viewModel.ClearFilters();
+            filterWindow = null;
+        };
+
+        filterWindow.Show();
     }
 
     private async void ViewModel_RequestOpenColumnSettings(object? sender, EventArgs e)
