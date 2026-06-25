@@ -8,6 +8,7 @@ using System.Windows.Media;
 using SpeedEmulator.Controls;
 using SpeedEmulator.Models;
 using SpeedEmulator.Repositories;
+using SpeedEmulator.Services;
 using SpeedEmulator.ViewModels;
 using ColumnDefinition = SpeedEmulator.Models.ColumnDefinition;
 
@@ -17,6 +18,8 @@ public partial class FlowDetailsWindow : Window
 {
     private readonly FlowDetailsViewModel viewModel;
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
+    private readonly IPrintTemplateRepository printTemplateRepository = new JsonPrintTemplateRepository();
+    private readonly IPrintPdfService printPdfService = new ZhenchengPrintBridgeService();
     private FlowStatisticsWindow? statisticsWindow;
     private FlowFilterWindow? filterWindow;
 
@@ -34,6 +37,7 @@ public partial class FlowDetailsWindow : Window
         viewModel.RequestScrollToRecord += ViewModel_RequestScrollToRecord;
         viewModel.RequestOpenStatistics += ViewModel_RequestOpenStatistics;
         viewModel.RequestOpenFilter += ViewModel_RequestOpenFilter;
+        viewModel.RequestOpenPrintPreview += ViewModel_RequestOpenPrintPreview;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -56,6 +60,7 @@ public partial class FlowDetailsWindow : Window
         viewModel.RequestScrollToRecord -= ViewModel_RequestScrollToRecord;
         viewModel.RequestOpenStatistics -= ViewModel_RequestOpenStatistics;
         viewModel.RequestOpenFilter -= ViewModel_RequestOpenFilter;
+        viewModel.RequestOpenPrintPreview -= ViewModel_RequestOpenPrintPreview;
         statisticsWindow?.Close();
         statisticsWindow = null;
         filterWindow?.Close();
@@ -117,6 +122,29 @@ public partial class FlowDetailsWindow : Window
         };
 
         filterWindow.Show();
+    }
+
+    private void ViewModel_RequestOpenPrintPreview(object? sender, EventArgs e)
+    {
+        try
+        {
+            var printViewModel = new PrintPreviewViewModel(
+                viewModel.Bank,
+                viewModel.BankUser,
+                viewModel.GetPrintRecords(),
+                printTemplateRepository,
+                printPdfService);
+            var window = new PrintPreviewWindow(printViewModel)
+            {
+                Owner = this
+            };
+
+            WindowNavigation.ShowDialogAsCurrent(this, window);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开打印页面失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private async void ViewModel_RequestOpenColumnSettings(object? sender, EventArgs e)

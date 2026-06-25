@@ -1,6 +1,8 @@
 # Build output
 bin/
 obj/
+publish/
+tmp/
 
 # Local tool caches
 .tools/

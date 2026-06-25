@@ -132,6 +132,12 @@ public sealed class JsonBankUserRepository : IBankUserRepository
 
     private void Seed()
     {
+        if (TryLoadPackagedSeed(out var packagedUsers))
+        {
+            users = packagedUsers;
+            return;
+        }
+
         var now = DateTime.Now;
         users =
         [
@@ -237,5 +243,47 @@ public sealed class JsonBankUserRepository : IBankUserRepository
                 UpdatedAt = now.AddHours(-2)
             }
         ];
+    }
+
+    private static bool TryLoadPackagedSeed(out List<BankUser> packagedUsers)
+    {
+        packagedUsers = [];
+
+        var paths = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Data", "bank-users-seed.json"),
+            Path.Combine(AppContext.BaseDirectory, "bank-users-seed.json")
+        }.Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in paths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                var seedUsers = JsonSerializer.Deserialize<List<BankUser>>(json, JsonOptions) ?? [];
+                if (seedUsers.Count == 0)
+                {
+                    continue;
+                }
+
+                packagedUsers = seedUsers;
+                return true;
+            }
+            catch (JsonException)
+            {
+                packagedUsers = [];
+            }
+            catch (IOException)
+            {
+                packagedUsers = [];
+            }
+        }
+
+        return false;
     }
 }

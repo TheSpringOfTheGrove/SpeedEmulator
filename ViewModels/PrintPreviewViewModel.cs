@@ -1,0 +1,696 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using Microsoft.Win32;
+using SpeedEmulator.Infrastructure;
+using SpeedEmulator.Models;
+using SpeedEmulator.Repositories;
+using SpeedEmulator.Services;
+
+namespace SpeedEmulator.ViewModels;
+
+public sealed class PrintPreviewViewModel : ObservableObject
+{
+    private static readonly JsonSerializerOptions TemplateJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly IPrintTemplateRepository templateRepository;
+    private readonly IPrintPdfService printPdfService;
+    private readonly IReadOnlyList<FlowRecord> records;
+    private PrintTemplate? selectedTemplate;
+    private string previewPath = string.Empty;
+    private string statusMessage = "正在准备打印模板";
+    private bool isBusy;
+    private bool pendingPreviewRefresh;
+
+    public PrintPreviewViewModel(
+        Bank bank,
+        BankUser bankUser,
+        IReadOnlyList<FlowRecord> records,
+        IPrintTemplateRepository templateRepository,
+        IPrintPdfService printPdfService)
+    {
+        Bank = bank;
+        BankUser = bankUser;
+        this.records = records;
+        this.templateRepository = templateRepository;
+        this.printPdfService = printPdfService;
+
+        GeneratePreviewCommand = new AsyncRelayCommand(GeneratePreviewAsync);
+        OpenPdfCommand = new RelayCommand(OpenPdf);
+        PrintPdfCommand = new RelayCommand(PrintPdf);
+        ExportPdfCommand = new AsyncRelayCommand(ExportPdfAsync);
+        BackCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
+
+        NewTemplateCommand = new AsyncRelayCommand(NewTemplateAsync);
+        CopyTemplateCommand = new AsyncRelayCommand(CopyTemplateAsync);
+        SettingTemplateCommand = new AsyncRelayCommand(OpenTemplateDesignerAsync);
+        SaveTemplateCommand = new AsyncRelayCommand(SaveTemplateAsync);
+        ImportTemplateCommand = new AsyncRelayCommand(ImportTemplateAsync);
+        ExportTemplateCommand = new AsyncRelayCommand(ExportTemplateAsync);
+        DeleteTemplateCommand = new AsyncRelayCommand(DeleteTemplateAsync);
+    }
+
+    public event EventHandler? RequestClose;
+
+    public Bank Bank { get; }
+
+    public BankUser BankUser { get; }
+
+    public string WindowTitle => $"打印模板-{Bank.Name}-{BankUser.AccountName}";
+
+    public ObservableCollection<PrintTemplate> Templates { get; } = [];
+
+    public PrintTemplate? SelectedTemplate
+    {
+        get => selectedTemplate;
+        set
+        {
+            if (SetProperty(ref selectedTemplate, value))
+            {
+                StatusMessage = value is null ? "请选择打印模板" : $"当前模板：{value.Name}";
+                if (value is not null && !string.IsNullOrWhiteSpace(PreviewPath))
+                {
+                    if (IsBusy)
+                    {
+                        pendingPreviewRefresh = true;
+                    }
+                    else
+                    {
+                        _ = GeneratePreviewAsync();
+                    }
+                }
+            }
+        }
+    }
+
+    public string PreviewPath
+    {
+        get => previewPath;
+        private set => SetProperty(ref previewPath, value);
+    }
+
+    public string StatusMessage
+    {
+        get => statusMessage;
+        private set => SetProperty(ref statusMessage, value);
+    }
+
+    public bool IsBusy
+    {
+        get => isBusy;
+        private set => SetProperty(ref isBusy, value);
+    }
+
+    public int RecordCount => records.Count;
+
+    public ICommand GeneratePreviewCommand { get; }
+
+    public RelayCommand OpenPdfCommand { get; }
+
+    public RelayCommand PrintPdfCommand { get; }
+
+    public ICommand ExportPdfCommand { get; }
+
+    public RelayCommand BackCommand { get; }
+
+    public ICommand NewTemplateCommand { get; }
+
+    public ICommand CopyTemplateCommand { get; }
+
+    public ICommand SettingTemplateCommand { get; }
+
+    public ICommand SaveTemplateCommand { get; }
+
+    public ICommand ImportTemplateCommand { get; }
+
+    public ICommand ExportTemplateCommand { get; }
+
+    public ICommand DeleteTemplateCommand { get; }
+
+    public async Task LoadAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await ReloadTemplatesAsync();
+            if (SelectedTemplate is null)
+            {
+                StatusMessage = "没有可用打印模板";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"加载打印模板失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (SelectedTemplate is not null)
+        {
+            await GeneratePreviewAsync();
+        }
+    }
+
+    private async Task GeneratePreviewAsync()
+    {
+        if (SelectedTemplate is null)
+        {
+            MessageBox.Show("请选择打印模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(SelectedTemplate));
+            StatusMessage = $"预览已生成：{PreviewPath}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"生成预览失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (pendingPreviewRefresh)
+        {
+            pendingPreviewRefresh = false;
+            await GeneratePreviewAsync();
+        }
+    }
+
+    private void OpenPdf()
+    {
+        if (string.IsNullOrWhiteSpace(PreviewPath))
+        {
+            MessageBox.Show("请先生成预览", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            if (printPdfService is QuestPdfPrintService)
+            {
+                QuestPdfPrintService.OpenPdf(PreviewPath);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(PreviewPath)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开PDF失败：{GetFriendlyExceptionMessage(ex)}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void PrintPdf()
+    {
+        if (string.IsNullOrWhiteSpace(PreviewPath))
+        {
+            MessageBox.Show("请先生成预览", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(PreviewPath)
+            {
+                UseShellExecute = true,
+                Verb = "print",
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打印失败：{GetFriendlyExceptionMessage(ex)}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async Task ExportPdfAsync()
+    {
+        if (SelectedTemplate is null)
+        {
+            MessageBox.Show("请选择打印模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "导出PDF",
+            Filter = "PDF文件 (*.pdf)|*.pdf",
+            FileName = $"{Bank.Name}-{BankUser.AccountName}.pdf",
+            AddExtension = true,
+            DefaultExt = ".pdf",
+            OverwritePrompt = true
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await printPdfService.ExportAsync(CreateContext(SelectedTemplate), dialog.FileName);
+            PreviewPath = dialog.FileName;
+            StatusMessage = $"导出成功：{dialog.FileName}";
+            MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导出失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task NewTemplateAsync()
+    {
+        var defaultName = CreateUniqueTemplateName($"{Bank.Name}{Bank.GetBankType()}自定义模板");
+        var name = PromptText("新增模板", "模板名字", defaultName);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        var template = SelectedTemplate?.Clone() ?? CreateBlankTemplate();
+        template.Id = 0;
+        template.BankId = Bank.Id;
+        template.IsSystem = false;
+        template.Name = CreateUniqueTemplateName(name.Trim());
+        await templateRepository.SaveAsync(Bank, template);
+        await ReloadTemplatesAsync(template.Name);
+        MessageBox.Show("新增模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async Task CopyTemplateAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        var template = SelectedTemplate!.Clone();
+        template.Id = 0;
+        template.BankId = Bank.Id;
+        template.IsSystem = false;
+        template.Name = CreateUniqueTemplateName($"{template.Name}-复制");
+        await templateRepository.SaveAsync(Bank, template);
+        await ReloadTemplatesAsync(template.Name);
+        MessageBox.Show("复制模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async Task OpenTemplateDesignerAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        if (SelectedTemplate!.IsSystem)
+        {
+            MessageBox.Show("系统模板不能设置，请先复制成自定义模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(SelectedTemplate.PdfData))
+        {
+            MessageBox.Show("当前模板不是可编辑的真诚模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (printPdfService is not ZhenchengPrintBridgeService zhenchengPrintBridgeService)
+        {
+            MessageBox.Show("当前打印服务不支持模板设计器", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var refreshPreview = false;
+        IsBusy = true;
+        try
+        {
+            zhenchengPrintBridgeService.OpenTemplateDesigner(SelectedTemplate);
+            await templateRepository.SaveAsync(Bank, SelectedTemplate);
+            await ReloadTemplatesAsync(SelectedTemplate.Name, SelectedTemplate.Id);
+            StatusMessage = $"模板已设置：{SelectedTemplate.Name}";
+            refreshPreview = SelectedTemplate is not null;
+            MessageBox.Show("设置模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"设置模板失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (refreshPreview)
+        {
+            await GeneratePreviewAsync();
+        }
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        if (SelectedTemplate!.IsSystem || SelectedTemplate.Id <= 0)
+        {
+            MessageBox.Show("系统模板不能保存，请先复制成自定义模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await templateRepository.SaveAsync(Bank, SelectedTemplate);
+        await ReloadTemplatesAsync(SelectedTemplate.Name);
+        MessageBox.Show("保存模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async Task ImportTemplateAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        if (SelectedTemplate!.IsSystem || SelectedTemplate.Id <= 0)
+        {
+            MessageBox.Show("系统模板不能导入覆盖，请先复制成自定义模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "导入模板",
+            Filter = "模板文件 (*.json;*.zctpl)|*.json;*.zctpl|所有文件 (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(dialog.FileName);
+            var imported = JsonSerializer.Deserialize<PrintTemplate>(json, TemplateJsonOptions);
+            if (imported is null)
+            {
+                MessageBox.Show("模板文件无法读取", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (imported.BankId > 0 && imported.BankId != Bank.Id)
+            {
+                MessageBox.Show("模板银行不匹配，不能导入", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var targetId = SelectedTemplate.Id;
+            imported.Id = targetId;
+            imported.BankId = Bank.Id;
+            imported.IsSystem = false;
+            await templateRepository.SaveAsync(Bank, imported);
+            await ReloadTemplatesAsync(imported.Name, targetId);
+            MessageBox.Show("导入模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导入模板失败：{GetFriendlyExceptionMessage(ex)}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async Task ExportTemplateAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "导出模板",
+            Filter = "模板文件 (*.json)|*.json|所有文件 (*.*)|*.*",
+            FileName = $"{SelectedTemplate!.Name}.json",
+            AddExtension = true,
+            DefaultExt = ".json",
+            OverwritePrompt = true
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = JsonSerializer.Serialize(SelectedTemplate, TemplateJsonOptions);
+            await File.WriteAllTextAsync(dialog.FileName, json);
+            MessageBox.Show("导出模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导出模板失败：{GetFriendlyExceptionMessage(ex)}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async Task DeleteTemplateAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        if (SelectedTemplate!.IsSystem || SelectedTemplate.Id <= 0)
+        {
+            MessageBox.Show("系统模板不能删除", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show("确认删除当前模板？", "提示", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var deleteId = SelectedTemplate.Id;
+        await templateRepository.DeleteAsync(Bank.Id, deleteId);
+        await ReloadTemplatesAsync();
+        MessageBox.Show("删除模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async Task ReloadTemplatesAsync(string? preferredName = null, long? preferredId = null)
+    {
+        Templates.Clear();
+        var templates = await templateRepository.ListByBankAsync(Bank);
+        foreach (var template in templates)
+        {
+            Templates.Add(template);
+        }
+
+        SelectedTemplate = preferredId is not null
+            ? Templates.FirstOrDefault(item => item.Id == preferredId.Value)
+            : null;
+
+        SelectedTemplate ??= !string.IsNullOrWhiteSpace(preferredName)
+            ? Templates.FirstOrDefault(item => string.Equals(item.Name, preferredName, StringComparison.Ordinal))
+            : null;
+
+        SelectedTemplate ??= Templates.FirstOrDefault();
+    }
+
+    private bool EnsureTemplateSelected()
+    {
+        if (SelectedTemplate is not null)
+        {
+            return true;
+        }
+
+        MessageBox.Show("请选择打印模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        return false;
+    }
+
+    private string CreateUniqueTemplateName(string baseName)
+    {
+        var normalized = string.IsNullOrWhiteSpace(baseName) ? "自定义模板" : baseName.Trim();
+        if (Templates.All(item => !string.Equals(item.Name, normalized, StringComparison.Ordinal)))
+        {
+            return normalized;
+        }
+
+        for (var index = 1; index < 1000; index++)
+        {
+            var candidate = $"{normalized}{index}";
+            if (Templates.All(item => !string.Equals(item.Name, candidate, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{normalized}-{DateTime.Now:yyyyMMddHHmmss}";
+    }
+
+    private PrintTemplate CreateBlankTemplate()
+    {
+        return new PrintTemplate
+        {
+            Id = 0,
+            BankId = Bank.Id,
+            IsSystem = false,
+            Name = $"{Bank.Name}{Bank.GetBankType()}自定义模板",
+            PageSize = "A4Portrait",
+            PageRows = 0,
+            Remark = string.Empty,
+            Config = new PrintPdfConfig()
+        };
+    }
+
+    private static string? PromptText(string title, string label, string defaultValue)
+    {
+        var owner = Application.Current?.Windows.OfType<Window>().FirstOrDefault(window => window.IsActive);
+        var window = new Window
+        {
+            Title = title,
+            Width = 360,
+            Height = 150,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
+            Owner = owner
+        };
+        var input = new TextBox
+        {
+            Text = defaultValue,
+            MinWidth = 260,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        var buttons = CreatePromptButtons(input);
+        var panel = new Grid
+        {
+            Margin = new Thickness(16),
+            RowDefinitions =
+            {
+                new RowDefinition { Height = GridLength.Auto },
+                new RowDefinition { Height = GridLength.Auto },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
+                new RowDefinition { Height = GridLength.Auto }
+            }
+        };
+
+        panel.Children.Add(new TextBlock { Text = label });
+        panel.Children.Add(input);
+        panel.Children.Add(buttons);
+        Grid.SetRow(input, 1);
+        Grid.SetRow(buttons, 3);
+        window.Content = panel;
+        input.SelectAll();
+        input.Focus();
+        return window.ShowDialog() == true ? input.Text.Trim() : null;
+
+        UIElement CreatePromptButtons(TextBox textBox)
+        {
+            var ok = new Button
+            {
+                Content = "确定",
+                Width = 76,
+                Height = 28,
+                IsDefault = true,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            var cancel = new Button
+            {
+                Content = "取消",
+                Width = 76,
+                Height = 28,
+                IsCancel = true
+            };
+            ok.Click += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    MessageBox.Show("模板名字不能为空", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                window.DialogResult = true;
+            };
+
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Children = { ok, cancel }
+            };
+        }
+    }
+
+    private static string GetFriendlyExceptionMessage(Exception ex)
+    {
+        var current = ex;
+        while (current is TargetInvocationException && current.InnerException is not null)
+        {
+            current = current.InnerException;
+        }
+
+        var baseException = current.GetBaseException();
+        return string.IsNullOrWhiteSpace(baseException.Message)
+            ? current.Message
+            : baseException.Message;
+    }
+
+    private PrintRenderContext CreateContext(PrintTemplate template)
+    {
+        return new PrintRenderContext
+        {
+            Bank = Bank,
+            BankUser = BankUser,
+            Records = records,
+            Template = template
+        };
+    }
+}

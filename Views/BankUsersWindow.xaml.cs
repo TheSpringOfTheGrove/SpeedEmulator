@@ -24,6 +24,8 @@ public partial class BankUsersWindow : Window
     private readonly IFlowGenerationRepository flowGenerationRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
     private readonly ITableExcelService tableExcelService;
+    private readonly IPrintTemplateRepository printTemplateRepository = new JsonPrintTemplateRepository();
+    private readonly IPrintPdfService printPdfService = new ZhenchengPrintBridgeService();
 
     public BankUsersWindow(
         BankUsersViewModel viewModel,
@@ -46,6 +48,7 @@ public partial class BankUsersWindow : Window
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenAutoGenerateFlow += ViewModel_RequestOpenAutoGenerateFlow;
         viewModel.RequestOpenFlowDetails += ViewModel_RequestOpenFlowDetails;
+        viewModel.RequestOpenPrintPreview += ViewModel_RequestOpenPrintPreview;
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings += ViewModel_RequestOpenInterestSettings;
     }
@@ -65,6 +68,7 @@ public partial class BankUsersWindow : Window
         viewModel.RequestClose -= ViewModel_RequestClose;
         viewModel.RequestOpenAutoGenerateFlow -= ViewModel_RequestOpenAutoGenerateFlow;
         viewModel.RequestOpenFlowDetails -= ViewModel_RequestOpenFlowDetails;
+        viewModel.RequestOpenPrintPreview -= ViewModel_RequestOpenPrintPreview;
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings -= ViewModel_RequestOpenInterestSettings;
         base.OnClosed(e);
@@ -115,6 +119,35 @@ public partial class BankUsersWindow : Window
         };
 
         WindowNavigation.ShowDialogAsCurrent(this, window);
+    }
+
+    private async void ViewModel_RequestOpenPrintPreview(object? sender, EventArgs e)
+    {
+        if (viewModel.SelectedUser is not { } targetUser)
+        {
+            return;
+        }
+
+        try
+        {
+            var records = await flowRecordRepository.ListByUserAsync(viewModel.Bank.Id, targetUser.Id);
+            var printViewModel = new PrintPreviewViewModel(
+                viewModel.Bank,
+                targetUser,
+                records.Select(item => item.Clone()).ToList(),
+                printTemplateRepository,
+                printPdfService);
+            var window = new PrintPreviewWindow(printViewModel)
+            {
+                Owner = this
+            };
+
+            WindowNavigation.ShowDialogAsCurrent(this, window);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开打印页面失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private async void ViewModel_RequestOpenColumnSettings(object? sender, EventArgs e)

@@ -11,6 +11,16 @@
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="VendorRuntime\Zhencheng\**\*"
+             Exclude="VendorRuntime\Zhencheng\.gitkeep"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3405.78" />
+    <PackageReference Include="QuestPDF" Version="2026.6.0" />
   </ItemGroup>
 
 </Project>

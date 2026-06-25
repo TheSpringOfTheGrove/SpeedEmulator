@@ -46,7 +46,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         MoveDownRecordCommand = new RelayCommand(MoveDownRecord);
         ReSortByDateCommand = new RelayCommand(SortByDate);
         SaveAllRecordCommand = new AsyncRelayCommand(SaveAllAsync);
-        PrintRecordCommand = new RelayCommand(() => MarkReserved("打印"));
+        PrintRecordCommand = new RelayCommand(OpenPrintPreview);
         ImportRecordCommand = new RelayCommand(() => MarkReserved("导入xlsx"));
         ExportRecordCommand = new RelayCommand(() => MarkReserved("导出xlsx"));
         OpenFilterCommand = new RelayCommand(() => RequestOpenFilter?.Invoke(this, EventArgs.Empty));
@@ -68,6 +68,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public event EventHandler? RequestOpenStatistics;
 
     public event EventHandler? RequestOpenFilter;
+
+    public event EventHandler? RequestOpenPrintPreview;
 
     public Bank Bank { get; }
 
@@ -158,6 +160,11 @@ public sealed class FlowDetailsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    public IReadOnlyList<FlowRecord> GetPrintRecords()
+    {
+        return Records.Select(item => item.Clone()).ToList();
     }
 
     public void NotifyColumnSettingsSaved()
@@ -803,6 +810,12 @@ public sealed class FlowDetailsViewModel : ObservableObject
     private void MarkReserved(string featureName)
     {
         StatusMessage = $"{featureName}入口已预留：{BankUser.AccountName}";
+    }
+
+    private void OpenPrintPreview()
+    {
+        StatusMessage = $"正在打开 {BankUser.AccountName} 的打印页面";
+        RequestOpenPrintPreview?.Invoke(this, EventArgs.Empty);
     }
 
     private static double RoundMoney(double value)

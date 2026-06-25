@@ -48,7 +48,7 @@ public sealed class BankUsersViewModel : ObservableObject
         SaveCommand = new AsyncRelayCommand(SaveAsync);
         DeleteCommand = new AsyncRelayCommand(DeleteAsync);
         CopyCommand = new RelayCommand(CopySelected);
-        PrintCommand = new RelayCommand(() => MarkReserved("打印"));
+        PrintCommand = new RelayCommand(OpenPrintPreview);
         ImportXlsxCommand = new RelayCommand(() => MarkReserved("导入 xlsx"));
         ExportXlsxCommand = new RelayCommand(() => MarkReserved("导出 xlsx"));
         AutoGenerateFlowCommand = new RelayCommand(OpenAutoGenerateFlow);
@@ -68,6 +68,8 @@ public sealed class BankUsersViewModel : ObservableObject
     public event EventHandler? RequestOpenAutoGenerateFlow;
 
     public event EventHandler? RequestOpenFlowDetails;
+
+    public event EventHandler? RequestOpenPrintPreview;
 
     public event EventHandler? RequestOpenColumnSettings;
 
@@ -279,6 +281,20 @@ public sealed class BankUsersViewModel : ObservableObject
         LoadEditor(SelectedUser, false);
         StatusMessage = $"正在打开 {SelectedUser.AccountName} 的流水明细。";
         RequestOpenFlowDetails?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OpenPrintPreview()
+    {
+        if (SelectedUser is null || SelectedUser.Id <= 0)
+        {
+            StatusMessage = "请选择用户";
+            MessageBox.Show("请选择用户", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        LoadEditor(SelectedUser, false);
+        StatusMessage = $"正在打开 {SelectedUser.AccountName} 的打印页面";
+        RequestOpenPrintPreview?.Invoke(this, EventArgs.Empty);
     }
 
     private async Task SaveAsync()

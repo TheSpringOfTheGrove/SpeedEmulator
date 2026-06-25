@@ -142,9 +142,6 @@ public sealed class MainViewModel : ObservableObject
         AddRange(banks, BankTypes.Corporate,
             "对公农商", "民生对公", "中信对公", "工行对公", "农行对公", "中行对公", "光大对公", "平安对公", "广发对公", "浦发对公", "华夏对公", "兴业对公", "建行对公", "邮政对公", "交行对公", "招行对公");
 
-        AddRange(banks, BankTypes.Local, "四川农商", "四川银行", "安徽农金", "东莞银行", "西安银行", "河南农商");
-        AddRange(banks, BankTypes.Receipt, "银行凭条/回单", "转账凭证");
-
         return banks;
     }
 
