@@ -21,7 +21,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     public ZhenchengPrintBridgeService(IPrintPdfService? fallbackService = null)
     {
-        this.fallbackService = fallbackService;
+        this.fallbackService = fallbackService ?? new QuestPdfPrintService();
     }
 
     public async Task<string> GeneratePreviewAsync(PrintRenderContext context)
@@ -71,7 +71,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             currentBridge = GetBridge();
         }
-        catch when (fallbackService is not null)
+        catch when (fallbackService is not null && CanUseQuestPdfFallback(context.Template))
         {
             await fallbackService.ExportAsync(context, path);
             return;
@@ -79,6 +79,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (currentBridge.TryExport(context, path))
         {
+            return;
+        }
+
+        if (fallbackService is not null && CanUseQuestPdfFallback(context.Template))
+        {
+            await fallbackService.ExportAsync(context, path);
             return;
         }
 
@@ -268,24 +274,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private ResolvedTemplate? ResolveTemplate(PrintRenderContext context)
         {
             var hasPdfData = !string.IsNullOrWhiteSpace(context.Template.PdfData);
-            if (hasPdfData)
+            var hasQuestPdfLayout = !context.Template.IsSystem
+                && !hasPdfData
+                && PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(context.Template);
+            if (hasPdfData && !hasQuestPdfLayout)
             {
                 return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
             }
 
             var candidateNames = GetCandidateTemplateNames(context.Template.Name).ToList();
             var preferNameMatch = HasPreferredTemplateAlias(context.Template.Name);
-            if (ShouldPreferQuestPdfConfigFactory(context.Template.Name))
-            {
-                foreach (var name in candidateNames)
-                {
-                    var config = CreateVendorConfig([name]);
-                    if (config is not null)
-                    {
-                        return new ResolvedTemplate(name, config, null);
-                    }
-                }
-            }
 
             var vendorTemplate = LoadVendorTemplate(context, candidateNames, preferNameMatch);
             if (vendorTemplate is not null)
@@ -293,8 +291,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
                 var vendorPdfData = ReadString(vendorTemplate, "PdfData", string.Empty);
                 var vendorPageRows = (int)ReadLong(vendorTemplate, "PageSize", context.Template.PageRows);
-                var vendorConfig = CreateVendorConfig(candidateNames.Prepend(vendorName))
-                    ?? templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate);
+                var vendorConfig = templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate)
+                    ?? CreateVendorConfig(candidateNames.Prepend(vendorName));
                 if (vendorConfig is null)
                 {
                     return string.IsNullOrWhiteSpace(vendorPdfData)
@@ -315,7 +313,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 }
             }
 
-            if (hasPdfData)
+            if (hasPdfData && !hasQuestPdfLayout)
             {
                 return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
             }
@@ -547,14 +545,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private object CreateVendorTemplate(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
         {
             var target = Activator.CreateInstance(templateType) ?? throw new InvalidOperationException("Cannot create vendor PDFTemplate.");
-            Set(target, "Id", context.Template.VendorId);
-            Set(target, "BankId", GetVendorBankId(context));
-            Set(target, "IsSystem", context.Template.IsSystem);
+            var source = resolvedTemplate.Template;
+            Set(target, "Id", source is null ? context.Template.VendorId : ReadLong(source, "Id", context.Template.VendorId));
+            Set(target, "BankId", source is null ? GetVendorBankId(context) : ReadLong(source, "BankId", GetVendorBankId(context)));
+            Set(target, "IsSystem", source is null ? context.Template.IsSystem : ReadBoolean(source, "IsSystem", context.Template.IsSystem));
             Set(target, "Name", resolvedTemplate.Name);
-            Set(target, "PageSize", context.Template.PageRows);
-            Set(target, "Remark", context.Template.Remark);
+            Set(target, "PageSize", source is null ? resolvedTemplate.PageRows : ReadLong(source, "PageSize", resolvedTemplate.PageRows));
+            Set(target, "Remark", source is null ? context.Template.Remark : ReadString(source, "Remark", context.Template.Remark));
             Set(target, "PdfConfig", resolvedTemplate.Config);
-            Set(target, "PdfData", FirstNotBlank(resolvedTemplate.PdfData, context.Template.PdfData));
+            Set(target, "PdfData", FirstNotBlank(source is null ? null : ReadString(source, "PdfData", string.Empty), resolvedTemplate.PdfData, context.Template.PdfData));
             return target;
         }
 
@@ -740,6 +739,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 : fallback;
         }
 
+        private static bool ReadBoolean(object source, string propertyName, bool fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            if (value is bool boolean)
+            {
+                return boolean;
+            }
+
+            return bool.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out var parsed)
+                ? parsed
+                : fallback;
+        }
+
         private Type RequireType(string fullName)
         {
             return mainAssembly.GetType(fullName, throwOnError: true)
@@ -883,6 +895,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 return false;
             }
 
+            if (!context.Template.IsSystem
+                && !string.IsNullOrWhiteSpace(context.Template.PdfData)
+                && !PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(context.Template)
+                && resolvedTemplate.Template is null)
+            {
+                return false;
+            }
+
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             var template = resolvedTemplate.Template ?? CreateTemplate(context, resolvedTemplate);
@@ -902,24 +922,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             var candidateNames = GetCandidateTemplateNames(context.Template.Name).ToList();
             var preferNameMatch = HasPreferredTemplateAlias(context.Template.Name);
-            if (ShouldPreferQuestPdfConfigFactory(context.Template.Name))
-            {
-                foreach (var name in candidateNames)
-                {
-                    var config = CreateConfig([name]);
-                    if (config is not null)
-                    {
-                        return new ResolvedTemplate(name, config, null);
-                    }
-                }
-            }
 
             var vendorTemplate = LoadVendorTemplate(context, candidateNames, preferNameMatch);
             if (vendorTemplate is not null)
             {
                 var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
-                var vendorConfig = CreateConfig(candidateNames.Prepend(vendorName))
-                    ?? templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate);
+                var vendorConfig = templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate)
+                    ?? CreateConfig(candidateNames.Prepend(vendorName));
                 if (vendorConfig is null)
                 {
                     return null;
@@ -1099,14 +1108,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private object CreateTemplate(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
         {
             var target = Activator.CreateInstance(templateType) ?? throw new InvalidOperationException("Cannot create vendor PDFTemplate.");
-            Set(target, "Id", context.Template.VendorId);
-            Set(target, "BankId", GetVendorBankId(context));
-            Set(target, "IsSystem", context.Template.IsSystem);
+            var source = resolvedTemplate.Template;
+            Set(target, "Id", source is null ? context.Template.VendorId : ReadLong(source, "Id", context.Template.VendorId));
+            Set(target, "BankId", source is null ? GetVendorBankId(context) : ReadLong(source, "BankId", GetVendorBankId(context)));
+            Set(target, "IsSystem", source is null ? context.Template.IsSystem : ReadBoolean(source, "IsSystem", context.Template.IsSystem));
             Set(target, "Name", resolvedTemplate.Name);
-            Set(target, "PageSize", context.Template.PageRows);
-            Set(target, "Remark", context.Template.Remark);
+            Set(target, "PageSize", source is null ? context.Template.PageRows : ReadLong(source, "PageSize", context.Template.PageRows));
+            Set(target, "Remark", source is null ? context.Template.Remark : ReadString(source, "Remark", context.Template.Remark));
             Set(target, "PdfConfig", resolvedTemplate.Config);
-            Set(target, "PdfData", context.Template.PdfData);
+            Set(target, "PdfData", source is null ? context.Template.PdfData : ReadString(source, "PdfData", context.Template.PdfData));
             return target;
         }
 
@@ -1188,6 +1198,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             return long.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : fallback;
+        }
+
+        private static bool ReadBoolean(object source, string propertyName, bool fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            if (value is bool boolean)
+            {
+                return boolean;
+            }
+
+            return bool.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out var parsed)
                 ? parsed
                 : fallback;
         }
@@ -2589,8 +2612,26 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return HasPreferredTemplateAlias(name);
     }
 
+    private static bool CanUseQuestPdfFallback(PrintTemplate template)
+    {
+        return !template.IsSystem
+            && string.IsNullOrWhiteSpace(template.PdfData)
+            && (PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(template)
+                || template.Config.Columns.Count > 0);
+    }
+
     private static IEnumerable<string> BuildCandidateTemplateNames(string name)
     {
+        if (TryRemoveImportedTemplateSuffix(name, out var importedSourceName))
+        {
+            foreach (var alias in GetPreferredTemplateAliases(importedSourceName))
+            {
+                yield return alias;
+            }
+
+            yield return importedSourceName;
+        }
+
         foreach (var preferredName in GetPreferredTemplateAliases(name))
         {
             yield return preferredName;
@@ -2601,7 +2642,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             yield return name;
         }
 
-        var latestSuffixes = new[] { "\uFF08\u6700\u65B0\u7248\uFF09", "\uFF08\u6700\u65B0\uFF09" };
+        var latestSuffixes = new[] { "\uFF08\u6700\u65B0\u7248\uFF09", "\uFF08\u6700\u65B0\uFF09", "(\u6700\u65B0\u7248)", "(\u6700\u65B0)" };
         foreach (var latestSuffix in latestSuffixes)
         {
             if (name.Contains(latestSuffix, StringComparison.Ordinal))
@@ -2647,6 +2688,59 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC";
             }
         }
+
+        foreach (var withoutDuplicateSuffix in TrimTrailingNumericDuplicateSuffixes(name))
+        {
+            yield return withoutDuplicateSuffix;
+        }
+    }
+
+    private static bool TryRemoveImportedTemplateSuffix(string name, out string sourceName)
+    {
+        const string suffix = "-导入";
+        sourceName = string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var suffixIndex = name.LastIndexOf(suffix, StringComparison.Ordinal);
+        if (suffixIndex <= 0)
+        {
+            return false;
+        }
+
+        var remainder = name[(suffixIndex + suffix.Length)..];
+        if (remainder.Length > 0 && remainder.Any(item => !char.IsDigit(item)))
+        {
+            return false;
+        }
+
+        sourceName = name[..suffixIndex];
+        return !string.IsNullOrWhiteSpace(sourceName);
+    }
+
+    private static IEnumerable<string> TrimTrailingNumericDuplicateSuffixes(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || !char.IsDigit(name[^1]))
+        {
+            yield break;
+        }
+
+        var current = name;
+        while (current.Length > 1 && char.IsDigit(current[^1]))
+        {
+            current = current[..^1];
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                foreach (var alias in GetPreferredTemplateAliases(current))
+                {
+                    yield return alias;
+                }
+
+                yield return current;
+            }
+        }
     }
 
     private static IEnumerable<string> GetPreferredTemplateAliases(string name)
@@ -2676,6 +2770,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72483"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72482"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u7248"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248(\u6700\u65B0\u7248)"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248(\u6700\u65B0)"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
             ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72488"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
             ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72487"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
             ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72486"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],

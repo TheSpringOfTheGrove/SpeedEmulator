@@ -24,6 +24,8 @@ public sealed class PrintTemplate
 
     public string PdfData { get; set; } = string.Empty;
 
+    public string QuestPdfLayoutData { get; set; } = string.Empty;
+
     public PrintPdfConfig Config { get; set; } = new();
 
     public string SystemText => IsSystem ? "是" : "否";
@@ -43,6 +45,7 @@ public sealed class PrintTemplate
             PageRows = PageRows,
             Remark = Remark,
             PdfData = PdfData,
+            QuestPdfLayoutData = QuestPdfLayoutData,
             Config = Config.Clone()
         };
     }

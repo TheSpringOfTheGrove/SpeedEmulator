@@ -30,6 +30,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
     private string statusMessage = "正在准备打印模板";
     private bool isBusy;
     private bool pendingPreviewRefresh;
+    private bool suppressAutoPreview;
 
     public PrintPreviewViewModel(
         Bank bank,
@@ -77,7 +78,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             if (SetProperty(ref selectedTemplate, value))
             {
                 StatusMessage = value is null ? "请选择打印模板" : $"当前模板：{value.Name}";
-                if (value is not null && !string.IsNullOrWhiteSpace(PreviewPath))
+                if (value is not null && !suppressAutoPreview && !string.IsNullOrWhiteSpace(PreviewPath))
                 {
                     if (IsBusy)
                     {
@@ -184,6 +185,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            await EnsureQuestPdfLayoutAsync(SelectedTemplate);
             PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(SelectedTemplate));
             StatusMessage = $"预览已生成：{PreviewPath}";
         }
@@ -286,6 +288,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            await EnsureQuestPdfLayoutAsync(SelectedTemplate);
             await printPdfService.ExportAsync(CreateContext(SelectedTemplate), dialog.FileName);
             PreviewPath = dialog.FileName;
             StatusMessage = $"导出成功：{dialog.FileName}";
@@ -322,6 +325,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         template.BankId = Bank.Id;
         template.IsSystem = false;
         template.Name = CreateUniqueTemplateName(name.Trim());
+        await EnsureQuestPdfLayoutAsync(template);
         await templateRepository.SaveAsync(Bank, template);
         await ReloadTemplatesAsync(template.Name);
         MessageBox.Show("新增模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -354,6 +358,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         template.BankId = Bank.Id;
         template.IsSystem = false;
         template.Name = CreateUniqueTemplateName($"{template.Name}-复制");
+        await EnsureQuestPdfLayoutAsync(template);
         await templateRepository.SaveAsync(Bank, template);
         await ReloadTemplatesAsync(template.Name);
         MessageBox.Show("复制模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -395,20 +400,29 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        var refreshPreview = false;
         IsBusy = true;
         try
         {
             var before = TemplateSnapshot.From(SelectedTemplate);
             zhenchengPrintBridgeService.OpenTemplateDesigner(SelectedTemplate);
+            SelectedTemplate.QuestPdfLayoutData = string.Empty;
             var after = TemplateSnapshot.From(SelectedTemplate);
             if (!before.Equals(after))
             {
                 await templateRepository.SaveAsync(Bank, SelectedTemplate);
             }
-            await ReloadTemplatesAsync(SelectedTemplate.Name, SelectedTemplate.Id);
+            suppressAutoPreview = true;
+            try
+            {
+                await ReloadTemplatesAsync(SelectedTemplate.Name, SelectedTemplate.Id);
+            }
+            finally
+            {
+                suppressAutoPreview = false;
+            }
+
+            PreviewPath = string.Empty;
             StatusMessage = $"模板已设置：{SelectedTemplate.Name}";
-            refreshPreview = SelectedTemplate is not null;
             MessageBox.Show("设置模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
@@ -421,10 +435,6 @@ public sealed class PrintPreviewViewModel : ObservableObject
             IsBusy = false;
         }
 
-        if (refreshPreview)
-        {
-            await GeneratePreviewAsync();
-        }
     }
 
     private async Task SaveTemplateAsync()
@@ -440,6 +450,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
+        await EnsureQuestPdfLayoutAsync(SelectedTemplate);
         await templateRepository.SaveAsync(Bank, SelectedTemplate);
         await ReloadTemplatesAsync(SelectedTemplate.Name);
         MessageBox.Show("保存模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -447,21 +458,10 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
     private async Task ImportTemplateAsync()
     {
-        if (!EnsureTemplateSelected())
-        {
-            return;
-        }
-
-        if (SelectedTemplate!.IsSystem || SelectedTemplate.Id <= 0)
-        {
-            MessageBox.Show("系统模板不能导入覆盖，请先复制成自定义模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
         var dialog = new OpenFileDialog
         {
             Title = "导入模板",
-            Filter = "模板文件 (*.json;*.zctpl)|*.json;*.zctpl|所有文件 (*.*)|*.*"
+            Filter = "极速财务加密模板 (*.jstpl)|*.jstpl|旧版明文模板 (*.json)|*.json|所有文件 (*.*)|*.*"
         };
 
         if (dialog.ShowDialog() != true)
@@ -471,8 +471,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
         try
         {
-            var json = await File.ReadAllTextAsync(dialog.FileName);
-            var imported = JsonSerializer.Deserialize<PrintTemplate>(json, TemplateJsonOptions);
+            var imported = await EncryptedPrintTemplatePackageService.ImportAsync(dialog.FileName, TemplateJsonOptions);
             if (imported is null)
             {
                 MessageBox.Show("模板文件无法读取", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -485,12 +484,16 @@ public sealed class PrintPreviewViewModel : ObservableObject
                 return;
             }
 
-            var targetId = SelectedTemplate.Id;
-            imported.Id = targetId;
+            imported.Id = 0;
             imported.BankId = Bank.Id;
             imported.IsSystem = false;
+            imported.IsDeleted = false;
+            imported.Name = CreateUniqueImportedTemplateName(string.IsNullOrWhiteSpace(imported.Name)
+                ? $"{Bank.Name}{Bank.GetBankType()}导入模板"
+                : imported.Name.Trim());
+            await EnsureQuestPdfLayoutAsync(imported);
             await templateRepository.SaveAsync(Bank, imported);
-            await ReloadTemplatesAsync(imported.Name, targetId);
+            await ReloadTemplatesAsync(imported.Name);
             MessageBox.Show("导入模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
@@ -509,10 +512,10 @@ public sealed class PrintPreviewViewModel : ObservableObject
         var dialog = new SaveFileDialog
         {
             Title = "导出模板",
-            Filter = "模板文件 (*.json)|*.json|所有文件 (*.*)|*.*",
-            FileName = $"{SelectedTemplate!.Name}.json",
+            Filter = "极速财务加密模板 (*.jstpl)|*.jstpl|所有文件 (*.*)|*.*",
+            FileName = $"{SelectedTemplate!.Name}.jstpl",
             AddExtension = true,
-            DefaultExt = ".json",
+            DefaultExt = ".jstpl",
             OverwritePrompt = true
         };
 
@@ -523,8 +526,8 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
         try
         {
-            var json = JsonSerializer.Serialize(SelectedTemplate, TemplateJsonOptions);
-            await File.WriteAllTextAsync(dialog.FileName, json);
+            await EnsureQuestPdfLayoutAsync(SelectedTemplate);
+            await EncryptedPrintTemplatePackageService.ExportAsync(SelectedTemplate, dialog.FileName, TemplateJsonOptions);
             MessageBox.Show("导出模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
@@ -607,10 +610,59 @@ public sealed class PrintPreviewViewModel : ObservableObject
         return $"{normalized}-{DateTime.Now:yyyyMMddHHmmss}";
     }
 
+    private string CreateUniqueImportedTemplateName(string baseName)
+    {
+        var normalized = string.IsNullOrWhiteSpace(baseName) ? "导入模板" : baseName.Trim();
+        var first = $"{normalized}-导入";
+        if (Templates.All(item => !string.Equals(item.Name, first, StringComparison.Ordinal)))
+        {
+            return first;
+        }
+
+        for (var index = 2; index < 1000; index++)
+        {
+            var candidate = $"{normalized}-导入{index}";
+            if (Templates.All(item => !string.Equals(item.Name, candidate, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{normalized}-导入-{DateTime.Now:yyyyMMddHHmmss}";
+    }
+
     private bool TryCreateBlankEditableTemplate(PrintTemplate template)
     {
         return printPdfService is ZhenchengPrintBridgeService zhenchengPrintBridgeService
             && zhenchengPrintBridgeService.TryCreateBlankTemplate(template);
+    }
+
+    private async Task EnsureQuestPdfLayoutAsync(PrintTemplate? template)
+    {
+        if (template is null)
+        {
+            return;
+        }
+
+        if (template.IsSystem)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(template.PdfData))
+        {
+            return;
+        }
+
+        if (!PrintTemplateQuestPdfConversionService.EnsureConverted(Bank, template))
+        {
+            return;
+        }
+
+        if (!template.IsSystem && template.Id > 0)
+        {
+            await templateRepository.SaveAsync(Bank, template);
+        }
     }
 
     private async Task<bool> EnsureTemplateHasPdfDataAsync(PrintTemplate? template)
@@ -635,9 +687,11 @@ public sealed class PrintPreviewViewModel : ObservableObject
         template.PageRows = source.PageRows;
         template.Remark = source.Remark;
         template.PdfData = source.PdfData;
+        template.QuestPdfLayoutData = source.QuestPdfLayoutData;
         template.VendorId = source.VendorId;
         template.VendorBankId = source.VendorBankId;
         template.Config = source.Config.Clone();
+        await EnsureQuestPdfLayoutAsync(template);
 
         if (template.Id > 0)
         {
@@ -789,11 +843,11 @@ public sealed class PrintPreviewViewModel : ObservableObject
         };
     }
 
-    private sealed record TemplateSnapshot(string Name, int PageRows, string Remark, string PdfData)
+    private sealed record TemplateSnapshot(string Name, int PageRows, string Remark, string PdfData, string QuestPdfLayoutData)
     {
         public static TemplateSnapshot From(PrintTemplate template)
         {
-            return new TemplateSnapshot(template.Name, template.PageRows, template.Remark, template.PdfData);
+            return new TemplateSnapshot(template.Name, template.PageRows, template.Remark, template.PdfData, template.QuestPdfLayoutData);
         }
     }
 }
