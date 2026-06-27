@@ -53,6 +53,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         DefaultStimulsoftExporter.OpenTemplateDesigner(ResolveVendorDir(), template);
     }
 
+    public bool TryCreateBlankTemplate(PrintTemplate template)
+    {
+        return DefaultStimulsoftExporter.TryCreateBlankTemplate(ResolveVendorDir(), template);
+    }
+
     private async Task ExportInternalAsync(PrintRenderContext context, string path)
     {
         var directory = Path.GetDirectoryName(path);
@@ -1476,6 +1481,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
 
+        public static bool TryCreateBlankTemplate(string vendorDir, PrintTemplate template)
+        {
+            var previousDirectory = Directory.GetCurrentDirectory();
+            try
+            {
+                Directory.SetCurrentDirectory(vendorDir);
+                var exporter = Get(vendorDir);
+                exporter.CreateBlankTemplate(template);
+                return !string.IsNullOrWhiteSpace(template.PdfData);
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (Directory.Exists(previousDirectory))
+                {
+                    Directory.SetCurrentDirectory(previousDirectory);
+                }
+            }
+        }
+
         private static DefaultStimulsoftExporter Get(string vendorDir)
         {
             lock (ExporterSyncRoot)
@@ -1647,6 +1675,26 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var vendorTemplate = CreateTemplate(template);
             templateDesignerMethod.Invoke(null, [vendorTemplate]);
             CopyTemplateBack(vendorTemplate, template);
+        }
+
+        private void CreateBlankTemplate(PrintTemplate template)
+        {
+            var reportType = AssemblyLoadContext.Default.Assemblies
+                .Select(assembly => assembly.GetType("Stimulsoft.Report.StiReport", false))
+                .FirstOrDefault(type => type is not null)
+                ?? throw new MissingMemberException("Stimulsoft.Report.StiReport was not found.");
+            var report = Activator.CreateInstance(reportType)
+                ?? throw new InvalidOperationException("Cannot create blank Stimulsoft report.");
+            var saveToString = reportType.GetMethod("SaveToString", Type.EmptyTypes)
+                ?? throw new MissingMethodException(reportType.FullName, "SaveToString");
+
+            template.PdfData = Convert.ToString(saveToString.Invoke(report, null)) ?? string.Empty;
+            template.PageSize = "A4Portrait";
+            template.PageRows = 0;
+            template.Remark = string.Empty;
+            template.VendorId = 0;
+            template.VendorBankId = 0;
+            template.IsSystem = false;
         }
 
         private object CreateTemplate(PrintTemplate source)

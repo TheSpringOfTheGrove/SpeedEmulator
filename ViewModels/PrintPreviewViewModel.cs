@@ -311,7 +311,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        var template = SelectedTemplate?.Clone() ?? CreateBlankTemplate();
+        var template = CreateBlankTemplate();
+        if (!TryCreateBlankEditableTemplate(template))
+        {
+            MessageBox.Show("没有可用的真诚模板，无法新增可编辑模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         template.Id = 0;
         template.BankId = Bank.Id;
         template.IsSystem = false;
@@ -329,6 +335,21 @@ public sealed class PrintPreviewViewModel : ObservableObject
         }
 
         var template = SelectedTemplate!.Clone();
+        if (string.IsNullOrWhiteSpace(template.PdfData))
+        {
+            var source = GetTemplateSource(SelectedTemplate);
+            if (source is null || string.IsNullOrWhiteSpace(source.PdfData))
+            {
+                MessageBox.Show("当前模板缺少可复制的真诚模板数据，请先复制或导入一个真诚模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            template = source.Clone();
+            template.Name = SelectedTemplate.Name;
+            template.PageRows = SelectedTemplate.PageRows;
+            template.Remark = SelectedTemplate.Remark;
+            template.Config = SelectedTemplate.Config.Clone();
+        }
         template.Id = 0;
         template.BankId = Bank.Id;
         template.IsSystem = false;
@@ -348,6 +369,12 @@ public sealed class PrintPreviewViewModel : ObservableObject
         if (SelectedTemplate!.IsSystem)
         {
             MessageBox.Show("系统模板不能设置，请先复制成自定义模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!await EnsureTemplateHasPdfDataAsync(SelectedTemplate))
+        {
+            MessageBox.Show("当前模板不是可编辑的真诚模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -372,8 +399,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            var before = TemplateSnapshot.From(SelectedTemplate);
             zhenchengPrintBridgeService.OpenTemplateDesigner(SelectedTemplate);
-            await templateRepository.SaveAsync(Bank, SelectedTemplate);
+            var after = TemplateSnapshot.From(SelectedTemplate);
+            if (!before.Equals(after))
+            {
+                await templateRepository.SaveAsync(Bank, SelectedTemplate);
+            }
             await ReloadTemplatesAsync(SelectedTemplate.Name, SelectedTemplate.Id);
             StatusMessage = $"模板已设置：{SelectedTemplate.Name}";
             refreshPreview = SelectedTemplate is not null;
@@ -575,6 +607,70 @@ public sealed class PrintPreviewViewModel : ObservableObject
         return $"{normalized}-{DateTime.Now:yyyyMMddHHmmss}";
     }
 
+    private bool TryCreateBlankEditableTemplate(PrintTemplate template)
+    {
+        return printPdfService is ZhenchengPrintBridgeService zhenchengPrintBridgeService
+            && zhenchengPrintBridgeService.TryCreateBlankTemplate(template);
+    }
+
+    private async Task<bool> EnsureTemplateHasPdfDataAsync(PrintTemplate? template)
+    {
+        if (template is null || !string.IsNullOrWhiteSpace(template.PdfData))
+        {
+            return true;
+        }
+
+        if (template.IsSystem)
+        {
+            return false;
+        }
+
+        var source = GetTemplateSource(template);
+        if (source is null)
+        {
+            return false;
+        }
+
+        template.PageSize = source.PageSize;
+        template.PageRows = source.PageRows;
+        template.Remark = source.Remark;
+        template.PdfData = source.PdfData;
+        template.VendorId = source.VendorId;
+        template.VendorBankId = source.VendorBankId;
+        template.Config = source.Config.Clone();
+
+        if (template.Id > 0)
+        {
+            await templateRepository.SaveAsync(Bank, template);
+        }
+
+        return true;
+    }
+
+    private PrintTemplate? GetTemplateSource(PrintTemplate? preferred)
+    {
+        if (preferred is not null && !string.IsNullOrWhiteSpace(preferred.PdfData))
+        {
+            return preferred;
+        }
+
+        var candidates = Templates
+            .Where(item => !ReferenceEquals(item, preferred) && !string.IsNullOrWhiteSpace(item.PdfData))
+            .ToList();
+
+        if (preferred is not null && preferred.PageRows > 0)
+        {
+            var sameRows = candidates.FirstOrDefault(item => item.PageRows == preferred.PageRows);
+            if (sameRows is not null)
+            {
+                return sameRows;
+            }
+        }
+
+        return candidates.FirstOrDefault(item => item.IsSystem)
+            ?? candidates.FirstOrDefault();
+    }
+
     private PrintTemplate CreateBlankTemplate()
     {
         return new PrintTemplate
@@ -691,5 +787,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
             Records = records,
             Template = template
         };
+    }
+
+    private sealed record TemplateSnapshot(string Name, int PageRows, string Remark, string PdfData)
+    {
+        public static TemplateSnapshot From(PrintTemplate template)
+        {
+            return new TemplateSnapshot(template.Name, template.PageRows, template.Remark, template.PdfData);
+        }
     }
 }

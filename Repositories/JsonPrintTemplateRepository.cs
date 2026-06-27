@@ -52,6 +52,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 }
             }
 
+            templates = DeduplicateDisplayTemplates(templates);
             return Task.FromResult<IReadOnlyList<PrintTemplate>>(templates);
         }
     }
@@ -72,7 +73,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             copy.IsSystem = false;
             copy.IsDeleted = false;
             templates.RemoveAll(item => item.IsDeleted && IsDeletedTemplateMatch(copy, item));
-            if (copy.Id <= 0)
+
+            var index = FindExistingTemplateIndex(templates, copy);
+            if (index >= 0 && copy.Id <= 0)
+            {
+                copy.Id = templates[index].Id;
+            }
+            else if (index < 0 && copy.Id <= 0)
             {
                 var maxId = templates
                     .Where(item => !item.IsDeleted && item.Id > 0)
@@ -82,7 +89,12 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 copy.Id = maxId + 1;
             }
 
-            var index = templates.FindIndex(item => item.Id == copy.Id);
+            templates.RemoveAll(item =>
+                !item.IsDeleted
+                && item.Id != copy.Id
+                && IsSameTemplateIdentity(item, copy));
+
+            index = FindExistingTemplateIndex(templates, copy);
             if (index >= 0)
             {
                 templates[index] = copy;
@@ -182,6 +194,50 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
 
         return new string(value.Where(ch => !char.IsControl(ch)).ToArray()).Trim();
+    }
+
+    private static List<PrintTemplate> DeduplicateDisplayTemplates(IEnumerable<PrintTemplate> templates)
+    {
+        return templates
+            .GroupBy(GetTemplateIdentityKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(item => item.Id > 0)
+                .ThenByDescending(item => item.IsSystem)
+                .First())
+            .ToList();
+    }
+
+    private static int FindExistingTemplateIndex(List<PrintTemplate> templates, PrintTemplate template)
+    {
+        if (template.Id > 0)
+        {
+            var byId = templates.FindIndex(item => !item.IsDeleted && item.Id == template.Id);
+            if (byId >= 0)
+            {
+                return byId;
+            }
+        }
+
+        return templates.FindIndex(item => !item.IsDeleted && IsSameTemplateIdentity(item, template));
+    }
+
+    private static bool IsSameTemplateIdentity(PrintTemplate left, PrintTemplate right)
+    {
+        return string.Equals(GetTemplateIdentityKey(left), GetTemplateIdentityKey(right), StringComparison.Ordinal);
+    }
+
+    private static string GetTemplateIdentityKey(PrintTemplate template)
+    {
+        var vendorKey = template.VendorId > 0
+            ? $"vendor:{template.VendorBankId}:{template.VendorId}"
+            : "local";
+
+        return string.Join(
+            '\u001f',
+            vendorKey,
+            NormalizeTemplateKeyPart(template.Name),
+            NormalizeTemplateKeyPart(template.Remark),
+            template.PageRows.ToString());
     }
 
     private static PrintTemplate CreateSystemTemplate(Bank bank, PrintTemplateDefinition definition, int index)
