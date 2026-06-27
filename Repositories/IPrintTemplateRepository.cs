@@ -8,6 +8,5 @@ public interface IPrintTemplateRepository
 
     Task SaveAsync(Bank bank, PrintTemplate template);
 
-    Task DeleteAsync(long bankId, long templateId);
+    Task DeleteAsync(Bank bank, PrintTemplate template);
 }
-

@@ -4,7 +4,10 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text;
+using System.Windows;
+using System.Windows.Media.Imaging;
 using SpeedEmulator.Models;
 
 namespace SpeedEmulator.Services;
@@ -118,7 +121,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly Type flowListType;
         private readonly MethodInfo configFactory;
         private readonly MethodInfo renderFactory;
-        private readonly MethodInfo? stimulsoftExportMethod;
+        private readonly MethodInfo? templateListMethod;
         private readonly MethodInfo generatePdfMethod;
 
         public VendorBridge(string vendorDir)
@@ -137,7 +140,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                 loadContext = new VendorLoadContext(mainDll);
                 mainAssembly = loadContext.LoadFromAssemblyPath(mainDll);
-                LoadOptionalVendorAssemblies("Stimulsoft*.dll");
                 bankUserType = RequireType("MainEntry.entity.BankUser");
                 flowType = RequireType("MainEntry.entity.GenerateFlowRecord");
                 templateType = RequireType("MainEntry.entity.PDFTemplate");
@@ -145,6 +147,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 flowListType = typeof(List<>).MakeGenericType(flowType);
 
                 var types = GetLoadableTypes(mainAssembly).ToList();
+                templateListMethod = FindTemplateListMethod(types);
                 configFactory = types
                     .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
                     .FirstOrDefault(method =>
@@ -153,36 +156,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         && parameterType == typeof(string))
                     ?? throw new MissingMethodException("PDFConfig factory was not found.");
 
-                renderFactory = types
-                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                    .FirstOrDefault(method =>
-                    {
-                        var parameters = method.GetParameters();
-                        return parameters.Length == 3
-                            && parameters[0].ParameterType == bankUserType
-                            && parameters[1].ParameterType == flowListType
-                            && parameters[2].ParameterType == templateType
-                            && method.ReturnType.FullName == "QuestPDF.Infrastructure.IDocument";
-                    })
+                renderFactory = FindRenderFactory(types)
                     ?? throw new MissingMethodException("PDF render factory was not found.");
-
-                stimulsoftExportMethod = types
-                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                    .FirstOrDefault(method =>
-                    {
-                        var parameters = method.GetParameters();
-                        return method.ReturnType == typeof(void)
-                            && parameters.Length == 4
-                            && parameters[0].ParameterType == bankUserType
-                            && parameters[1].ParameterType == flowListType
-                            && parameters[2].ParameterType == typeof(Stream)
-                            && parameters[3].ParameterType == typeof(string);
-                    });
 
                 var questPdfAssembly = LoadQuestPdfAssembly();
                 SetQuestPdfLicense(questPdfAssembly);
                 ConfigureQuestPdfFonts(questPdfAssembly, vendorDir);
-                InitializeStimulsoftPrintRuntime();
+                PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
                 generatePdfMethod = FindGeneratePdfMethod(questPdfAssembly);
             }
             finally
@@ -206,34 +186,70 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     return false;
                 }
 
-                var bankUser = CreateVendorBankUser(context);
-                var records = CreateVendorFlowRecords(context);
                 if (resolvedTemplate.Config is null)
                 {
-                    if (stimulsoftExportMethod is null || string.IsNullOrWhiteSpace(context.Template.PdfData))
+                    if (string.IsNullOrWhiteSpace(context.Template.PdfData)
+                        && string.IsNullOrWhiteSpace(resolvedTemplate.PdfData))
                     {
                         return false;
                     }
 
-                    if (DefaultStimulsoftExporter.TryExport(vendorDir, context, path))
+                    try
                     {
-                        return true;
+                        return DefaultStimulsoftExporter.ExportOrThrow(
+                            vendorDir,
+                            CreateRenderContext(context, resolvedTemplate),
+                            path);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw CreateRenderException("Stimulsoft", context.Template, ex);
+                    }
+                }
+
+                var bankUser = CreateVendorBankUser(context);
+                var records = CreateVendorFlowRecords(context);
+                try
+                {
+                    PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
+                    if (!IsDefaultQuestPdfBridgeDisabled() && !IsAgriculturalBankPersonalPaperTemplate(context))
+                    {
+                        try
+                        {
+                            if (DefaultQuestPdfExporter.ExportOrThrow(vendorDir, context, path))
+                            {
+                                return true;
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            if (IsPrintBridgeDebugEnabled())
+                            {
+                                throw;
+                            }
+
+                            // Keep the isolated vendor context as a fallback. Some
+                            // older templates are sensitive to the exact assembly
+                            // loading path, so a default-context miss should not
+                            // block templates that already render successfully.
+                        }
                     }
 
-                    using var stream = new MemoryStream(Encoding.UTF8.GetBytes(context.Template.PdfData));
-                    stimulsoftExportMethod.Invoke(null, [bankUser, records, stream, path]);
-                    return File.Exists(path);
-                }
+                    var template = CreateVendorTemplate(context, resolvedTemplate);
+                    var document = renderFactory.Invoke(null, [bankUser, records, template]);
+                    if (document is null)
+                    {
+                        return false;
+                    }
 
-                var template = CreateVendorTemplate(context, resolvedTemplate);
-                var document = renderFactory.Invoke(null, [bankUser, records, template]);
-                if (document is null)
+                    NormalizeVendorDynamicImageDocument(context, document);
+                    generatePdfMethod.Invoke(null, [document, path]);
+                    return true;
+                }
+                catch (Exception ex)
                 {
-                    return false;
+                    throw CreateRenderException("QuestPDF", context.Template, ex);
                 }
-
-                generatePdfMethod.Invoke(null, [document, path]);
-                return true;
             }
             finally
             {
@@ -249,16 +265,68 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var hasPdfData = !string.IsNullOrWhiteSpace(context.Template.PdfData);
             if (hasPdfData)
             {
-                return new ResolvedTemplate(context.Template.Name, null);
+                return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
             }
 
-            foreach (var name in GetCandidateTemplateNames(context.Template.Name))
+            var candidateNames = GetCandidateTemplateNames(context.Template.Name).ToList();
+            var preferNameMatch = HasPreferredTemplateAlias(context.Template.Name);
+            if (ShouldPreferQuestPdfConfigFactory(context.Template.Name))
+            {
+                foreach (var name in candidateNames)
+                {
+                    var config = CreateVendorConfig([name]);
+                    if (config is not null)
+                    {
+                        return new ResolvedTemplate(name, config, null);
+                    }
+                }
+            }
+
+            var vendorTemplate = LoadVendorTemplate(context, candidateNames, preferNameMatch);
+            if (vendorTemplate is not null)
+            {
+                var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
+                var vendorPdfData = ReadString(vendorTemplate, "PdfData", string.Empty);
+                var vendorPageRows = (int)ReadLong(vendorTemplate, "PageSize", context.Template.PageRows);
+                var vendorConfig = CreateVendorConfig(candidateNames.Prepend(vendorName))
+                    ?? templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate);
+                if (vendorConfig is null)
+                {
+                    return string.IsNullOrWhiteSpace(vendorPdfData)
+                        ? null
+                        : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, vendorPageRows);
+                }
+
+                Set(vendorTemplate, "PdfConfig", vendorConfig);
+                return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, vendorPageRows);
+            }
+
+            foreach (var name in candidateNames)
+            {
+                var config = CreateVendorConfig([name]);
+                if (config is not null)
+                {
+                    return new ResolvedTemplate(name, config, null, string.Empty, context.Template.PageRows);
+                }
+            }
+
+            if (hasPdfData)
+            {
+                return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
+            }
+
+            return null;
+        }
+
+        private object? CreateVendorConfig(IEnumerable<string> names)
+        {
+            foreach (var name in names.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.Ordinal))
             {
                 try
                 {
                     if (configFactory.Invoke(null, [name]) is { } config)
                     {
-                        return new ResolvedTemplate(name, config);
+                        return config;
                     }
                 }
                 catch
@@ -268,12 +336,121 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 }
             }
 
-            if (hasPdfData)
+            return null;
+        }
+
+        private object? LoadVendorTemplate(
+            PrintRenderContext context,
+            IReadOnlyCollection<string> candidateNames,
+            bool preferNameMatch)
+        {
+            if (templateListMethod is null)
             {
-                return new ResolvedTemplate(context.Template.Name, null);
+                return null;
+            }
+
+            var parameterType = templateListMethod.GetParameters()[0].ParameterType;
+            foreach (var bankId in GetVendorTemplateBankIds(context))
+            {
+                try
+                {
+                    var argument = Convert.ChangeType(bankId, parameterType, CultureInfo.InvariantCulture);
+                    if (templateListMethod.Invoke(null, [argument]) is not IEnumerable enumerable)
+                    {
+                        continue;
+                    }
+
+                    var templates = enumerable.Cast<object>().ToList();
+                    if (!preferNameMatch)
+                    {
+                        var byId = context.Template.VendorId > 0
+                            ? templates.FirstOrDefault(item => ReadLong(item, "Id", 0) == context.Template.VendorId)
+                            : null;
+                        if (byId is not null)
+                        {
+                            return byId;
+                        }
+                    }
+
+                    var byName = candidateNames
+                        .Select(candidate => templates.FirstOrDefault(item =>
+                            string.Equals(ReadString(item, "Name", string.Empty), candidate, StringComparison.Ordinal)))
+                        .FirstOrDefault(item => item is not null);
+                    if (byName is not null)
+                    {
+                        return byName;
+                    }
+                }
+                catch
+                {
+                    // Some vendor bank ids can fail if the local template store is incomplete.
+                }
             }
 
             return null;
+        }
+
+        private static IEnumerable<long> GetVendorTemplateBankIds(PrintRenderContext context)
+        {
+            var ids = new[]
+            {
+                context.Template.VendorBankId,
+                context.Template.BankId,
+                context.Bank.Id
+            };
+
+            return ids.Where(id => id > 0).Distinct();
+        }
+
+        private static InvalidOperationException CreateRenderException(string renderer, PrintTemplate template, Exception ex)
+        {
+            var root = UnwrapReflectionException(ex);
+            var rawMessage = string.IsNullOrWhiteSpace(root.Message) ? ex.Message : root.Message;
+            var templateName = string.IsNullOrWhiteSpace(template.Name) ? "未命名模板" : template.Name;
+
+            if (string.Equals(renderer, "QuestPDF", StringComparison.OrdinalIgnoreCase)
+                && rawMessage.Contains("conflicting size constraints", StringComparison.OrdinalIgnoreCase))
+            {
+                return new InvalidOperationException(
+                    $"模板“{templateName}”走真诚 QuestPDF 硬编码模板，当前字段或数据长度与模板页面尺寸冲突。请先换同银行其它模板，或缩短过长字段后再生成。原始错误：{rawMessage}",
+                    root);
+            }
+
+            if (string.Equals(renderer, "Stimulsoft", StringComparison.OrdinalIgnoreCase))
+            {
+                return new InvalidOperationException(
+                    $"模板“{templateName}”走真诚 Stimulsoft 模板流，渲染失败。请检查模板数据、真诚运行时文件和授权环境是否完整。原始错误：{rawMessage}",
+                    root);
+            }
+
+            return new InvalidOperationException($"模板“{templateName}”渲染失败：{rawMessage}", root);
+        }
+
+        private static Exception UnwrapReflectionException(Exception ex)
+        {
+            var current = ex;
+            while (current is TargetInvocationException && current.InnerException is not null)
+            {
+                current = current.InnerException;
+            }
+
+            return current.GetBaseException();
+        }
+
+        private static bool IsDefaultQuestPdfBridgeDisabled()
+        {
+            return string.Equals(
+                Environment.GetEnvironmentVariable("SPEEDEMULATOR_DISABLE_DEFAULT_QUESTPDF_BRIDGE"),
+                "1",
+                StringComparison.Ordinal);
+        }
+
+        private static bool IsPrintBridgeDebugEnabled()
+        {
+            return string.Equals(
+                Environment.GetEnvironmentVariable("SPEEDEMULATOR_PRINT_BRIDGE_DEBUG"),
+                "1",
+                StringComparison.Ordinal);
         }
 
         private object CreateVendorBankUser(PrintRenderContext context)
@@ -285,10 +462,23 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            Set(target, "UserNum", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "UserNum"), GetValue(values, "CardNum")));
-            Set(target, "AccountNum", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "UserNum")));
-            Set(target, "Account", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "Account"), GetValue(values, "AccountNum")));
-            Set(target, "CardNum", FirstNotBlank(GetValue(values, "CardNum"), context.BankUser.AccountNo));
+            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
+            var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
+            if (IsAgriculturalBankPersonalPaperTemplate(context))
+            {
+                userNumber = ResolveAgriculturalPersonalPaperSequence(context, values);
+                customerNo = userNumber;
+                printNo = userNumber;
+            }
+
+            Set(target, "UserNum", userNumber);
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "Account", accountNumber);
+            Set(target, "CardNum", accountNumber);
+            Set(target, "CustomerNo", customerNo);
+            Set(target, "PrintNo", printNo);
             Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
             Set(target, "StartTime", context.BankUser.StartDate);
             Set(target, "EndTime", context.BankUser.EndDate);
@@ -311,6 +501,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var source = context.Records[index];
                 var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
                 var values = CreateValueMap(source);
+                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                ApplyPrintFieldFallbacks(context.Bank, source, values);
                 ApplyMatchingProperties(target, values);
 
                 var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
@@ -318,12 +510,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
+                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                    GetValue(values, "AccountNum"),
+                    GetValue(values, "Account"),
+                    context.BankUser.AccountNo));
+                var sequenceNumber = FirstNotBlank(
+                    GetValue(values, "SequenceNum"),
+                    GetValue(values, "SerialNum"),
+                    GetValue(values, "LogNum"),
+                    $"P{index + 1:000000000}");
+                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                Set(target, "AccountNum", accountNumber);
+                Set(target, "Account", accountNumber);
+                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SerialNum", serialNumber);
+                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
                 Set(target, "IncomeAttribute", FirstNotBlank(source.IncomeAttribute, tradeMoney >= 0 ? "\u6536\u5165" : "\u652F\u51FA"));
                 Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
                 Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
+                ApplyResolvedFlowTextFields(target, context.Bank, source, values);
+                ApplyTemplateSpecificFlowTextLimits(context, target);
                 records.Add(target);
             }
 
@@ -340,7 +549,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "PageSize", context.Template.PageRows);
             Set(target, "Remark", context.Template.Remark);
             Set(target, "PdfConfig", resolvedTemplate.Config);
-            Set(target, "PdfData", context.Template.PdfData);
+            Set(target, "PdfData", FirstNotBlank(resolvedTemplate.PdfData, context.Template.PdfData));
             return target;
         }
 
@@ -353,117 +562,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             var loaded = loadContext.Assemblies.FirstOrDefault(item => item.GetName().Name == "QuestPDF");
             return loaded ?? loadContext.LoadFromAssemblyPath(Path.Combine(vendorDir, "QuestPDF.dll"));
-        }
-
-        private void LoadOptionalVendorAssemblies(string searchPattern)
-        {
-            foreach (var file in Directory.EnumerateFiles(vendorDir, searchPattern))
-            {
-                try
-                {
-                    var assemblyName = AssemblyName.GetAssemblyName(file).Name;
-                    if (loadContext.Assemblies.Any(item => string.Equals(item.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        continue;
-                    }
-
-                    loadContext.LoadFromAssemblyPath(file);
-                }
-                catch
-                {
-                    // Optional vendor UI/export assemblies are loaded best-effort.
-                    // Missing one should not block templates that do not need it.
-                }
-            }
-        }
-
-        private void InitializeStimulsoftPrintRuntime()
-        {
-            if (stimulsoftExportMethod?.DeclaringType is { } exportType)
-            {
-                RuntimeHelpers.RunClassConstructor(exportType.TypeHandle);
-                foreach (var method in exportType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-                    .Where(method => !method.IsSpecialName
-                        && method.ReturnType == typeof(void)
-                        && method.GetParameters().Length == 0))
-                {
-                    try
-                    {
-                        method.Invoke(null, null);
-                    }
-                    catch
-                    {
-                        // Vendor print initialization methods are obfuscated and
-                        // version-dependent. Try all zero-arg setup hooks, but do
-                        // not block templates that do not need a particular hook.
-                    }
-                }
-            }
-
-            RegisterReportUtilityFunctions();
-        }
-
-        private void RegisterReportUtilityFunctions()
-        {
-            var reportUtilsType = mainAssembly.GetType("MainEntry.utils.ReportUtils");
-            if (reportUtilsType is null)
-            {
-                return;
-            }
-
-            var functionsType = loadContext.Assemblies
-                .Select(assembly => assembly.GetType("Stimulsoft.Report.Dictionary.StiFunctions"))
-                .FirstOrDefault(type => type is not null);
-            if (functionsType is null)
-            {
-                return;
-            }
-
-            var addFunction = functionsType.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                .FirstOrDefault(method =>
-                {
-                    if (method.Name != "AddFunction")
-                    {
-                        return false;
-                    }
-
-                    var parameters = method.GetParameters();
-                    return parameters.Length == 10
-                        && parameters[0].ParameterType == typeof(string)
-                        && parameters[3].ParameterType == typeof(string)
-                        && parameters[4].ParameterType == typeof(Type)
-                        && parameters[5].ParameterType == typeof(Type);
-                });
-            if (addFunction is null)
-            {
-                return;
-            }
-
-            foreach (var function in reportUtilsType.GetMethods(BindingFlags.Public | BindingFlags.Static))
-            {
-                var parameters = function.GetParameters();
-                try
-                {
-                    addFunction.Invoke(null,
-                    [
-                        "ReportUtils",
-                        "ReportUtils",
-                        function.Name,
-                        function.Name,
-                        function.ReturnType,
-                        reportUtilsType,
-                        string.Empty,
-                        parameters.Select(parameter => parameter.ParameterType).ToArray(),
-                        parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray(),
-                        parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray()
-                    ]);
-                }
-                catch
-                {
-                    // Duplicate function registrations are harmless; Stimulsoft
-                    // keeps global function state per assembly load context.
-                }
-            }
         }
 
         private static void SetQuestPdfLicense(Assembly questPdfAssembly)
@@ -483,6 +581,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             var value = Enum.Parse(licenseType, "Community");
             licenseProperty.SetValue(null, value);
+
+            var debugProperty = settingsType?.GetProperty("EnableDebugging", BindingFlags.Public | BindingFlags.Static);
+            if (debugProperty?.PropertyType == typeof(bool) && debugProperty.CanWrite)
+            {
+                debugProperty.SetValue(null, IsPrintBridgeDebugEnabledGlobal());
+            }
         }
 
         private static void ConfigureQuestPdfFonts(Assembly questPdfAssembly, string vendorDir)
@@ -566,13 +670,679 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 ?? throw new MissingMethodException("QuestPDF GeneratePdf extension was not found.");
         }
 
+        private MethodInfo? FindRenderFactory(IReadOnlyCollection<Type> types)
+        {
+            static IEnumerable<MethodInfo> StaticMethods(Type type)
+            {
+                return type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            }
+
+            bool IsRenderFactory(MethodInfo method)
+            {
+                var parameters = method.GetParameters();
+                return parameters.Length == 3
+                    && parameters[0].ParameterType == bankUserType
+                    && parameters[1].ParameterType == flowListType
+                    && parameters[2].ParameterType == templateType
+                    && method.ReturnType.FullName == "QuestPDF.Infrastructure.IDocument";
+            }
+
+            var vendorPrintFactory = types
+                .Where(type => string.Equals(type.Name, "_0003_001A_0016", StringComparison.Ordinal))
+                .SelectMany(StaticMethods)
+                .FirstOrDefault(IsRenderFactory);
+
+            return vendorPrintFactory
+                ?? types.SelectMany(StaticMethods).FirstOrDefault(IsRenderFactory);
+        }
+
+        private MethodInfo? FindTemplateListMethod(IReadOnlyCollection<Type> types)
+        {
+            var listTemplateType = typeof(List<>).MakeGenericType(templateType);
+            return types
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                {
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 1
+                        && (parameters[0].ParameterType == typeof(long) || parameters[0].ParameterType == typeof(int))
+                        && method.ReturnType == listTemplateType;
+                });
+        }
+
+        private static string ReadString(object source, string propertyName, string fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+            return string.IsNullOrWhiteSpace(text) ? fallback : text;
+        }
+
+        private static long ReadLong(object source, string propertyName, long fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            if (value is long number)
+            {
+                return number;
+            }
+
+            if (value is int integer)
+            {
+                return integer;
+            }
+
+            return long.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : fallback;
+        }
+
         private Type RequireType(string fullName)
         {
             return mainAssembly.GetType(fullName, throwOnError: true)
                 ?? throw new TypeLoadException(fullName);
         }
 
-        private sealed record ResolvedTemplate(string Name, object? Config);
+        private static PrintRenderContext CreateRenderContext(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
+        {
+            if (string.IsNullOrWhiteSpace(resolvedTemplate.PdfData))
+            {
+                return context;
+            }
+
+            var template = context.Template.Clone();
+            template.Name = resolvedTemplate.Name;
+            template.PdfData = resolvedTemplate.PdfData;
+            template.PageRows = resolvedTemplate.PageRows;
+
+            return new PrintRenderContext
+            {
+                Bank = context.Bank,
+                BankUser = context.BankUser,
+                Records = context.Records,
+                Template = template
+            };
+        }
+
+        private sealed record ResolvedTemplate(string Name, object? Config, object? Template, string PdfData = "", int PageRows = 0);
+    }
+
+    private sealed class DefaultQuestPdfExporter
+    {
+        private static readonly object ExporterSyncRoot = new();
+        private static readonly HashSet<string> ResolverDirectories = new(StringComparer.OrdinalIgnoreCase);
+        private static DefaultQuestPdfExporter? current;
+
+        private readonly string vendorDir;
+        private readonly Assembly mainAssembly;
+        private readonly Type bankUserType;
+        private readonly Type flowType;
+        private readonly Type templateType;
+        private readonly Type configType;
+        private readonly Type flowListType;
+        private readonly MethodInfo configFactory;
+        private readonly MethodInfo renderFactory;
+        private readonly MethodInfo? templateListMethod;
+        private readonly MethodInfo generatePdfMethod;
+
+        private DefaultQuestPdfExporter(string vendorDir)
+        {
+            this.vendorDir = vendorDir;
+            RegisterResolver(vendorDir);
+            LoadOptionalAssemblies(vendorDir, "QuestPDF.dll");
+            LoadOptionalAssemblies(vendorDir, "QuestPdfSkia.dll");
+            LoadOptionalAssemblies(vendorDir, "SkiaSharp*.dll");
+            LoadOptionalAssemblies(vendorDir, "HarfBuzzSharp.dll");
+            LoadOptionalAssemblies(vendorDir, "SixLabors*.dll");
+
+            var mainDll = Path.Combine(vendorDir, ZhenchengRuntimeLocator.MainDllName);
+            mainAssembly = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(assembly =>
+            {
+                try
+                {
+                    return string.Equals(assembly.Location, mainDll, StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    return false;
+                }
+            }) ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(mainDll);
+
+            bankUserType = mainAssembly.GetType("MainEntry.entity.BankUser", throwOnError: true)!;
+            flowType = mainAssembly.GetType("MainEntry.entity.GenerateFlowRecord", throwOnError: true)!;
+            templateType = mainAssembly.GetType("MainEntry.entity.PDFTemplate", throwOnError: true)!;
+            configType = mainAssembly.GetType("MainEntry.entity.PdfConfig.PDFConfig", throwOnError: true)!;
+            flowListType = typeof(List<>).MakeGenericType(flowType);
+
+            var types = GetLoadableTypes(mainAssembly).ToList();
+            templateListMethod = FindTemplateListMethod(types);
+            configFactory = types
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                    method.ReturnType == configType
+                    && method.GetParameters() is [{ ParameterType: var parameterType }]
+                    && parameterType == typeof(string))
+                ?? throw new MissingMethodException("PDFConfig factory was not found.");
+
+            renderFactory = FindRenderFactory(types)
+                ?? throw new MissingMethodException("PDF render factory was not found.");
+
+            var questPdfAssembly = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(item => item.GetName().Name == "QuestPDF")
+                ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(vendorDir, "QuestPDF.dll"));
+            SetQuestPdfLicense(questPdfAssembly);
+            ConfigureQuestPdfFonts(questPdfAssembly, vendorDir);
+            PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
+            generatePdfMethod = FindGeneratePdfMethod(questPdfAssembly);
+        }
+
+        public static bool ExportOrThrow(string vendorDir, PrintRenderContext context, string path)
+        {
+            if (!string.IsNullOrWhiteSpace(context.Template.PdfData))
+            {
+                return false;
+            }
+
+            var previousDirectory = Directory.GetCurrentDirectory();
+            try
+            {
+                Directory.SetCurrentDirectory(vendorDir);
+                var exporter = Get(vendorDir);
+                return exporter.Export(context, path);
+            }
+            finally
+            {
+                if (Directory.Exists(previousDirectory))
+                {
+                    Directory.SetCurrentDirectory(previousDirectory);
+                }
+            }
+        }
+
+        private static DefaultQuestPdfExporter Get(string vendorDir)
+        {
+            lock (ExporterSyncRoot)
+            {
+                if (current is not null && string.Equals(current.vendorDir, vendorDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    return current;
+                }
+
+                current = new DefaultQuestPdfExporter(vendorDir);
+                return current;
+            }
+        }
+
+        private bool Export(PrintRenderContext context, string path)
+        {
+            var resolvedTemplate = ResolveTemplate(context);
+            if (resolvedTemplate is null || resolvedTemplate.Config is null)
+            {
+                return false;
+            }
+
+            var bankUser = CreateBankUser(context);
+            var records = CreateFlowRecords(context);
+            var template = resolvedTemplate.Template ?? CreateTemplate(context, resolvedTemplate);
+            PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
+            var document = renderFactory.Invoke(null, [bankUser, records, template]);
+            if (document is null)
+            {
+                return false;
+            }
+
+            NormalizeVendorDynamicImageDocument(context, document);
+            generatePdfMethod.Invoke(null, [document, path]);
+            return File.Exists(path);
+        }
+
+        private ResolvedTemplate? ResolveTemplate(PrintRenderContext context)
+        {
+            var candidateNames = GetCandidateTemplateNames(context.Template.Name).ToList();
+            var preferNameMatch = HasPreferredTemplateAlias(context.Template.Name);
+            if (ShouldPreferQuestPdfConfigFactory(context.Template.Name))
+            {
+                foreach (var name in candidateNames)
+                {
+                    var config = CreateConfig([name]);
+                    if (config is not null)
+                    {
+                        return new ResolvedTemplate(name, config, null);
+                    }
+                }
+            }
+
+            var vendorTemplate = LoadVendorTemplate(context, candidateNames, preferNameMatch);
+            if (vendorTemplate is not null)
+            {
+                var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
+                var vendorConfig = CreateConfig(candidateNames.Prepend(vendorName))
+                    ?? templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate);
+                if (vendorConfig is null)
+                {
+                    return null;
+                }
+
+                Set(vendorTemplate, "PdfConfig", vendorConfig);
+                return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
+            }
+
+            foreach (var name in candidateNames)
+            {
+                var config = CreateConfig([name]);
+                if (config is not null)
+                {
+                    return new ResolvedTemplate(name, config, null);
+                }
+            }
+
+            return null;
+        }
+
+        private object? CreateConfig(IEnumerable<string> names)
+        {
+            foreach (var name in names.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.Ordinal))
+            {
+                try
+                {
+                    if (configFactory.Invoke(null, [name]) is { } config)
+                    {
+                        return config;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private object? LoadVendorTemplate(
+            PrintRenderContext context,
+            IReadOnlyCollection<string> candidateNames,
+            bool preferNameMatch)
+        {
+            if (templateListMethod is null)
+            {
+                return null;
+            }
+
+            var parameterType = templateListMethod.GetParameters()[0].ParameterType;
+            foreach (var bankId in GetVendorTemplateBankIds(context))
+            {
+                try
+                {
+                    var argument = Convert.ChangeType(bankId, parameterType, CultureInfo.InvariantCulture);
+                    if (templateListMethod.Invoke(null, [argument]) is not IEnumerable enumerable)
+                    {
+                        continue;
+                    }
+
+                    var templates = enumerable.Cast<object>().ToList();
+                    if (!preferNameMatch)
+                    {
+                        var byId = context.Template.VendorId > 0
+                            ? templates.FirstOrDefault(item => ReadLong(item, "Id", 0) == context.Template.VendorId)
+                            : null;
+                        if (byId is not null)
+                        {
+                            return byId;
+                        }
+                    }
+
+                    var byName = candidateNames
+                        .Select(candidate => templates.FirstOrDefault(item =>
+                            string.Equals(ReadString(item, "Name", string.Empty), candidate, StringComparison.Ordinal)))
+                        .FirstOrDefault(item => item is not null);
+                    if (byName is not null)
+                    {
+                        return byName;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private object CreateBankUser(PrintRenderContext context)
+        {
+            var target = Activator.CreateInstance(bankUserType) ?? throw new InvalidOperationException("Cannot create vendor BankUser.");
+            var values = CreateValueMap(context.BankUser);
+            ApplyMatchingProperties(target, values);
+
+            Set(target, "Id", context.BankUser.Id);
+            Set(target, "BankId", GetVendorBankId(context));
+            Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
+            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
+            var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
+            if (IsAgriculturalBankPersonalPaperTemplate(context))
+            {
+                userNumber = ResolveAgriculturalPersonalPaperSequence(context, values);
+                customerNo = userNumber;
+                printNo = userNumber;
+            }
+
+            Set(target, "UserNum", userNumber);
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "Account", accountNumber);
+            Set(target, "CardNum", accountNumber);
+            Set(target, "CustomerNo", customerNo);
+            Set(target, "PrintNo", printNo);
+            Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
+            Set(target, "StartTime", context.BankUser.StartDate);
+            Set(target, "EndTime", context.BankUser.EndDate);
+            Set(target, "OpenBranch", FirstNotBlank(context.BankUser.OpenBranch, GetValue(values, "OpenBranch")));
+            Set(target, "Currency", NormalizeCurrency(FirstNotBlank(context.BankUser.Currency, GetValue(values, "Currency"))));
+            Set(target, "Remark", context.BankUser.Remark);
+            Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
+            Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
+            Set(target, "IsPrintStamp", context.BankUser.ShouldPrintSeal);
+            Set(target, "ZhangImg", context.BankUser.ShouldPrintSeal ? context.BankUser.SealImagePath : string.Empty);
+            Set(target, "BankTitle", context.Bank.Name);
+            return target;
+        }
+
+        private IList CreateFlowRecords(PrintRenderContext context)
+        {
+            var records = (IList)(Activator.CreateInstance(flowListType) ?? throw new InvalidOperationException("Cannot create vendor flow list."));
+            for (var index = 0; index < context.Records.Count; index++)
+            {
+                var source = context.Records[index];
+                var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
+                var values = CreateValueMap(source);
+                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                ApplyPrintFieldFallbacks(context.Bank, source, values);
+                ApplyMatchingProperties(target, values);
+
+                var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
+                Set(target, "Index", source.Index > 0 ? source.Index : index + 1);
+                Set(target, "Id", source.Id);
+                Set(target, "BankId", GetVendorBankId(context));
+                Set(target, "BankUserId", context.BankUser.Id);
+                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                    GetValue(values, "AccountNum"),
+                    GetValue(values, "Account"),
+                    context.BankUser.AccountNo));
+                var sequenceNumber = FirstNotBlank(
+                    GetValue(values, "SequenceNum"),
+                    GetValue(values, "SerialNum"),
+                    GetValue(values, "LogNum"),
+                    $"P{index + 1:000000000}");
+                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                Set(target, "AccountNum", accountNumber);
+                Set(target, "Account", accountNumber);
+                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SerialNum", serialNumber);
+                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "AccountTime", source.AccountTime);
+                Set(target, "TradeMoney", tradeMoney);
+                Set(target, "Balance", source.Balance);
+                Set(target, "IncomeAttribute", FirstNotBlank(source.IncomeAttribute, tradeMoney >= 0 ? "\u6536\u5165" : "\u652F\u51FA"));
+                Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
+                Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
+                ApplyResolvedFlowTextFields(target, context.Bank, source, values);
+                ApplyTemplateSpecificFlowTextLimits(context, target);
+                records.Add(target);
+            }
+
+            return records;
+        }
+
+        private object CreateTemplate(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
+        {
+            var target = Activator.CreateInstance(templateType) ?? throw new InvalidOperationException("Cannot create vendor PDFTemplate.");
+            Set(target, "Id", context.Template.VendorId);
+            Set(target, "BankId", GetVendorBankId(context));
+            Set(target, "IsSystem", context.Template.IsSystem);
+            Set(target, "Name", resolvedTemplate.Name);
+            Set(target, "PageSize", context.Template.PageRows);
+            Set(target, "Remark", context.Template.Remark);
+            Set(target, "PdfConfig", resolvedTemplate.Config);
+            Set(target, "PdfData", context.Template.PdfData);
+            return target;
+        }
+
+        private MethodInfo? FindRenderFactory(IReadOnlyCollection<Type> types)
+        {
+            static IEnumerable<MethodInfo> StaticMethods(Type type)
+            {
+                return type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            }
+
+            bool IsRenderFactory(MethodInfo method)
+            {
+                var parameters = method.GetParameters();
+                return parameters.Length == 3
+                    && parameters[0].ParameterType == bankUserType
+                    && parameters[1].ParameterType == flowListType
+                    && parameters[2].ParameterType == templateType
+                    && method.ReturnType.FullName == "QuestPDF.Infrastructure.IDocument";
+            }
+
+            var vendorPrintFactory = types
+                .Where(type => string.Equals(type.Name, "_0003_001A_0016", StringComparison.Ordinal))
+                .SelectMany(StaticMethods)
+                .FirstOrDefault(IsRenderFactory);
+
+            return vendorPrintFactory
+                ?? types.SelectMany(StaticMethods).FirstOrDefault(IsRenderFactory);
+        }
+
+        private MethodInfo? FindTemplateListMethod(IReadOnlyCollection<Type> types)
+        {
+            var listTemplateType = typeof(List<>).MakeGenericType(templateType);
+            return types
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                {
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 1
+                        && (parameters[0].ParameterType == typeof(long) || parameters[0].ParameterType == typeof(int))
+                        && method.ReturnType == listTemplateType;
+                });
+        }
+
+        private static IEnumerable<long> GetVendorTemplateBankIds(PrintRenderContext context)
+        {
+            var ids = new[]
+            {
+                context.Template.VendorBankId,
+                context.Template.BankId,
+                context.Bank.Id
+            };
+
+            return ids.Where(id => id > 0).Distinct();
+        }
+
+        private static long GetVendorBankId(PrintRenderContext context)
+        {
+            return context.Template.VendorBankId > 0 ? context.Template.VendorBankId : context.Bank.Id;
+        }
+
+        private static string ReadString(object source, string propertyName, string fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+            return string.IsNullOrWhiteSpace(text) ? fallback : text;
+        }
+
+        private static long ReadLong(object source, string propertyName, long fallback)
+        {
+            var value = source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)?.GetValue(source);
+            if (value is long number)
+            {
+                return number;
+            }
+
+            if (value is int integer)
+            {
+                return integer;
+            }
+
+            return long.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : fallback;
+        }
+
+        private static void RegisterResolver(string vendorDir)
+        {
+            lock (ResolverDirectories)
+            {
+                if (!ResolverDirectories.Add(vendorDir))
+                {
+                    return;
+                }
+            }
+
+            AssemblyLoadContext.Default.Resolving += (_, assemblyName) =>
+            {
+                foreach (var directory in ResolverDirectories)
+                {
+                    var candidate = Path.Combine(directory, assemblyName.Name + ".dll");
+                    if (!File.Exists(candidate))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        return AssemblyLoadContext.Default.LoadFromAssemblyPath(candidate);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                return null;
+            };
+        }
+
+        private static void LoadOptionalAssemblies(string vendorDir, string searchPattern)
+        {
+            foreach (var file in Directory.EnumerateFiles(vendorDir, searchPattern))
+            {
+                try
+                {
+                    var assemblyName = AssemblyName.GetAssemblyName(file).Name;
+                    if (AssemblyLoadContext.Default.Assemblies.Any(item => string.Equals(item.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    AssemblyLoadContext.Default.LoadFromAssemblyPath(file);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static void SetQuestPdfLicense(Assembly questPdfAssembly)
+        {
+            var settingsType = questPdfAssembly.GetType("QuestPDF.Settings");
+            var licenseProperty = settingsType?.GetProperty("License", BindingFlags.Public | BindingFlags.Static);
+            if (licenseProperty is null)
+            {
+                return;
+            }
+
+            var licenseType = Nullable.GetUnderlyingType(licenseProperty.PropertyType) ?? licenseProperty.PropertyType;
+            if (!licenseType.IsEnum)
+            {
+                return;
+            }
+
+            var value = Enum.Parse(licenseType, "Community");
+            licenseProperty.SetValue(null, value);
+
+            var debugProperty = settingsType?.GetProperty("EnableDebugging", BindingFlags.Public | BindingFlags.Static);
+            if (debugProperty?.PropertyType == typeof(bool) && debugProperty.CanWrite)
+            {
+                debugProperty.SetValue(null, IsPrintBridgeDebugEnabledGlobal());
+            }
+        }
+
+        private static void ConfigureQuestPdfFonts(Assembly questPdfAssembly, string vendorDir)
+        {
+            var fontsDir = Path.Combine(vendorDir, "fonts");
+            var fontPath = Path.Combine(fontsDir, "wryh2.ttf");
+            if (!Directory.Exists(fontsDir))
+            {
+                return;
+            }
+
+            try
+            {
+                var settingsType = questPdfAssembly.GetType("QuestPDF.Settings");
+                var fontDiscoveryPaths = settingsType?.GetProperty("FontDiscoveryPaths", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+                var clearMethod = fontDiscoveryPaths?.GetType().GetMethod("Clear", Type.EmptyTypes);
+                var addMethod = fontDiscoveryPaths?.GetType().GetMethod("Add", [typeof(string)]);
+                clearMethod?.Invoke(fontDiscoveryPaths, null);
+                addMethod?.Invoke(fontDiscoveryPaths, [fontsDir]);
+            }
+            catch
+            {
+            }
+
+            if (!File.Exists(fontPath))
+            {
+                return;
+            }
+
+            try
+            {
+                var fontManagerType = questPdfAssembly.GetType("QuestPDF.Drawing.FontManager")
+                    ?? questPdfAssembly.GetTypes().FirstOrDefault(type => type.Name == "FontManager");
+                var registerMethod = fontManagerType?
+                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .FirstOrDefault(method =>
+                    {
+                        if (method.Name != "RegisterFontWithCustomName")
+                        {
+                            return false;
+                        }
+
+                        var parameters = method.GetParameters();
+                        return parameters.Length == 2
+                            && parameters[0].ParameterType == typeof(string)
+                            && parameters[1].ParameterType == typeof(Stream);
+                    });
+
+                if (registerMethod is not null)
+                {
+                    using var stream = File.OpenRead(fontPath);
+                    registerMethod.Invoke(null, ["寰俊", stream]);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static MethodInfo FindGeneratePdfMethod(Assembly questPdfAssembly)
+        {
+            return questPdfAssembly.GetTypes()
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                {
+                    if (method.Name != "GeneratePdf")
+                    {
+                        return false;
+                    }
+
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 2
+                        && parameters[0].ParameterType.FullName == "QuestPDF.Infrastructure.IDocument"
+                        && parameters[1].ParameterType == typeof(string);
+                })
+                ?? throw new MissingMethodException("QuestPDF GeneratePdf extension was not found.");
+        }
+
+        private sealed record ResolvedTemplate(string Name, object? Config, object? Template);
     }
 
     private sealed class DefaultStimulsoftExporter
@@ -656,6 +1426,30 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             catch
             {
                 return false;
+            }
+        }
+
+        public static bool ExportOrThrow(string vendorDir, PrintRenderContext context, string path)
+        {
+            if (string.IsNullOrWhiteSpace(context.Template.PdfData))
+            {
+                return false;
+            }
+
+            var previousDirectory = Directory.GetCurrentDirectory();
+            try
+            {
+                Directory.SetCurrentDirectory(vendorDir);
+                var exporter = Get(vendorDir);
+                exporter.Export(context, path);
+                return File.Exists(path);
+            }
+            finally
+            {
+                if (Directory.Exists(previousDirectory))
+                {
+                    Directory.SetCurrentDirectory(previousDirectory);
+                }
             }
         }
 
@@ -812,25 +1606,31 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             foreach (var function in reportUtilsType.GetMethods(BindingFlags.Public | BindingFlags.Static))
             {
                 var parameters = function.GetParameters();
-                try
-                {
-                    addFunction.Invoke(null,
-                    [
-                        "ReportUtils",
-                        "ReportUtils",
-                        function.Name,
-                        function.Name,
-                        function.ReturnType,
-                        reportUtilsType,
-                        string.Empty,
-                        parameters.Select(parameter => parameter.ParameterType).ToArray(),
-                        parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray(),
-                        parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray()
-                    ]);
-                }
-                catch
-                {
-                }
+                RegisterReportFunction(addFunction, function, parameters, "ReportUtils", reportUtilsType);
+                RegisterReportFunction(addFunction, function, parameters, "string", reportUtilsType);
+            }
+        }
+
+        private static void RegisterReportFunction(MethodInfo addFunction, MethodInfo function, ParameterInfo[] parameters, string category, Type ownerType)
+        {
+            try
+            {
+                addFunction.Invoke(null,
+                [
+                    category,
+                    category,
+                    function.Name,
+                    function.Name,
+                    ownerType,
+                    function.ReturnType,
+                    string.Empty,
+                    parameters.Select(parameter => parameter.ParameterType).ToArray(),
+                    parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray(),
+                    parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray()
+                ]);
+            }
+            catch
+            {
             }
         }
 
@@ -892,10 +1692,23 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            Set(target, "UserNum", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "UserNum"), GetValue(values, "CardNum")));
-            Set(target, "AccountNum", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "UserNum")));
-            Set(target, "Account", FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "Account"), GetValue(values, "AccountNum")));
-            Set(target, "CardNum", FirstNotBlank(GetValue(values, "CardNum"), context.BankUser.AccountNo));
+            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
+            var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
+            if (IsAgriculturalBankPersonalPaperTemplate(context))
+            {
+                userNumber = ResolveAgriculturalPersonalPaperSequence(context, values);
+                customerNo = userNumber;
+                printNo = userNumber;
+            }
+
+            Set(target, "UserNum", userNumber);
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "Account", accountNumber);
+            Set(target, "CardNum", accountNumber);
+            Set(target, "CustomerNo", customerNo);
+            Set(target, "PrintNo", printNo);
             Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
             Set(target, "StartTime", context.BankUser.StartDate);
             Set(target, "EndTime", context.BankUser.EndDate);
@@ -918,6 +1731,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var source = context.Records[index];
                 var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
                 var values = CreateValueMap(source);
+                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                ApplyPrintFieldFallbacks(context.Bank, source, values);
                 ApplyMatchingProperties(target, values);
 
                 var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
@@ -925,12 +1740,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
+                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                    GetValue(values, "AccountNum"),
+                    GetValue(values, "Account"),
+                    context.BankUser.AccountNo));
+                var sequenceNumber = FirstNotBlank(
+                    GetValue(values, "SequenceNum"),
+                    GetValue(values, "SerialNum"),
+                    GetValue(values, "LogNum"),
+                    $"P{index + 1:000000000}");
+                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                Set(target, "AccountNum", accountNumber);
+                Set(target, "Account", accountNumber);
+                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SerialNum", serialNumber);
+                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
                 Set(target, "IncomeAttribute", FirstNotBlank(source.IncomeAttribute, tradeMoney >= 0 ? "\u6536\u5165" : "\u652F\u51FA"));
                 Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
                 Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
+                ApplyResolvedFlowTextFields(target, context.Bank, source, values);
+                ApplyTemplateSpecificFlowTextLimits(context, target);
                 records.Add(target);
             }
 
@@ -1060,6 +1892,245 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static void ApplyFlowRecordColumnAliases(Bank bank, FlowRecord source, Dictionary<string, object?> values)
+    {
+        if (source.ExtraFields.Count == 0 || bank.FlowColumns.Count == 0)
+        {
+            return;
+        }
+
+        var flowColumnIndex = 0;
+        foreach (var column in bank.FlowColumns)
+        {
+            var columnName = column.Name ?? string.Empty;
+            if (string.Equals(columnName, "ID", StringComparison.Ordinal)
+                || string.Equals(column.Field, nameof(FlowRecord.Index), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var (field, _) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            if (string.IsNullOrWhiteSpace(field) || IsValuePresent(values, field))
+            {
+                flowColumnIndex++;
+                continue;
+            }
+
+            var legacyKey = CreateLegacyFlowRecordExtraFieldPath(bank.Name, columnName, flowColumnIndex);
+            if (TryGetExtraFieldValue(source, legacyKey, out var value))
+            {
+                values[field] = value;
+            }
+
+            flowColumnIndex++;
+        }
+    }
+
+    private static void ApplyPrintFieldFallbacks(Bank bank, FlowRecord source, Dictionary<string, object?> values)
+    {
+        if (!bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
+            && !bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var tradePlace = FirstNotBlank(
+            GetValue(values, nameof(FlowRecord.TradePlace)),
+            GetValue(values, nameof(FlowRecord.NetNum)),
+            GetFlowExtraFieldValue(bank, source, values, "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D\u79F0", "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D", "\u4EA4\u6613\u5730\u70B9", "\u4EA4\u6613\u573A\u6240", "\u7F51\u70B9\u540D\u79F0", "\u4EA4\u6613\u7F51\u70B9", "\u5730\u70B9"),
+            GetValue(values, nameof(FlowRecord.TradeExplain)),
+            GetValue(values, nameof(FlowRecord.MerchantName)),
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            GetValue(values, nameof(FlowRecord.OppositeBank)));
+        SetValueIfBlank(values, nameof(FlowRecord.TradePlace), tradePlace);
+        SetValueIfBlank(values, nameof(FlowRecord.NetNum), tradePlace);
+
+        var remark = FirstNotBlank(
+            GetValue(values, nameof(FlowRecord.Remark)),
+            GetFlowExtraFieldValue(bank, source, values, "\u9644\u8A00", "\u8F6C\u8D26\u9644\u8A00", "\u5907\u6CE8", "\u7559\u8A00", "\u56DE\u5355\u4E2A\u6027\u4FE1\u606F", "\u7528\u9014", "\u4EA4\u6613\u7528\u9014"),
+            GetValue(values, nameof(FlowRecord.Usage)),
+            GetValue(values, nameof(FlowRecord.TradeExplain)),
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            GetValue(values, nameof(FlowRecord.TradePlace)));
+        SetValueIfBlank(values, nameof(FlowRecord.Remark), remark);
+    }
+
+    private static void ApplyResolvedFlowTextFields(object target, Bank bank, FlowRecord source, IReadOnlyDictionary<string, object?> values)
+    {
+        var productBrief = FirstNotBlank(source.ProductBrief, GetValue(values, nameof(FlowRecord.ProductBrief)));
+        var tradeExplain = FirstNotBlank(source.TradeExplain, GetValue(values, nameof(FlowRecord.TradeExplain)));
+        var usage = FirstNotBlank(source.Usage, GetValue(values, nameof(FlowRecord.Usage)));
+        var merchantName = FirstNotBlank(source.MerchantName, GetValue(values, nameof(FlowRecord.MerchantName)));
+        var netNum = FirstNotBlank(source.NetNum, GetValue(values, nameof(FlowRecord.NetNum)));
+        var tradePlace = FirstNotBlank(source.TradePlace, GetValue(values, nameof(FlowRecord.TradePlace)));
+        var remark = FirstNotBlank(source.Remark, GetValue(values, nameof(FlowRecord.Remark)));
+
+        if (bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
+            || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
+        {
+            tradePlace = FirstNotBlank(tradePlace, netNum, tradeExplain, merchantName, productBrief, source.OppositeBank, GetValue(values, nameof(FlowRecord.OppositeBank)));
+            netNum = FirstNotBlank(netNum, tradePlace);
+            tradeExplain = FirstNotBlank(tradeExplain, tradePlace);
+            usage = FirstNotBlank(usage, tradePlace);
+            merchantName = FirstNotBlank(merchantName, tradePlace);
+            remark = FirstNotBlank(remark, tradePlace, usage, tradeExplain, productBrief);
+        }
+
+        Set(target, nameof(FlowRecord.ProductBrief), productBrief);
+        Set(target, nameof(FlowRecord.TradeExplain), tradeExplain);
+        Set(target, nameof(FlowRecord.Usage), usage);
+        Set(target, nameof(FlowRecord.MerchantName), merchantName);
+        Set(target, nameof(FlowRecord.NetNum), netNum);
+        Set(target, nameof(FlowRecord.TradePlace), tradePlace);
+        Set(target, nameof(FlowRecord.Remark), remark);
+    }
+
+    private static void ApplyTemplateSpecificFlowTextLimits(PrintRenderContext context, object target)
+    {
+        if (!IsAgriculturalBankPersonalPaperTemplate(context))
+        {
+            return;
+        }
+
+        TrimTextProperty(target, nameof(FlowRecord.ProductBrief), 8);
+        TrimTextProperty(target, nameof(FlowRecord.OppositeAccount), 18);
+        TrimTextProperty(target, nameof(FlowRecord.OppositeUsername), 8);
+        TrimTextProperty(target, nameof(FlowRecord.OppositeBank), 8);
+        TrimTextProperty(target, nameof(FlowRecord.Usage), 8);
+        TrimTextProperty(target, nameof(FlowRecord.Remark), 10);
+        TrimTextProperty(target, nameof(FlowRecord.TradeExplain), 10);
+        TrimTextProperty(target, nameof(FlowRecord.TradePlace), 10);
+        TrimTextProperty(target, nameof(FlowRecord.NetNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 10);
+    }
+
+    private static bool IsAgriculturalBankPersonalPaperTemplate(PrintRenderContext context)
+    {
+        return context.Bank.Name.Contains("\u519C\u884C", StringComparison.Ordinal)
+            && context.Template.Name.Contains("\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+    }
+
+    private static void TrimTextProperty(object target, string propertyName, int maxLength)
+    {
+        var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        if (property is null || !property.CanRead || !property.CanWrite || property.PropertyType != typeof(string))
+        {
+            return;
+        }
+
+        var text = property.GetValue(target) as string;
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+        {
+            return;
+        }
+
+        property.SetValue(target, text[..maxLength]);
+    }
+
+    private static string GetFlowExtraFieldValue(Bank bank, FlowRecord source, IReadOnlyDictionary<string, object?> values, params string[] columnNames)
+    {
+        foreach (var columnName in columnNames)
+        {
+            if (values.TryGetValue(columnName, out var directValue))
+            {
+                var directText = Convert.ToString(directValue, CultureInfo.CurrentCulture);
+                if (!string.IsNullOrWhiteSpace(directText))
+                {
+                    return directText;
+                }
+            }
+
+            if (TryGetExtraFieldValue(source, columnName, out var extraValue))
+            {
+                return extraValue;
+            }
+        }
+
+        if (bank.FlowColumns.Count == 0 || source.ExtraFields.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var wantedNames = columnNames.ToHashSet(StringComparer.Ordinal);
+        var flowColumnIndex = 0;
+        foreach (var column in bank.FlowColumns)
+        {
+            var columnName = column.Name ?? string.Empty;
+            if (string.Equals(columnName, "ID", StringComparison.Ordinal)
+                || string.Equals(column.Field, nameof(FlowRecord.Index), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (wantedNames.Contains(columnName))
+            {
+                var legacyKey = CreateLegacyFlowRecordExtraFieldPath(bank.Name, columnName, flowColumnIndex);
+                if (TryGetExtraFieldValue(source, legacyKey, out var value))
+                {
+                    return value;
+                }
+            }
+
+            flowColumnIndex++;
+        }
+
+        return string.Empty;
+    }
+
+    private static void SetValueIfBlank(Dictionary<string, object?> values, string key, object? value)
+    {
+        if (IsValuePresent(values, key))
+        {
+            return;
+        }
+
+        var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            values[key] = value;
+        }
+    }
+
+    private static bool IsValuePresent(IReadOnlyDictionary<string, object?> values, string key)
+    {
+        return values.TryGetValue(key, out var value)
+            && !string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.CurrentCulture));
+    }
+
+    private static string CreateLegacyFlowRecordExtraFieldPath(string bankName, string columnName, int columnIndex)
+    {
+        var raw = $"{bankName}|FlowRecord|{columnIndex}|{columnName}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        return $"FlowField_{Convert.ToHexString(hash)[..12]}";
+    }
+
+    private static bool TryGetExtraFieldValue(FlowRecord source, string key, out string value)
+    {
+        if (source.ExtraFields.TryGetValue(key, out value!) && !string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        var bracketedKey = key.StartsWith("[", StringComparison.Ordinal) ? key : $"[{key}]";
+        if (!string.Equals(bracketedKey, key, StringComparison.Ordinal)
+            && source.ExtraFields.TryGetValue(bracketedKey, out value!)
+            && !string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        var unbracketedKey = key.Trim('[', ']');
+        if (!string.Equals(unbracketedKey, key, StringComparison.Ordinal)
+            && source.ExtraFields.TryGetValue(unbracketedKey, out value!)
+            && !string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
     private static void Set(object target, string propertyName, object? value)
     {
         var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
@@ -1069,6 +2140,180 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         Set(target, property, value);
+    }
+
+    private static void PrimeVendorDynamicImageCache(Assembly assembly, string vendorDir)
+    {
+        try
+        {
+            var types = GetLoadableTypes(assembly).ToList();
+            var dynamicImageTypes = types.Where(type =>
+                type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Any(field => field.FieldType == typeof(byte[]))
+                && type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Any(field => field.FieldType == typeof(byte[][]))
+                && type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Any(constructor =>
+                {
+                    var parameters = constructor.GetParameters();
+                    return parameters.Length >= 1
+                        && string.Equals(parameters[0].ParameterType.FullName, "MainEntry.entity.PdfConfig.PDFConfig", StringComparison.Ordinal);
+                }))
+                .ToList();
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                Console.WriteLine($"[PrintBridge] dynamic image candidates: {dynamicImageTypes.Count}");
+            }
+
+            if (dynamicImageTypes.Count == 0)
+            {
+                return;
+            }
+
+            var resourceName = ResolveVendorString(assembly, -659841973);
+            if (string.IsNullOrWhiteSpace(resourceName))
+            {
+                resourceName = "alipay.png";
+            }
+
+            var imagePath = ResolveVendorImagePath(vendorDir, resourceName);
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                Console.WriteLine($"[PrintBridge] dynamic image resource: {resourceName}; path={imagePath}; exists={File.Exists(imagePath)}");
+            }
+
+            if (!File.Exists(imagePath))
+            {
+                return;
+            }
+
+            var imageBytes = File.ReadAllBytes(imagePath);
+            var slices = CreateVendorImageSlices(imageBytes, 5);
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                Console.WriteLine($"[PrintBridge] dynamic image bytes={imageBytes.Length}; slices={(slices is null ? "<null>" : string.Join(",", slices.Select(slice => slice.Length.ToString(CultureInfo.InvariantCulture))))}");
+            }
+
+            if (slices is null)
+            {
+                return;
+            }
+
+            foreach (var dynamicImageType in dynamicImageTypes)
+            {
+                var sourceField = dynamicImageType
+                    .GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                    .FirstOrDefault(field => field.FieldType == typeof(byte[]));
+                var sliceField = dynamicImageType
+                    .GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                    .FirstOrDefault(field => field.FieldType == typeof(byte[][]));
+                if (sourceField is null || sliceField is null)
+                {
+                    continue;
+                }
+
+                if (sliceField.GetValue(null) is byte[][] cachedSlices
+                    && cachedSlices.Length >= 5
+                    && cachedSlices.Take(5).All(slice => slice is { Length: > 0 }))
+                {
+                    continue;
+                }
+
+                sourceField.SetValue(null, imageBytes);
+                sliceField.SetValue(null, slices);
+
+                if (IsPrintBridgeDebugEnabledGlobal())
+                {
+                    var sourceLength = sourceField.GetValue(null) is byte[] sourceBytes ? sourceBytes.Length.ToString(CultureInfo.InvariantCulture) : "<null>";
+                    var sliceLengths = sliceField.GetValue(null) is byte[][] sliceBytes
+                        ? string.Join(",", sliceBytes.Select(slice => slice?.Length.ToString(CultureInfo.InvariantCulture) ?? "<null>"))
+                        : "<null>";
+                    Console.WriteLine($"[PrintBridge] primed dynamic image: {dynamicImageType.FullName}; source={sourceLength}; slices={sliceLengths}");
+                }
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+
+            // This cache only supports a subset of vendor QuestPDF templates.
+            // A failed warm-up should not block templates that do not use it.
+        }
+    }
+
+    private static string? ResolveVendorString(Assembly assembly, int key)
+    {
+        try
+        {
+            var method = GetLoadableTypes(assembly)
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                    method.ReturnType == typeof(string)
+                    && method.GetParameters() is [{ ParameterType: var parameterType }]
+                    && parameterType == typeof(int));
+            return method?.Invoke(null, [key]) as string;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveVendorImagePath(string vendorDir, string resourceName)
+    {
+        var normalizedName = resourceName
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar);
+        var candidates = new[]
+        {
+            Path.Combine(vendorDir, normalizedName),
+            Path.Combine(vendorDir, "static", "bank", normalizedName),
+            Path.Combine(vendorDir, "alipay.png"),
+            Path.Combine(vendorDir, "static", "bank", "alipay.png")
+        };
+
+        return candidates.FirstOrDefault(File.Exists) ?? candidates[^1];
+    }
+
+    private static byte[][]? CreateVendorImageSlices(byte[] imageBytes, int count)
+    {
+        if (count <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var slices = new byte[count][];
+            using var stream = new MemoryStream(imageBytes);
+            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var frame = decoder.Frames.FirstOrDefault();
+            if (frame is null || frame.PixelWidth <= 0 || frame.PixelHeight <= 0)
+            {
+                return null;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var left = frame.PixelWidth * index / count;
+                var right = frame.PixelWidth * (index + 1) / count;
+                var width = Math.Max(1, right - left);
+                var crop = new CroppedBitmap(frame, new Int32Rect(left, 0, width, frame.PixelHeight));
+                crop.Freeze();
+
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(crop));
+                using var output = new MemoryStream();
+                encoder.Save(output);
+                slices[index] = output.ToArray();
+            }
+
+            return slices;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static void Set(object target, PropertyInfo property, object? value)
@@ -1212,6 +2457,68 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             || DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out parsed);
     }
 
+    private static bool IsPrintBridgeDebugEnabledGlobal()
+    {
+        return string.Equals(
+            Environment.GetEnvironmentVariable("SPEEDEMULATOR_PRINT_BRIDGE_DEBUG"),
+            "1",
+            StringComparison.Ordinal);
+    }
+
+    private static void NormalizeVendorDynamicImageDocument(PrintRenderContext context, object document)
+    {
+        if (!IsAlipayPrintContext(context))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var field in document.GetType().GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+            {
+                if (field.FieldType != typeof(int) || field.IsInitOnly)
+                {
+                    continue;
+                }
+
+                var value = (int)(field.GetValue(document) ?? 0);
+                if (IsPrintBridgeDebugEnabledGlobal())
+                {
+                    Console.WriteLine($"[PrintBridge] document int field: {document.GetType().FullName}.{field.Name}={value}");
+                }
+
+                if (value <= 0 || value % 5 == 0)
+                {
+                    continue;
+                }
+
+                var normalizedValue = ((value + 4) / 5) * 5;
+                field.SetValue(document, normalizedValue);
+                if (IsPrintBridgeDebugEnabledGlobal())
+                {
+                    Console.WriteLine($"[PrintBridge] normalized dynamic image page count: {field.Name} {value}->{normalizedValue}");
+                }
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+
+            // Only used for vendor templates that paint a sliced background.
+            // If reflection cannot adjust it, let the normal renderer surface
+            // the original template error.
+        }
+    }
+
+    private static bool IsAlipayPrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Name.Contains("支付宝", StringComparison.Ordinal)
+            || context.Template.Name.Contains("支付宝", StringComparison.Ordinal);
+    }
+
     private static IEnumerable<string> GetCandidateTemplateNames(string name)
     {
         var yielded = new HashSet<string>(StringComparer.Ordinal);
@@ -1224,8 +2531,23 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static bool HasPreferredTemplateAlias(string name)
+    {
+        return GetPreferredTemplateAliases(name).Any();
+    }
+
+    private static bool ShouldPreferQuestPdfConfigFactory(string name)
+    {
+        return HasPreferredTemplateAlias(name);
+    }
+
     private static IEnumerable<string> BuildCandidateTemplateNames(string name)
     {
+        foreach (var preferredName in GetPreferredTemplateAliases(name))
+        {
+            yield return preferredName;
+        }
+
         if (!string.IsNullOrWhiteSpace(name))
         {
             yield return name;
@@ -1258,13 +2580,107 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (doubleDashIndex > 0)
         {
             yield return name[..doubleDashIndex];
+            if (name.StartsWith("\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248", StringComparison.Ordinal))
+            {
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC3";
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC2";
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC";
+            }
         }
 
         var dashIndex = name.IndexOf('-', StringComparison.Ordinal);
         if (dashIndex > 0)
         {
             yield return name[..dashIndex];
+            if (name.StartsWith("\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248", StringComparison.Ordinal))
+            {
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC3";
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC2";
+                yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC";
+            }
         }
+    }
+
+    private static IEnumerable<string> GetPreferredTemplateAliases(string name)
+    {
+        var exactAliases = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u7248"] = ["\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u72482"],
+            ["\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u72483"] = ["\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u72482", "\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u7248"],
+            ["\u62DB\u884C\u4E2A\u4EBA\u7535\u5B50\u72486"] = ["\u62DB\u884C\u4E2A\u4EBA\u7535\u5B50\u72487", "\u62DB\u884C\u4E2A\u4EBA\u7535\u5B50\u72485"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u7248"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72482"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724813_\u6C34\u53702"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724812_\u6C34\u53702"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724813_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724812_\u6C34\u5370"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724813"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724814", "\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u724812"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72488_\u6C34\u53702"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487_\u6C34\u53702"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72488_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487_\u6C34\u5370"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72488"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72489", "\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72486_\u6C34\u53702"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487_\u6C34\u53702"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72486_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487_\u6C34\u5370"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72486"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484_\u6C34\u5370"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72482"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u7248"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u72482"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u7248"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72484"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72483"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72482"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u7248"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72488"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72487"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72486"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72485"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72482"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
+            ["\u846B\u82A6\u5C9B"] = ["\u5B89\u5FBD\u519C\u91D1"],
+        };
+
+        if (exactAliases.TryGetValue(name, out var aliases))
+        {
+            foreach (var alias in aliases)
+            {
+                yield return alias;
+            }
+        }
+
+        if (name.StartsWith("\u5EFA\u884C\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal)
+            && TryReadTrailingNumber(name, "\u5EFA\u884C\u4E2A\u4EBA\u7535\u5B50\u7248", out var ccbVersion)
+            && (ccbVersion is >= 23 and <= 27 || ccbVersion is >= 31 and <= 36))
+        {
+            yield return ccbVersion >= 31
+                ? "\u5EFA\u884C\u4E2A\u4EBA\u7535\u5B50\u724830"
+                : "\u5EFA\u884C\u4E2A\u4EBA\u7535\u5B50\u724822";
+        }
+
+        if (name.StartsWith("\u519C\u884C\u5BF9\u516C\u7535\u5B50\u7248", StringComparison.Ordinal)
+            && !name.Contains("\u6700\u65B0", StringComparison.Ordinal)
+            && !name.Contains("\u65B0", StringComparison.Ordinal))
+        {
+            yield return "\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248";
+            yield return "\u519C\u884C\u5BF9\u516C\u7535\u5B50\u7248\uFF08\u65B0\uFF09";
+            yield return "\u519C\u884C\u5BF9\u516C\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09";
+        }
+
+        if (name.StartsWith("\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248-", StringComparison.Ordinal)
+            || name.StartsWith("\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--", StringComparison.Ordinal))
+        {
+            yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC3";
+            yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC2";
+            yield return "\u519C\u5546\u94F6\u884C\u5BF9\u516C\u7248--\u5317\u4EAC";
+        }
+    }
+
+    private static bool TryReadTrailingNumber(string text, string prefix, out int number)
+    {
+        number = 0;
+        if (!text.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var suffix = text[prefix.Length..];
+        return int.TryParse(suffix, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
     }
 
     private static string NormalizeFieldName(string field)
@@ -1280,9 +2696,102 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return values.TryGetValue(key, out var value) ? Convert.ToString(value, CultureInfo.CurrentCulture) : null;
     }
 
+    private static string ResolveBankUserNumber(PrintRenderContext context, IReadOnlyDictionary<string, object?> values)
+    {
+        return FirstNotBlank(
+            GetValue(values, "UserNum"),
+            context.BankUser.UserCode,
+            GetValue(values, "CustomerNo"),
+            GetValue(values, "SerialNum"),
+            GetValue(values, "PrintNo"));
+    }
+
+    private static string ResolveAgriculturalPersonalPaperSequence(PrintRenderContext context, IReadOnlyDictionary<string, object?> values)
+    {
+        var configuredSequence = GetBankUserColumnValue(
+            context,
+            values,
+            "\u8D26\u6237\u5E8F\u53F7",
+            "\u8D26\u53F7\u5E8F\u53F7",
+            "\u5E8F\u53F7");
+
+        return NormalizeShortPrintSequence(FirstNotBlank(
+            configuredSequence,
+            GetValue(values, "PrintNo"),
+            GetValue(values, "CustomerNo"),
+            GetValue(values, "UserNum")));
+    }
+
+    private static string GetBankUserColumnValue(PrintRenderContext context, IReadOnlyDictionary<string, object?> values, params string[] columnNames)
+    {
+        foreach (var columnName in columnNames)
+        {
+            var column = context.Bank.Columns.FirstOrDefault(item => string.Equals(item.Name, columnName, StringComparison.Ordinal));
+            if (column is null || string.IsNullOrWhiteSpace(column.Field))
+            {
+                continue;
+            }
+
+            var field = NormalizeFieldName(column.Field);
+            if (values.TryGetValue(field, out var value))
+            {
+                var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+            }
+
+            if (context.BankUser.ExtraFields.TryGetValue(column.Field, out var extraValue)
+                || context.BankUser.ExtraFields.TryGetValue(field, out extraValue))
+            {
+                if (!string.IsNullOrWhiteSpace(extraValue))
+                {
+                    return extraValue;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string NormalizeShortPrintSequence(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "000";
+        }
+
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(digits))
+        {
+            return "000";
+        }
+
+        return digits.Length >= 3 ? digits[^3..] : digits.PadLeft(3, '0');
+    }
+
     private static string FirstNotBlank(params string?[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+    }
+
+    private static string NormalizePrintNumber(string value)
+    {
+        var text = string.IsNullOrWhiteSpace(value) ? "6228480398401725673" : value.Trim();
+        if (text.Length >= 18)
+        {
+            return text;
+        }
+
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (digits.Length >= 18)
+        {
+            return digits;
+        }
+
+        var seed = string.IsNullOrWhiteSpace(digits) ? "6228480398401725673" : digits;
+        return (seed + "6228480398401725673")[..18];
     }
 
     private static string NormalizeCurrency(string value)

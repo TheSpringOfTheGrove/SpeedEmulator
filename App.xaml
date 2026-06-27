@@ -13,6 +13,7 @@
         <SolidColorBrush x:Key="TextMutedBrush" Color="#667782" />
 
         <Style TargetType="Window">
+            <Setter Property="Icon" Value="/Assets/SpeedEmulatorIcon.ico" />
             <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
             <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
         </Style>

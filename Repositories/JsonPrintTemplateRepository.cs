@@ -37,7 +37,19 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             var templates = CreateSystemTemplates(bank);
             if (templatesByBank.TryGetValue(bank.Id, out var savedTemplates))
             {
-                templates.AddRange(savedTemplates.Select(item => item.Clone()));
+                var deletedTemplates = savedTemplates
+                    .Where(item => item.IsDeleted)
+                    .Select(item => item.Clone())
+                    .ToList();
+                templates.AddRange(savedTemplates
+                    .Where(item => !item.IsDeleted)
+                    .Select(item => item.Clone()));
+                if (deletedTemplates.Count > 0)
+                {
+                    templates = templates
+                        .Where(item => !deletedTemplates.Any(deleted => IsDeletedTemplateMatch(item, deleted)))
+                        .ToList();
+                }
             }
 
             return Task.FromResult<IReadOnlyList<PrintTemplate>>(templates);
@@ -58,9 +70,16 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             var copy = template.Clone();
             copy.BankId = bank.Id;
             copy.IsSystem = false;
+            copy.IsDeleted = false;
+            templates.RemoveAll(item => item.IsDeleted && IsDeletedTemplateMatch(copy, item));
             if (copy.Id <= 0)
             {
-                copy.Id = templates.Count == 0 ? 1 : templates.Max(item => item.Id) + 1;
+                var maxId = templates
+                    .Where(item => !item.IsDeleted && item.Id > 0)
+                    .Select(item => item.Id)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                copy.Id = maxId + 1;
             }
 
             var index = templates.FindIndex(item => item.Id == copy.Id);
@@ -78,17 +97,34 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
     }
 
-    public Task DeleteAsync(long bankId, long templateId)
+    public Task DeleteAsync(Bank bank, PrintTemplate template)
     {
         lock (syncRoot)
         {
             EnsureLoaded();
-            if (templatesByBank.TryGetValue(bankId, out var templates))
+            if (!templatesByBank.TryGetValue(bank.Id, out var templates))
             {
-                templates.RemoveAll(item => item.Id == templateId && !item.IsSystem);
-                Persist();
+                templates = [];
+                templatesByBank[bank.Id] = templates;
             }
 
+            var removedCount = templates.RemoveAll(item =>
+                !item.IsSystem
+                && !item.IsDeleted
+                && item.Id == template.Id);
+            if (removedCount == 0 && !template.IsSystem)
+            {
+                templates.RemoveAll(item => item.IsDeleted && IsDeletedTemplateMatch(template, item));
+                var hidden = template.Clone();
+                hidden.BankId = bank.Id;
+                hidden.IsSystem = false;
+                hidden.IsDeleted = true;
+                hidden.PdfData = string.Empty;
+                hidden.Config = new PrintPdfConfig();
+                templates.Add(hidden);
+            }
+
+            Persist();
             return Task.CompletedTask;
         }
     }
@@ -97,6 +133,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
     {
         var definitions = ZhenchengTemplateCatalog.TryGetTemplateDefinitions(bank)?.ToList()
             ?? GetTemplateDefinitions(bank).ToList();
+        definitions = DeduplicateTemplateDefinitions(definitions).ToList();
         var templates = new List<PrintTemplate>(definitions.Count);
         for (var index = 0; index < definitions.Count; index++)
         {
@@ -104,6 +141,47 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
 
         return templates;
+    }
+
+    private static IEnumerable<PrintTemplateDefinition> DeduplicateTemplateDefinitions(IEnumerable<PrintTemplateDefinition> definitions)
+    {
+        return definitions
+            .GroupBy(
+                item => $"{NormalizeTemplateKeyPart(item.Name)}\u001f{NormalizeTemplateKeyPart(item.Remark)}\u001f{item.PageRows}\u001f{item.Orientation}",
+                StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(item => item.IsSystem)
+                .ThenByDescending(item => item.VendorId > 0)
+                .ThenByDescending(item => !string.IsNullOrWhiteSpace(item.PdfData))
+                .First());
+    }
+
+    private static bool IsDeletedTemplateMatch(PrintTemplate template, PrintTemplate deleted)
+    {
+        if (template.IsSystem)
+        {
+            return false;
+        }
+
+        if (deleted.VendorId > 0 && template.VendorId == deleted.VendorId)
+        {
+            return true;
+        }
+
+        return template.Id == deleted.Id
+            && string.Equals(NormalizeTemplateKeyPart(template.Name), NormalizeTemplateKeyPart(deleted.Name), StringComparison.Ordinal)
+            && string.Equals(NormalizeTemplateKeyPart(template.Remark), NormalizeTemplateKeyPart(deleted.Remark), StringComparison.Ordinal)
+            && template.PageRows == deleted.PageRows;
+    }
+
+    private static string NormalizeTemplateKeyPart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value.Where(ch => !char.IsControl(ch)).ToArray()).Trim();
     }
 
     private static PrintTemplate CreateSystemTemplate(Bank bank, PrintTemplateDefinition definition, int index)

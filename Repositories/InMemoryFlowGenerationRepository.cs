@@ -15,8 +15,6 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
     private readonly object syncRoot = new();
     private readonly Dictionary<string, FlowGenerationSnapshot> snapshots = [];
     private readonly string storagePath;
-    private long nextReferenceId = 1;
-    private long nextConstId = 1;
 
     public InMemoryFlowGenerationRepository()
     {
@@ -28,18 +26,19 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
         LoadFromDisk();
     }
 
-    public Task<FlowGenerationSnapshot> LoadAsync(long bankId, long? bankUserId)
+    public Task<FlowGenerationSnapshot> LoadAsync(Bank bank, long? bankUserId)
     {
         lock (syncRoot)
         {
+            var bankId = bank.Id;
             var key = CreateKey(bankId, bankUserId);
             if (!snapshots.TryGetValue(key, out var snapshot))
             {
-                snapshot = CreateSeed(bankId);
+                snapshot = CreateSeed(bank);
                 snapshots[key] = Clone(snapshot);
                 SaveToDisk();
             }
-            else if (TryRefreshStaleSeed(bankId, snapshot, out var refreshedSnapshot))
+            else if (TryRefreshStaleSeed(bank, snapshot, out var refreshedSnapshot))
             {
                 snapshot = refreshedSnapshot;
                 snapshots[key] = Clone(snapshot);
@@ -60,55 +59,21 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
         }
     }
 
-    private FlowGenerationSnapshot CreateSeed(long bankId)
+    private static FlowGenerationSnapshot CreateSeed(Bank bank)
     {
-        if (FlowGenerationSeedCatalog.TryCreateSeed(bankId, out var seededSnapshot))
+        if (FlowGenerationSeedCatalog.TryCreateSeed(bank.Id, bank.Name, out var seededSnapshot))
         {
             return seededSnapshot;
         }
 
-        var config = new FlowGenerationConfig
-        {
-            StartTime = new DateTime(2023, 4, 1),
-            EndTime = new DateTime(2026, 1, 1),
-            AllInMoney = 30000,
-            LastMoney = 10000,
-            MinInMoneyMonth1 = 3000,
-            MaxInMoneyMonth1 = 3000,
-            MinOutMoneyMonth1 = 2000,
-            MaxOutMoneyMonth1 = 2000
-        };
-
-        var references = new[]
-        {
-            CreateReference(bankId, "收入", "48549466", "124556", null),
-            CreateReference(bankId, "收入", "45656562", "65544", null),
-            CreateReference(bankId, "收入", "9897978", "22233", null),
-            CreateReference(bankId, "收入", "11363163", "4455", null),
-            CreateReference(bankId, "收入", "9989895", "565665", null),
-            CreateReference(bankId, "支出", "45121323", "8855", null)
-        };
-
-        var constItems = new[]
-        {
-            CreateConst(bankId, "收入", "5", "1", "固定工资入账", "660001", "SALARY-001"),
-            CreateConst(bankId, "支出", "15", "1", "固定生活缴费", "660002", "BILL-015"),
-            CreateConst(bankId, "支出", "25", "1", "固定转账支出", "660003", "TRANSFER-025")
-        };
-
-        return new FlowGenerationSnapshot
-        {
-            Config = config,
-            References = references.ToList(),
-            ConstItems = constItems.ToList()
-        };
+        throw new InvalidOperationException($"缺少 {bank.Name} 的内置参照明细/固定日期增加项目数据，请检查安装包 Data\\zhencheng-flow-generation-seed.json。");
     }
 
-    private static bool TryRefreshStaleSeed(long bankId, FlowGenerationSnapshot snapshot, out FlowGenerationSnapshot refreshedSnapshot)
+    private static bool TryRefreshStaleSeed(Bank bank, FlowGenerationSnapshot snapshot, out FlowGenerationSnapshot refreshedSnapshot)
     {
         refreshedSnapshot = new FlowGenerationSnapshot();
 
-        if (!FlowGenerationSeedCatalog.TryCreateBankSeed(bankId, out var packagedSeed))
+        if (!FlowGenerationSeedCatalog.TryCreateBankSeed(bank.Id, bank.Name, out var packagedSeed))
         {
             return false;
         }
@@ -118,7 +83,9 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
             return false;
         }
 
-        if (!IsEmptySnapshot(snapshot) && !IsLegacyDefaultSnapshot(snapshot))
+        if (!IsEmptySnapshot(snapshot)
+            && !IsLegacyDefaultSnapshot(snapshot)
+            && !ShouldRefreshFromPackagedSeed(snapshot, packagedSeed))
         {
             return false;
         }
@@ -160,44 +127,28 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
         ]);
     }
 
-    private GenerateReferenceRule CreateReference(long bankId, string incomeAttribute, string serialNum, string merchantOrderNo, string? remark)
+    private static bool ShouldRefreshFromPackagedSeed(FlowGenerationSnapshot snapshot, FlowGenerationSnapshot packagedSeed)
     {
-        var rule = GenerateReferenceRule.CreateDefault(bankId);
-        rule.Id = nextReferenceId++;
-        rule.IsCheck = true;
-        rule.IncomeAttribute = incomeAttribute;
-        rule.MinMoney = 10;
-        rule.MaxMoney = 1000;
-        rule.SerialNum = serialNum;
-        rule.MerchantName = merchantOrderNo;
-        rule.Remark = remark;
-        rule.TradeChannel = string.Empty;
-        rule.OppositeUsername = string.Empty;
-        rule.IncomeType = string.Empty;
-        return rule;
+        var currentCount = snapshot.References.Count + snapshot.ConstItems.Count;
+        var packagedCount = packagedSeed.References.Count + packagedSeed.ConstItems.Count;
+        if (packagedCount > currentCount)
+        {
+            return true;
+        }
+
+        if (HasTextCoverage(packagedSeed.References, item => item.TradePlace)
+            && !HasTextCoverage(snapshot.References, item => item.TradePlace))
+        {
+            return true;
+        }
+
+        return HasTextCoverage(packagedSeed.ConstItems, item => item.TradePlace)
+            && !HasTextCoverage(snapshot.ConstItems, item => item.TradePlace);
     }
 
-    private GenerateConstRule CreateConst(
-        long bankId,
-        string incomeAttribute,
-        string fixDay,
-        string reCnt,
-        string remark,
-        string serialNum,
-        string merchantOrderNo)
+    private static bool HasTextCoverage<T>(IEnumerable<T> rows, Func<T, string?> selector)
     {
-        var rule = GenerateConstRule.CreateDefault(bankId);
-        rule.Id = nextConstId++;
-        rule.IsCheck = true;
-        rule.IncomeAttribute = incomeAttribute;
-        rule.MinMoney = 10;
-        rule.MaxMoney = 1000;
-        rule.FixDay = fixDay;
-        rule.ReCnt = reCnt;
-        rule.SerialNum = serialNum;
-        rule.MerchantName = merchantOrderNo;
-        rule.Remark = remark;
-        return rule;
+        return rows.Any(item => !string.IsNullOrWhiteSpace(selector(item)));
     }
 
     private static FlowGenerationSnapshot Clone(FlowGenerationSnapshot snapshot)
@@ -267,17 +218,6 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
                 SaveToDisk();
             }
 
-            nextReferenceId = snapshots.Values
-                .SelectMany(item => item.References)
-                .Select(item => item.Id)
-                .DefaultIfEmpty(0)
-                .Max() + 1;
-
-            nextConstId = snapshots.Values
-                .SelectMany(item => item.ConstItems)
-                .Select(item => item.Id)
-                .DefaultIfEmpty(0)
-                .Max() + 1;
         }
         catch
         {
@@ -297,12 +237,12 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
         FlowGenerationSnapshot first,
         FlowGenerationSnapshot second)
     {
-        if (TryRefreshStaleSeed(bankId, first, out _) && !TryRefreshStaleSeed(bankId, second, out _))
+        if (IsLegacyDefaultSnapshot(first) && !IsLegacyDefaultSnapshot(second))
         {
             return Clone(second);
         }
 
-        if (!TryRefreshStaleSeed(bankId, first, out _) && TryRefreshStaleSeed(bankId, second, out _))
+        if (!IsLegacyDefaultSnapshot(first) && IsLegacyDefaultSnapshot(second))
         {
             return Clone(first);
         }

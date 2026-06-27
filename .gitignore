@@ -3,6 +3,7 @@ bin/
 obj/
 publish/
 tmp/
+artifacts/
 
 # Local tool caches
 .tools/

@@ -179,7 +179,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         try
         {
-            var snapshot = await repository.LoadAsync(Bank.Id, BankUser?.Id);
+            var snapshot = await repository.LoadAsync(Bank, BankUser?.Id);
             Config = snapshot.Config;
             ApplyBankUserValuesToConfig();
 
@@ -199,6 +199,16 @@ public sealed class FlowGenerationViewModel : ObservableObject
             SelectedConst = ConstItems.FirstOrDefault();
             SelectedMonthDetail = Config.MonthGenData.FirstOrDefault();
             StatusMessage = $"已载入参照明细 {References.Count} 条，固定日期增加项目 {ConstItems.Count} 条，月明细 {Config.MonthGenData.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            References.Clear();
+            ConstItems.Clear();
+            SelectedReference = null;
+            SelectedConst = null;
+            SelectedMonthDetail = null;
+            StatusMessage = ex.Message;
+            MessageBox.Show(ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {

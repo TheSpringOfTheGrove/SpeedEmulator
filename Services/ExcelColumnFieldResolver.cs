@@ -65,7 +65,7 @@ public static class ExcelColumnFieldResolver
             "操作员" or "柜员" or "业务柜员" or "交易柜员" or "操作柜员" => (nameof(FlowRecord.Operator), "Text"),
             "柜员号" or "柜员交易号" or "交易柜员号" or "操作员编号" => (nameof(FlowRecord.OperatorNum), "Text"),
             "界面" or "接口页面" => (nameof(FlowRecord.InterfacePage), "Text"),
-            "交易场所" or "交易地点" or "地点" or "交易网点" or "交易行所" or "网点名称" => (nameof(FlowRecord.TradePlace), "Text"),
+            "交易场所" or "交易地点" or "地点" or "交易网点" or "交易行所" or "网点名称" or "商户网点号及名称" => (nameof(FlowRecord.TradePlace), "Text"),
             "产品名称" or "交易名称" or "交易种类" or "业务类型" or "交易类型" or "业务产品种类" or "产品业务种类" => (nameof(FlowRecord.ProductName), "Text"),
             "产品代码" => (nameof(FlowRecord.ProductCode), "Text"),
             "产品类型" => (nameof(FlowRecord.ProductType), "Text"),

@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 
 
 PROJECT_DIR = Path(r"D:\Projects\SpeedEmulator")
+PERSONAL_SOURCE_DIR = Path(r"D:\Projects\财务系统开发资料\参照明细")
 SOURCE_DIR = Path(r"D:\Projects\财务系统开发资料\参照明细\对公银行")
 COLUMN_OUTPUT = PROJECT_DIR / "Data" / "zhencheng-flow-rule-columns.json"
 SEED_OUTPUT = PROJECT_DIR / "Data" / "zhencheng-flow-generation-seed.json"
@@ -34,6 +35,34 @@ CORPORATE_BANK_IDS = {
     "邮政对公": 114,
     "交行对公": 115,
     "招行对公": 116,
+}
+
+PERSONAL_BANK_SEED_KEYS = {
+    "支付宝": "1",
+    "微信": "2",
+    "农行": "3",
+    "工行": "4",
+    "光大": "5",
+    "广发": "6",
+    "华夏": "7",
+    "建行": "8",
+    "交行": "9",
+    "民生": "10",
+    "平安": "11",
+    "浦发": "12",
+    "兴业": "13",
+    "邮政": "14",
+    "个人农商": "15",
+    "农商": "15",
+    "招行": "16",
+    "中信": "17",
+    "中行": "18",
+}
+
+PERSONAL_BANK_IDS = {
+    name: int(bank_id)
+    for name, bank_id in PERSONAL_BANK_SEED_KEYS.items()
+    if name != "农商"
 }
 
 NAME_ALIASES = {
@@ -253,6 +282,10 @@ def resolve_field(column_name: str, kind: str) -> tuple[str | None, str]:
         "地点": ("tradePlace", "Text"),
         "交易网点": ("tradePlace", "Text"),
         "交易行所": ("tradePlace", "Text"),
+        "商户网点号及名称": ("tradePlace", "Text"),
+        "商户网点号及名": ("tradePlace", "Text"),
+        "交易机构名称": ("tradePlace", "Text"),
+        "交易地点/附言": ("tradePlace", "Text"),
         "摘要": ("productBrief", "Text"),
         "交易摘要": ("productBrief", "Text"),
         "产品摘要": ("productBrief", "Text"),
@@ -400,6 +433,10 @@ def create_rule(
     item.setdefault("tradeHoliday", False)
     item.setdefault("tradeWeekend", False)
 
+    item["id"] = row_index + 1
+    item["index"] = row_index + 1
+    item["bankId"] = bank_id
+
     if kind == REFERENCE_KIND:
         item.setdefault("percentMonth", None)
     else:
@@ -434,84 +471,92 @@ def main() -> None:
     seed_doc = json.loads(SEED_OUTPUT.read_text(encoding="utf-8-sig"))
     column_doc.setdefault("banks", {})
     seed_doc.setdefault("banks", {})
+    seed_doc.setdefault("bankNameKeys", {}).update(PERSONAL_BANK_SEED_KEYS)
 
-    extracted: dict[str, dict[str, Any]] = {}
-    files = sorted(path for path in SOURCE_DIR.glob("*.xlsx") if not path.name.startswith("~$"))
-
-    for path in files:
-        workbook_data = read_workbook(path)
-        bank_name = workbook_data["bank"]
-        if bank_name not in CORPORATE_BANK_IDS:
-            raise ValueError(f"未知对公银行文件名: {path.name} -> {bank_name}")
-
-        bank_data = extracted.setdefault(
-            bank_name,
-            {
-                "reference": None,
-                "const": None,
-            },
-        )
-        if workbook_data["kind"] == CONST_KIND:
-            bank_data["const"] = workbook_data
-        else:
-            bank_data["reference"] = workbook_data
-
-    missing = [
-        bank_name
-        for bank_name in CORPORATE_BANK_IDS
-        if bank_name not in extracted
-        or extracted[bank_name]["reference"] is None
-        or extracted[bank_name]["const"] is None
-    ]
-    if missing:
-        raise ValueError("缺少对公银行参照或固定文件: " + ", ".join(missing))
-
+    total_files = 0
     total_reference_rows = 0
     total_const_rows = 0
 
-    for bank_name, bank_id in CORPORATE_BANK_IDS.items():
-        reference = extracted[bank_name]["reference"]
-        const = extracted[bank_name]["const"]
-        assert reference is not None and const is not None
+    for source_dir, bank_ids, label in [
+        (PERSONAL_SOURCE_DIR, PERSONAL_BANK_IDS, "个人银行"),
+        (SOURCE_DIR, CORPORATE_BANK_IDS, "对公银行"),
+    ]:
+        extracted: dict[str, dict[str, Any]] = {}
+        files = sorted(path for path in source_dir.glob("*.xlsx") if not path.name.startswith("~$"))
+        total_files += len(files)
 
-        column_doc["banks"][bank_name] = {
-            "reference": reference["headers"],
-            "const": const["headers"],
-        }
+        for path in files:
+            workbook_data = read_workbook(path)
+            bank_name = workbook_data["bank"]
+            if bank_name not in bank_ids:
+                raise ValueError(f"未知{label}文件名: {path.name} -> {bank_name}")
 
-        references = [
-            create_rule(
+            bank_data = extracted.setdefault(
                 bank_name,
-                bank_id,
-                REFERENCE_KIND,
-                reference["headers"],
-                reference["sourceHeaders"],
-                row,
-                row_index,
+                {
+                    "reference": None,
+                    "const": None,
+                },
             )
-            for row_index, row in enumerate(reference["rows"])
-        ]
-        const_items = [
-            create_rule(
-                bank_name,
-                bank_id,
-                CONST_KIND,
-                const["headers"],
-                const["sourceHeaders"],
-                row,
-                row_index,
-            )
-            for row_index, row in enumerate(const["rows"])
-        ]
+            if workbook_data["kind"] == CONST_KIND:
+                bank_data["const"] = workbook_data
+            else:
+                bank_data["reference"] = workbook_data
 
-        total_reference_rows += len(references)
-        total_const_rows += len(const_items)
+        missing = [
+            bank_name
+            for bank_name in bank_ids
+            if bank_name not in extracted
+            or extracted[bank_name]["reference"] is None
+            or extracted[bank_name]["const"] is None
+        ]
+        if missing:
+            raise ValueError(f"缺少{label}参照或固定文件: " + ", ".join(missing))
 
-        seed_doc["banks"][str(bank_id)] = {
-            "config": default_config(),
-            "references": references,
-            "constItems": const_items,
-        }
+        for bank_name, bank_id in bank_ids.items():
+            reference = extracted[bank_name]["reference"]
+            const = extracted[bank_name]["const"]
+            assert reference is not None and const is not None
+
+            column_doc["banks"][bank_name] = {
+                "reference": reference["headers"],
+                "const": const["headers"],
+            }
+
+            references = [
+                create_rule(
+                    bank_name,
+                    bank_id,
+                    REFERENCE_KIND,
+                    reference["headers"],
+                    reference["sourceHeaders"],
+                    row,
+                    row_index,
+                )
+                for row_index, row in enumerate(reference["rows"])
+            ]
+            const_items = [
+                create_rule(
+                    bank_name,
+                    bank_id,
+                    CONST_KIND,
+                    const["headers"],
+                    const["sourceHeaders"],
+                    row,
+                    row_index,
+                )
+                for row_index, row in enumerate(const["rows"])
+            ]
+
+            total_reference_rows += len(references)
+            total_const_rows += len(const_items)
+
+            seed_doc["bankNameKeys"][bank_name] = str(bank_id)
+            seed_doc["banks"][str(bank_id)] = {
+                "config": default_config(),
+                "references": references,
+                "constItems": const_items,
+            }
 
     column_doc["source"] = (
         "D:/Projects/财务系统开发资料/参照明细/*.xlsx; "
@@ -525,8 +570,8 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "files": len(files),
-                "banks": len(CORPORATE_BANK_IDS),
+                "files": total_files,
+                "banks": len(PERSONAL_BANK_IDS) + len(CORPORATE_BANK_IDS),
                 "referenceRows": total_reference_rows,
                 "constRows": total_const_rows,
                 "totalColumnBanks": len(column_doc["banks"]),

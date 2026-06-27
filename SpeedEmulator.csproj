@@ -6,11 +6,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\SpeedEmulatorIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Assets\SpeedEmulatorIcon.ico" />
+    <Resource Include="Assets\SpeedEmulatorIcon.png" />
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="VendorRuntime\Zhencheng\**\*"
              Exclude="VendorRuntime\Zhencheng\.gitkeep"
              CopyToOutputDirectory="PreserveNewest"

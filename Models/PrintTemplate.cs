@@ -12,6 +12,8 @@ public sealed class PrintTemplate
 
     public bool IsSystem { get; set; }
 
+    public bool IsDeleted { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     public string PageSize { get; set; } = "A4Landscape";
@@ -35,6 +37,7 @@ public sealed class PrintTemplate
             VendorId = VendorId,
             VendorBankId = VendorBankId,
             IsSystem = IsSystem,
+            IsDeleted = IsDeleted,
             Name = Name,
             PageSize = PageSize,
             PageRows = PageRows,

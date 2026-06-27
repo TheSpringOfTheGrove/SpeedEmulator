@@ -504,7 +504,7 @@ public sealed class MainViewModel : ObservableObject
             "操作员" or "柜员" or "业务柜员" or "交易柜员" => (nameof(FlowRuleBase.Operator), "Text"),
             "柜员号" or "柜员流水" or "柜员交易号" or "交易柜员号" or "机构柜员流水" => (nameof(FlowRuleBase.OperatorNum), "Text"),
             "界面" => (nameof(FlowRuleBase.InterfacePage), "Text"),
-            "交易场所" or "交易地点" or "地点" or "交易网点" or "交易行所" => (nameof(FlowRuleBase.TradePlace), "Text"),
+            "交易场所" or "交易地点" or "地点" or "交易网点" or "交易行所" or "商户网点号及名称" => (nameof(FlowRuleBase.TradePlace), "Text"),
             "摘要" or "交易摘要" or "产品摘要" or "银行摘要" or "账单摘要" or "摘要代码" or "记账信息" => (nameof(FlowRuleBase.ProductBrief), "Text"),
             "产品名称" or "交易名称" or "交易种类" or "业务类型" or "交易类型" => (nameof(FlowRuleBase.ProductName), "Text"),
             "业务产品种类" or "产品业务种类" => (nameof(FlowRuleBase.ProductType), "Text"),

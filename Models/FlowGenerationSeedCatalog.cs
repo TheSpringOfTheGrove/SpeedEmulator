@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SpeedEmulator.Models;
 
@@ -7,34 +8,23 @@ public static class FlowGenerationSeedCatalog
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString
     };
 
     private static readonly Lazy<FlowGenerationSeedDocument?> SeedDocument = new(LoadSeedDocument);
 
-    public static bool TryCreateSeed(long bankId, out FlowGenerationSnapshot snapshot)
+    public static bool TryCreateSeed(long bankId, string bankName, out FlowGenerationSnapshot snapshot)
     {
-        if (TryCreateBankSeed(bankId, out snapshot))
-        {
-            return true;
-        }
-
-        var document = SeedDocument.Value;
-        if (document is null)
-        {
-            return false;
-        }
-
-        if (document.Default is null)
-        {
-            return false;
-        }
-
-        snapshot = Normalize(bankId, document.Default);
-        return true;
+        return TryCreateBankSeed(bankId, bankName, out snapshot);
     }
 
-    public static bool TryCreateBankSeed(long bankId, out FlowGenerationSnapshot snapshot)
+    public static bool TryCreateSeed(long bankId, out FlowGenerationSnapshot snapshot)
+    {
+        return TryCreateBankSeed(bankId, string.Empty, out snapshot);
+    }
+
+    public static bool TryCreateBankSeed(long bankId, string bankName, out FlowGenerationSnapshot snapshot)
     {
         snapshot = new FlowGenerationSnapshot();
 
@@ -44,7 +34,11 @@ public static class FlowGenerationSeedCatalog
             return false;
         }
 
-        var bankKey = bankId.ToString();
+        if (!TryResolveBankKey(document, bankId, bankName, out var bankKey))
+        {
+            return false;
+        }
+
         if (!document.Banks.TryGetValue(bankKey, out var bankSeed))
         {
             return false;
@@ -52,6 +46,29 @@ public static class FlowGenerationSeedCatalog
 
         snapshot = Normalize(bankId, bankSeed);
         return true;
+    }
+
+    public static bool TryCreateBankSeed(long bankId, out FlowGenerationSnapshot snapshot)
+    {
+        return TryCreateBankSeed(bankId, string.Empty, out snapshot);
+    }
+
+    private static bool TryResolveBankKey(
+        FlowGenerationSeedDocument document,
+        long bankId,
+        string bankName,
+        out string bankKey)
+    {
+        if (!string.IsNullOrWhiteSpace(bankName)
+            && document.BankNameKeys.TryGetValue(bankName.Trim(), out var mappedKey)
+            && !string.IsNullOrWhiteSpace(mappedKey))
+        {
+            bankKey = mappedKey;
+            return true;
+        }
+
+        bankKey = bankId.ToString();
+        return document.Banks.ContainsKey(bankKey);
     }
 
     private static FlowGenerationSnapshot Normalize(long bankId, FlowGenerationSnapshot source)
@@ -107,7 +124,7 @@ public static class FlowGenerationSeedCatalog
 
     private sealed class FlowGenerationSeedDocument
     {
-        public FlowGenerationSnapshot? Default { get; set; }
+        public Dictionary<string, string> BankNameKeys { get; set; } = [];
 
         public Dictionary<string, FlowGenerationSnapshot> Banks { get; set; } = [];
     }

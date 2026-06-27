@@ -508,7 +508,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        if (SelectedTemplate!.IsSystem || SelectedTemplate.Id <= 0)
+        if (SelectedTemplate!.IsSystem)
         {
             MessageBox.Show("系统模板不能删除", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -519,8 +519,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        var deleteId = SelectedTemplate.Id;
-        await templateRepository.DeleteAsync(Bank.Id, deleteId);
+        await templateRepository.DeleteAsync(Bank, SelectedTemplate);
         await ReloadTemplatesAsync();
         MessageBox.Show("删除模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
     }
