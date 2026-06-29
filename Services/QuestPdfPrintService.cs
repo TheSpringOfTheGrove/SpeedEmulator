@@ -53,8 +53,70 @@ public sealed class QuestPdfPrintService : IPrintPdfService
     private static void ExportCore(PrintRenderContext context, string path)
     {
         QuestPDF.Settings.License = LicenseType.Community;
-        var document = new BankFlowPrintDocument(context);
-        document.GeneratePdf(path);
+        var renderContext = context;
+        var maxAttempts = Math.Max(1, Math.Min(GetConfiguredRowCount(context), 80));
+        Exception? lastLayoutException = null;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                var document = new BankFlowPrintDocument(renderContext);
+                document.GeneratePdf(path);
+                return;
+            }
+            catch (Exception exception) when (IsLayoutConstraintException(exception)
+                && TryCreateFallbackContext(renderContext, out var fallbackContext))
+            {
+                lastLayoutException = exception;
+                renderContext = fallbackContext;
+            }
+        }
+
+        if (lastLayoutException is not null)
+        {
+            throw lastLayoutException;
+        }
+    }
+
+    private static int GetConfiguredRowCount(PrintRenderContext context)
+    {
+        if (context.Template.Config.RowCount > 0)
+        {
+            return context.Template.Config.RowCount;
+        }
+
+        return context.Template.PageRows > 0 ? context.Template.PageRows : 1;
+    }
+
+    private static bool IsLayoutConstraintException(Exception exception)
+    {
+        return exception.Message.Contains("conflicting size constraints", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("space than is available", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryCreateFallbackContext(PrintRenderContext context, out PrintRenderContext fallbackContext)
+    {
+        fallbackContext = context;
+        var rowCount = GetConfiguredRowCount(context);
+        if (rowCount <= 1)
+        {
+            return false;
+        }
+
+        var template = context.Template.Clone();
+        var nextRowCount = rowCount - 1;
+        template.PageRows = nextRowCount;
+        template.Config.RowCount = nextRowCount;
+        fallbackContext = new PrintRenderContext
+        {
+            Bank = context.Bank,
+            BankUser = context.BankUser,
+            Records = context.Records,
+            Template = template
+        };
+
+        return true;
     }
 
     private static string SanitizeFileName(string value)
@@ -83,30 +145,48 @@ public sealed class QuestPdfPrintService : IPrintPdfService
         public void Compose(IDocumentContainer container)
         {
             var config = context.Template.Config;
-            container.Page(page =>
+            var fontFamily = string.IsNullOrWhiteSpace(config.FontFamily) ? "Microsoft YaHei" : config.FontFamily;
+            var recordPages = CreateRecordPages();
+            for (var index = 0; index < recordPages.Count; index++)
             {
-                page.Size(IsLandscape(context.Template) ? PageSizes.A4.Landscape() : PageSizes.A4);
-                page.MarginLeft((float)config.MarginLeft);
-                page.MarginTop((float)config.MarginTop);
-                page.MarginRight((float)config.MarginRight);
-                page.MarginBottom((float)config.MarginBottom);
-                page.DefaultTextStyle(text => text
-                    .FontFamily(config.FontFamily)
-                    .FontSize((float)config.BodyFontSize)
-                    .FontColor(Colors.Black));
+                var pageRecords = recordPages[index];
+                var isFirstPage = index == 0;
+                container.Page(page =>
+                {
+                    page.Size(IsLandscape(context.Template) ? PageSizes.A4.Landscape() : PageSizes.A4);
+                    page.MarginLeft((float)config.MarginLeft);
+                    page.MarginTop((float)config.MarginTop);
+                    page.MarginRight((float)config.MarginRight);
+                    page.MarginBottom((float)config.MarginBottom);
+                    page.DefaultTextStyle(text => text
+                        .FontFamily(fontFamily)
+                        .FontSize((float)config.BodyFontSize)
+                        .FontColor(Colors.Black));
 
-                page.Header().Element(ComposeHeader);
-                page.Content().Element(ComposeTable);
-                page.Footer().Element(ComposeFooter);
-            });
+                    page.Header().Element(ComposeHeader);
+                    page.Content().Element(content => ComposeContent(content, pageRecords, isFirstPage));
+                    page.Footer().Element(ComposeFooter);
+                });
+            }
+        }
+
+        private void ComposeContent(IContainer container, IReadOnlyList<FlowRecord> records, bool isFirstPage)
+        {
+            var firstPageOffset = isFirstPage ? context.Template.Config.FirstPageOffset : 0;
+            container
+                .PaddingTop((float)Math.Max(firstPageOffset, 0))
+                .Element(content => ComposeTable(content, records));
         }
 
         private void ComposeHeader(IContainer container)
         {
             container.Column(column =>
             {
+                var headerFontSize = context.Template.Config.HeaderFontSize > 0
+                    ? context.Template.Config.HeaderFontSize
+                    : IsLandscape(context.Template) ? 13 : 9.5f;
                 column.Item().AlignCenter().Text(GetStatementTitle())
-                    .FontSize(IsLandscape(context.Template) ? 13 : 9.5f)
+                    .FontSize((float)headerFontSize)
                     .SemiBold();
 
                 column.Item().PaddingTop(8).Row(row =>
@@ -153,19 +233,44 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 var sealPath = GetSealImagePath();
                 if (!string.IsNullOrWhiteSpace(sealPath))
                 {
-                    column.Item().AlignRight().PaddingRight(60).Height(38).Image(sealPath).FitHeight();
+                    column.Item()
+                        .Element(item => ComposeSeal(item, sealPath));
                 }
 
                 column.Item().PaddingTop(4).LineHorizontal(1.2f).LineColor(Colors.Black);
             });
         }
 
-        private void ComposeTable(IContainer container)
+        private void ComposeSeal(IContainer container, string sealPath)
+        {
+            var config = context.Template.Config;
+            var contentWidth = GetPageContentWidth();
+            var sealLeft = Math.Min(Math.Max(config.SealLeft, 0), Math.Max(contentWidth - 1, 0));
+            var sealWidth = Math.Min(Math.Max(config.SealWidth, 1), Math.Max(contentWidth - sealLeft, 1));
+
+            container
+                .PaddingTop((float)Math.Max(config.SealTop, 0))
+                .Width((float)contentWidth)
+                .PaddingLeft((float)sealLeft)
+                .Width((float)sealWidth)
+                .Image(sealPath)
+                .FitWidth();
+        }
+
+        private double GetPageContentWidth()
+        {
+            var pageSize = IsLandscape(context.Template)
+                ? PageSizes.A4.Landscape()
+                : PageSizes.A4;
+            var width = pageSize.Width - context.Template.Config.MarginLeft - context.Template.Config.MarginRight;
+            return Math.Max(width, 1);
+        }
+
+        private void ComposeTable(IContainer container, IReadOnlyList<FlowRecord> records)
         {
             var columns = context.Template.Config.Columns.Count == 0
                 ? [new PrintPdfColumn { Name = "交易日期", Field = nameof(FlowRecord.AccountTime), Type = "Date", Width = 52 }]
                 : context.Template.Config.Columns;
-
             container.PaddingTop(4).Table(table =>
             {
                 table.ColumnsDefinition(definition =>
@@ -183,22 +288,26 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                         header.Cell()
                             .Element(HeaderCellStyle)
                             .Text(column.Name)
+                            .FontFamily(GetColumnFontFamily(column))
                             .FontSize((float)GetColumnFontSize(column))
                             .SemiBold();
                     }
                 });
 
-                for (var rowIndex = 0; rowIndex < context.Records.Count; rowIndex++)
+                for (var rowIndex = 0; rowIndex < records.Count; rowIndex++)
                 {
-                    var record = context.Records[rowIndex];
+                    var record = records[rowIndex];
                     foreach (var column in columns)
                     {
                         table.Cell()
-                            .Element(BodyCellStyle)
+                            .Element(cell => BodyCellStyle(cell, column))
+                            .ScaleToFit()
                             .Text(text =>
                             {
                                 var value = GetRecordValue(record, column, rowIndex + 1);
-                                var span = text.Span(value).FontSize((float)GetColumnFontSize(column));
+                                var span = text.Span(value)
+                                    .FontFamily(GetColumnFontFamily(column))
+                                    .FontSize((float)GetColumnFontSize(column));
                                 if (IsTradeMoneyColumn(column) && record.TradeMoney.HasValue)
                                 {
                                     if (record.TradeMoney.Value > 0)
@@ -228,21 +337,49 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             });
         }
 
-        private static IContainer HeaderCellStyle(IContainer container)
+        private IReadOnlyList<IReadOnlyList<FlowRecord>> CreateRecordPages()
+        {
+            var records = context.Template.Config.Descending
+                ? context.Records.OrderByDescending(item => item.AccountTime ?? DateTime.MinValue).ToList()
+                : context.Records.ToList();
+            var rowCount = context.Template.Config.RowCount > 0
+                ? context.Template.Config.RowCount
+                : context.Template.PageRows;
+
+            if (rowCount <= 0)
+            {
+                return [records];
+            }
+
+            var pages = records
+                .Chunk(rowCount)
+                .Select(chunk => (IReadOnlyList<FlowRecord>)chunk.ToList())
+                .ToList();
+            if (pages.Count == 0)
+            {
+                pages.Add([]);
+            }
+
+            return pages;
+        }
+
+        private IContainer HeaderCellStyle(IContainer container)
         {
             return container
                 .BorderBottom(0.75f)
                 .BorderColor(Colors.Black)
-                .MinHeight(14)
+                .Height((float)Math.Max(context.Template.Config.ColumnMinHeight, 14))
                 .PaddingHorizontal(2)
                 .PaddingVertical(2)
-                .AlignMiddle();
+                .AlignMiddle()
+                .ScaleToFit();
         }
 
-        private static IContainer BodyCellStyle(IContainer container)
+        private IContainer BodyCellStyle(IContainer container, PrintPdfColumn column)
         {
+            var minHeight = Math.Max(context.Template.Config.ColumnMinHeight, column.LineHeight);
             return container
-                .MinHeight(13)
+                .Height((float)Math.Max(minHeight, 1))
                 .PaddingHorizontal(2)
                 .PaddingVertical(1)
                 .AlignMiddle();
@@ -269,7 +406,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 || string.Equals(column.Name, "交易金额", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string GetRecordValue(FlowRecord record, PrintPdfColumn column, int rowIndex)
+        private string GetRecordValue(FlowRecord record, PrintPdfColumn column, int rowIndex)
         {
             if (IsIdColumn(column))
             {
@@ -282,7 +419,18 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 value = record.BalanceAmount;
             }
 
-            return FormatValue(value, column.Type);
+            return ApplyTabSize(FormatValue(value, column.Type));
+        }
+
+        private string ApplyTabSize(string value)
+        {
+            if (context.Template.Config.TabSize <= 0 || !value.Contains('\t'))
+            {
+                return value;
+            }
+
+            var spaceCount = Math.Max(1, (int)Math.Round(context.Template.Config.TabSize));
+            return value.Replace("\t", new string(' ', spaceCount), StringComparison.Ordinal);
         }
 
         private static object? ReadEntityValue(FlowRecord record, string field)
@@ -424,6 +572,14 @@ public sealed class QuestPdfPrintService : IPrintPdfService
         private static double GetColumnFontSize(PrintPdfColumn column)
         {
             return column.FontSize > 0 ? column.FontSize : 5.2;
+        }
+
+        private string GetColumnFontFamily(PrintPdfColumn column)
+        {
+            var fontFamily = string.IsNullOrWhiteSpace(column.FontFamily)
+                ? context.Template.Config.FontFamily
+                : column.FontFamily;
+            return string.IsNullOrWhiteSpace(fontFamily) ? "Microsoft YaHei" : fontFamily;
         }
 
         private static string EmptyAsDash(string value)

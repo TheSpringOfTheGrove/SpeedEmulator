@@ -1,5 +1,6 @@
 using System.Collections;
 using System.IO;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
@@ -52,6 +53,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 }
             }
 
+            templates = RemoveLocalSystemNameClones(templates);
             templates = DeduplicateDisplayTemplates(templates);
             return Task.FromResult<IReadOnlyList<PrintTemplate>>(templates);
         }
@@ -200,11 +202,92 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
     {
         return templates
             .GroupBy(GetTemplateIdentityKey, StringComparer.Ordinal)
-            .Select(group => group
-                .OrderByDescending(item => item.Id > 0)
-                .ThenByDescending(item => item.IsSystem)
-                .First())
+            .Select(SelectDisplayTemplate)
             .ToList();
+    }
+
+    private static PrintTemplate SelectDisplayTemplate(IGrouping<string, PrintTemplate> group)
+    {
+        var items = group.ToList();
+        var selected = items
+            .OrderByDescending(item => item.Id > 0)
+            .ThenByDescending(item => item.IsSystem)
+            .First();
+
+        var systemTemplate = items.FirstOrDefault(item => item.IsSystem && !item.IsDeleted);
+        if (systemTemplate is null || selected.IsSystem || !IsSystemConfigOverride(selected, systemTemplate))
+        {
+            return selected;
+        }
+
+        var display = selected.Clone();
+        display.IsSystem = true;
+        return display;
+    }
+
+    private static bool IsSystemConfigOverride(PrintTemplate localTemplate, PrintTemplate systemTemplate)
+    {
+        return localTemplate.Id > 0
+            && !localTemplate.IsDeleted
+            && localTemplate.VendorId <= 0
+            && string.IsNullOrWhiteSpace(localTemplate.PdfData)
+            && string.IsNullOrWhiteSpace(systemTemplate.PdfData)
+            && string.Equals(GetTemplateNameKey(localTemplate), GetTemplateNameKey(systemTemplate), StringComparison.Ordinal);
+    }
+
+    private static List<PrintTemplate> RemoveLocalSystemNameClones(IEnumerable<PrintTemplate> templates)
+    {
+        var list = templates.ToList();
+        var systemKeys = list
+            .Where(item => item.IsSystem && !item.IsDeleted)
+            .Select(GetTemplateNameKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (systemKeys.Count == 0)
+        {
+            return list;
+        }
+
+        return list
+            .Where(item => !IsLocalSystemNameClone(item, systemKeys))
+            .ToList();
+    }
+
+    private static bool IsLocalSystemNameClone(PrintTemplate template, HashSet<string> systemKeys)
+    {
+        return !template.IsSystem
+            && !template.IsDeleted
+            && template.VendorId <= 0
+            && !string.IsNullOrWhiteSpace(template.PdfData)
+            && !IsDerivedLocalTemplateName(template.Name)
+            && systemKeys.Contains(GetTemplateNameKey(template));
+    }
+
+    private static bool IsDerivedLocalTemplateName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        return name.Contains("-复制", StringComparison.Ordinal)
+            || name.Contains("_复制", StringComparison.Ordinal)
+            || name.Contains(" 复制", StringComparison.Ordinal)
+            || name.Contains("-导入", StringComparison.Ordinal)
+            || name.Contains("_导入", StringComparison.Ordinal)
+            || name.Contains(" 导入", StringComparison.Ordinal)
+            || name.Contains("-改", StringComparison.Ordinal)
+            || name.Contains("_改", StringComparison.Ordinal)
+            || name.Contains(" 改", StringComparison.Ordinal);
+    }
+
+    private static string GetTemplateNameKey(PrintTemplate template)
+    {
+        return string.Join(
+            '\u001f',
+            NormalizeTemplateKeyPart(template.Name),
+            NormalizeTemplateKeyPart(template.Remark),
+            template.PageRows.ToString());
     }
 
     private static int FindExistingTemplateIndex(List<PrintTemplate> templates, PrintTemplate template)
@@ -255,19 +338,10 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             });
         }
 
-        return new PrintTemplate
+        var config = definition.Config?.Clone();
+        if (config is null)
         {
-            Id = -(index + 1),
-            BankId = bank.Id,
-            VendorId = definition.VendorId,
-            VendorBankId = definition.VendorBankId,
-            IsSystem = definition.IsSystem,
-            Name = definition.Name,
-            PageSize = definition.Orientation,
-            PageRows = definition.PageRows,
-            Remark = definition.Remark,
-            PdfData = definition.PdfData,
-            Config = new PrintPdfConfig
+            config = new PrintPdfConfig
             {
                 Name = definition.Name,
                 Desc = definition.Description,
@@ -281,7 +355,40 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 ColumnMinHeight = definition.Orientation == "A4Portrait" ? 13 : 15,
                 SealWidth = definition.Orientation == "A4Portrait" ? 86 : 104,
                 Columns = columns
+            };
+        }
+        else
+        {
+            config.Name = string.IsNullOrWhiteSpace(config.Name) ? definition.Name : config.Name;
+            if (definition.PageRows > 0)
+            {
+                config.RowCount = definition.PageRows;
             }
+
+            if (config.RowCount <= 0)
+            {
+                config.RowCount = definition.PageRows <= 0 ? 28 : definition.PageRows;
+            }
+
+            if (config.Columns.Count == 0)
+            {
+                config.Columns = columns;
+            }
+        }
+
+        return new PrintTemplate
+        {
+            Id = -(index + 1),
+            BankId = bank.Id,
+            VendorId = definition.VendorId,
+            VendorBankId = definition.VendorBankId,
+            IsSystem = definition.IsSystem,
+            Name = definition.Name,
+            PageSize = definition.Orientation,
+            PageRows = definition.PageRows,
+            Remark = definition.Remark,
+            PdfData = definition.PdfData,
+            Config = config
         };
     }
 
@@ -490,7 +597,8 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         string PdfData = "",
         bool IsSystem = true,
         long VendorId = 0,
-        long VendorBankId = 0);
+        long VendorBankId = 0,
+        PrintPdfConfig? Config = null);
 
     private sealed class ZhenchengTemplateCatalog
     {
@@ -529,7 +637,8 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     item.PdfData,
                     item.IsSystem,
                     item.Id,
-                    item.BankId))
+                    item.BankId,
+                    item.Config))
                 .ToList();
         }
 
@@ -576,6 +685,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 var loadContext = new VendorLoadContext(mainDll);
                 var assembly = loadContext.LoadFromAssemblyPath(mainDll);
                 var pdfTemplateType = assembly.GetType("MainEntry.entity.PDFTemplate", throwOnError: true)!;
+                var pdfConfigType = assembly.GetType("MainEntry.entity.PdfConfig.PDFConfig", throwOnError: false);
                 var listPdfTemplateType = typeof(List<>).MakeGenericType(pdfTemplateType);
                 var listMethod = GetLoadableTypes(assembly)
                     .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
@@ -592,6 +702,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     return null;
                 }
 
+                var configFactory = pdfConfigType is null ? null : TryGetConfigFactory(assembly, pdfConfigType);
                 var result = new Dictionary<long, List<VendorTemplateItem>>();
                 var parameterType = listMethod.GetParameters()[0].ParameterType;
                 for (var bankId = 1L; bankId <= 180L; bankId++)
@@ -607,7 +718,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
                         var items = enumerable
                             .Cast<object>()
-                            .Select(item => ReadTemplate(item, bankId))
+                            .Select(item => ReadTemplate(item, bankId, configFactory))
                             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
                             .ToList();
                         if (items.Count > 0)
@@ -747,17 +858,173 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             }
         }
 
-        private static VendorTemplateItem ReadTemplate(object source, long bankId)
+        private static MethodInfo? TryGetConfigFactory(Assembly assembly, Type pdfConfigType)
+        {
+            foreach (var type in GetLoadableTypes(assembly))
+            {
+                MethodInfo[] methods;
+                try
+                {
+                    methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var method in methods)
+                {
+                    try
+                    {
+                        var parameters = method.GetParameters();
+                        if (method.ReturnType == pdfConfigType
+                            && parameters.Length == 1
+                            && parameters[0].ParameterType == typeof(string))
+                        {
+                            return method;
+                        }
+                    }
+                    catch
+                    {
+                        // Some vendor metadata can reference optional assemblies; skip only that method.
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static VendorTemplateItem ReadTemplate(object source, long bankId, MethodInfo? configFactory)
         {
             var type = source.GetType();
+            var name = Convert.ToString(type.GetProperty("Name")?.GetValue(source)) ?? string.Empty;
+            var pageRows = ConvertToInt(type.GetProperty("PageSize")?.GetValue(source));
+            var vendorConfig = type.GetProperty("PdfConfig")?.GetValue(source);
+            if (vendorConfig is null && configFactory is not null && !string.IsNullOrWhiteSpace(name))
+            {
+                vendorConfig = InvokeSilently(() => configFactory.Invoke(null, [name]));
+            }
+
             return new VendorTemplateItem(
                 ConvertToLong(type.GetProperty("Id")?.GetValue(source)),
                 bankId,
-                Convert.ToString(type.GetProperty("Name")?.GetValue(source)) ?? string.Empty,
-                ConvertToInt(type.GetProperty("PageSize")?.GetValue(source)),
+                name,
+                pageRows,
                 Convert.ToString(type.GetProperty("Remark")?.GetValue(source)) ?? string.Empty,
                 Convert.ToString(type.GetProperty("PdfData")?.GetValue(source)) ?? string.Empty,
-                ConvertToBool(type.GetProperty("IsSystem")?.GetValue(source), defaultValue: true));
+                ConvertToBool(type.GetProperty("IsSystem")?.GetValue(source), defaultValue: true),
+                ReadPdfConfig(vendorConfig, name, pageRows));
+        }
+
+        private static PrintPdfConfig? ReadPdfConfig(object? source, string templateName, int pageRows)
+        {
+            if (source is null)
+            {
+                return null;
+            }
+
+            var config = new PrintPdfConfig
+            {
+                Name = templateName,
+                Desc = Convert.ToString(GetPropertyValue(source, "Name")) ?? string.Empty,
+                RowCount = pageRows > 0 ? pageRows : ConvertToInt(GetPropertyValue(source, "RowCount")),
+                MarginLeft = ConvertToDouble(GetPropertyValue(source, "MarginLeft")),
+                MarginTop = ConvertToDouble(GetPropertyValue(source, "MarginTop")),
+                MarginRight = ConvertToDouble(GetPropertyValue(source, "MarginRight")),
+                MarginBottom = ConvertToDouble(GetPropertyValue(source, "MarginBottom")),
+                FontFamily = Convert.ToString(GetPropertyValue(source, "FontFamily")) ?? string.Empty,
+                TabSize = ConvertToDouble(GetPropertyValue(source, "TabSize")),
+                ColumnMinHeight = ConvertToDouble(GetPropertyValue(source, "ColumnMinHeight")),
+                Descending = ConvertToBool(GetPropertyValue(source, "Desc"), defaultValue: false),
+                SealLeft = ConvertToDouble(GetPropertyValue(source, "ZhangLeft")),
+                SealTop = ConvertToDouble(GetPropertyValue(source, "ZhangTop")),
+                SealRight = ConvertToDouble(GetPropertyValue(source, "ZhangRight")),
+                SealBottom = ConvertToDouble(GetPropertyValue(source, "ZhangBottom")),
+                SealWidth = ConvertToDouble(GetPropertyValue(source, "ZhangSize")),
+                Columns = ReadPdfColumns(GetPropertyValue(source, "PdfColumns")).ToList()
+            };
+
+            if (config.RowCount <= 0)
+            {
+                config.RowCount = pageRows > 0 ? pageRows : 28;
+            }
+
+            if (config.ColumnMinHeight <= 0)
+            {
+                config.ColumnMinHeight = 13;
+            }
+
+            if (string.IsNullOrWhiteSpace(config.FontFamily))
+            {
+                config.FontFamily = "Microsoft YaHei";
+            }
+
+            var firstColumn = config.Columns.FirstOrDefault();
+            if (firstColumn is not null)
+            {
+                config.HeaderFontSize = firstColumn.FontSize;
+                config.BodyFontSize = firstColumn.FontSize;
+            }
+
+            return config;
+        }
+
+        private static IEnumerable<PrintPdfColumn> ReadPdfColumns(object? source)
+        {
+            if (source is not IEnumerable columns)
+            {
+                yield break;
+            }
+
+            foreach (var item in columns.Cast<object>())
+            {
+                var name = Convert.ToString(GetPropertyValue(item, "Name")) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                var (field, resolvedType) = ExcelColumnFieldResolver.ResolveFlowRecordField(name);
+                yield return new PrintPdfColumn
+                {
+                    Name = name,
+                    Field = field ?? $"[{name}]",
+                    Type = ResolvePdfColumnType(name, resolvedType),
+                    Width = ConvertToDouble(GetPropertyValue(item, "ColumnWidth"), 100),
+                    FontSize = ConvertToDouble(GetPropertyValue(item, "FontSize"), 8),
+                    FontFamily = Convert.ToString(GetPropertyValue(item, "FontFamily")) ?? string.Empty,
+                    LineHeight = ConvertToDouble(GetPropertyValue(item, "LineHeight"), 1)
+                };
+            }
+        }
+
+        private static string ResolvePdfColumnType(string name, string resolvedType)
+        {
+            if (name.Contains("交易日期", StringComparison.Ordinal)
+                || (name.Contains("日期", StringComparison.Ordinal) && !name.Contains("时间", StringComparison.Ordinal)))
+            {
+                return "Date";
+            }
+
+            if (name.Contains("交易时间", StringComparison.Ordinal)
+                || (name.Contains("时间", StringComparison.Ordinal) && !name.Contains("日期", StringComparison.Ordinal)))
+            {
+                return "Time";
+            }
+
+            return resolvedType;
+        }
+
+        private static object? GetPropertyValue(object source, string propertyName)
+        {
+            try
+            {
+                return source.GetType().GetProperty(propertyName)?.GetValue(source);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static long ConvertToLong(object? value)
@@ -783,6 +1050,23 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 byte number => number,
                 string text when int.TryParse(text, out var parsed) => parsed,
                 _ => 0
+            };
+        }
+
+        private static double ConvertToDouble(object? value, double defaultValue = 0)
+        {
+            return value switch
+            {
+                double number => number,
+                float number => number,
+                decimal number => (double)number,
+                int number => number,
+                long number => number,
+                short number => number,
+                byte number => number,
+                string text when double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                string text when double.TryParse(text, NumberStyles.Any, CultureInfo.CurrentCulture, out var parsed) => parsed,
+                _ => defaultValue
             };
         }
 
@@ -832,7 +1116,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             }
         }
 
-        private sealed record VendorTemplateItem(long Id, long BankId, string Name, int PageRows, string Remark, string PdfData, bool IsSystem);
+        private sealed record VendorTemplateItem(long Id, long BankId, string Name, int PageRows, string Remark, string PdfData, bool IsSystem, PrintPdfConfig? Config);
 
         private sealed class VendorLoadContext : AssemblyLoadContext
         {

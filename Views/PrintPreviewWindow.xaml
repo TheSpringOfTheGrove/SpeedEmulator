@@ -102,7 +102,7 @@
                     <wv2:WebView2 x:Name="PreviewWebView"
                                   DefaultBackgroundColor="#DADADA" />
                     <TextBlock x:Name="PreviewFallback"
-                               Text="正在生成 PDF 预览..."
+                               Text="请选择模板后点击生成预览"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="15"

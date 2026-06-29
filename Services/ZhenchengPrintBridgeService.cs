@@ -58,12 +58,35 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return DefaultStimulsoftExporter.TryCreateBlankTemplate(ResolveVendorDir(), template);
     }
 
+    public bool TryHydrateTemplate(PrintRenderContext context, PrintTemplate template, bool requirePdfData = true)
+    {
+        if (!string.IsNullOrWhiteSpace(template.PdfData))
+        {
+            return true;
+        }
+
+        try
+        {
+            return GetBridge().TryHydrateTemplate(context, template, requirePdfData);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task ExportInternalAsync(PrintRenderContext context, string path)
     {
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
+        }
+
+        if (fallbackService is not null && ShouldUseEditableQuestPdfRenderer(context.Template))
+        {
+            await fallbackService.ExportAsync(context, path);
+            return;
         }
 
         VendorBridge currentBridge;
@@ -271,6 +294,67 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
 
+        public bool TryHydrateTemplate(PrintRenderContext context, PrintTemplate template, bool requirePdfData)
+        {
+            var previousDirectory = Directory.GetCurrentDirectory();
+            Directory.SetCurrentDirectory(vendorDir);
+            try
+            {
+                var resolvedTemplate = ResolveTemplate(context);
+                if (resolvedTemplate is null)
+                {
+                    return false;
+                }
+
+                HydrateTemplate(resolvedTemplate, template);
+                return requirePdfData
+                    ? !string.IsNullOrWhiteSpace(template.PdfData)
+                    : resolvedTemplate.Config is not null
+                        || resolvedTemplate.Template is not null
+                        || !string.IsNullOrWhiteSpace(template.PdfData);
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (Directory.Exists(previousDirectory))
+                {
+                    Directory.SetCurrentDirectory(previousDirectory);
+                }
+            }
+        }
+
+        private static void HydrateTemplate(ResolvedTemplate resolvedTemplate, PrintTemplate target)
+        {
+            if (string.IsNullOrWhiteSpace(target.Name))
+            {
+                target.Name = resolvedTemplate.Name;
+            }
+
+            if (resolvedTemplate.PageRows > 0)
+            {
+                target.PageRows = resolvedTemplate.PageRows;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolvedTemplate.PdfData))
+            {
+                target.PdfData = resolvedTemplate.PdfData;
+            }
+
+            if (resolvedTemplate.Template is null)
+            {
+                return;
+            }
+
+            target.VendorId = ReadLong(resolvedTemplate.Template, "Id", target.VendorId);
+            target.VendorBankId = ReadLong(resolvedTemplate.Template, "BankId", target.VendorBankId);
+            target.PageRows = (int)ReadLong(resolvedTemplate.Template, "PageSize", target.PageRows);
+            target.Remark = ReadString(resolvedTemplate.Template, "Remark", target.Remark);
+            target.PdfData = ReadString(resolvedTemplate.Template, "PdfData", target.PdfData);
+        }
+
         private ResolvedTemplate? ResolveTemplate(PrintRenderContext context)
         {
             var hasPdfData = !string.IsNullOrWhiteSpace(context.Template.PdfData);
@@ -300,6 +384,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, vendorPageRows);
                 }
 
+                ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, vendorPageRows);
             }
@@ -309,6 +394,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var config = CreateVendorConfig([name]);
                 if (config is not null)
                 {
+                    ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     return new ResolvedTemplate(name, config, null, string.Empty, context.Template.PageRows);
                 }
             }
@@ -415,14 +501,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 && rawMessage.Contains("conflicting size constraints", StringComparison.OrdinalIgnoreCase))
             {
                 return new InvalidOperationException(
-                    $"模板“{templateName}”走真诚 QuestPDF 硬编码模板，当前字段或数据长度与模板页面尺寸冲突。请先换同银行其它模板，或缩短过长字段后再生成。原始错误：{rawMessage}",
+                    $"模板“{templateName}”走 QuestPDF 硬编码模板，当前字段或数据长度与模板页面尺寸冲突。请先换同银行其它模板，或缩短过长字段后再生成。原始错误：{rawMessage}",
                     root);
             }
 
             if (string.Equals(renderer, "Stimulsoft", StringComparison.OrdinalIgnoreCase))
             {
                 return new InvalidOperationException(
-                    $"模板“{templateName}”走真诚 Stimulsoft 模板流，渲染失败。请检查模板数据、真诚运行时文件和授权环境是否完整。原始错误：{rawMessage}",
+                    $"模板“{templateName}”走 Stimulsoft 模板流，渲染失败。请检查模板数据、运行时文件和授权环境是否完整。原始错误：{rawMessage}",
                     root);
             }
 
@@ -934,6 +1020,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     return null;
                 }
 
+                ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
             }
@@ -943,6 +1030,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var config = CreateConfig([name]);
                 if (config is not null)
                 {
+                    ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     return new ResolvedTemplate(name, config, null);
                 }
             }
@@ -2213,6 +2301,107 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, property, value);
     }
 
+    private static void ApplyLocalPdfConfigToVendorConfig(object? vendorConfig, PrintPdfConfig? localConfig, int pageRows)
+    {
+        if (vendorConfig is null || localConfig is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(localConfig.Name))
+        {
+            Set(vendorConfig, "Name", localConfig.Name);
+        }
+
+        var rowCount = localConfig.RowCount > 0 ? localConfig.RowCount : pageRows;
+        if (rowCount > 0)
+        {
+            Set(vendorConfig, "RowCount", rowCount);
+        }
+
+        Set(vendorConfig, "MarginLeft", localConfig.MarginLeft);
+        Set(vendorConfig, "MarginTop", localConfig.MarginTop);
+        Set(vendorConfig, "MarginRight", localConfig.MarginRight);
+        Set(vendorConfig, "MarginBottom", localConfig.MarginBottom);
+        Set(vendorConfig, "FontFamily", localConfig.FontFamily);
+        Set(vendorConfig, "TabSize", localConfig.TabSize);
+        Set(vendorConfig, "ColumnMinHeight", localConfig.ColumnMinHeight);
+        Set(vendorConfig, "FirstPageOffset", localConfig.FirstPageOffset);
+        Set(vendorConfig, "Desc", localConfig.Descending);
+        Set(vendorConfig, "ZhangLeft", localConfig.SealLeft);
+        Set(vendorConfig, "ZhangTop", localConfig.SealTop);
+        Set(vendorConfig, "ZhangRight", localConfig.SealRight);
+        Set(vendorConfig, "ZhangBottom", localConfig.SealBottom);
+        Set(vendorConfig, "ZhangSize", localConfig.SealWidth);
+        if (localConfig.Columns.Count > 0)
+        {
+            ApplyLocalPdfColumns(vendorConfig, localConfig.Columns);
+        }
+    }
+
+    private static void ApplyLocalPdfColumns(object vendorConfig, IReadOnlyList<PrintPdfColumn> localColumns)
+    {
+        var property = vendorConfig.GetType().GetProperty("PdfColumns", BindingFlags.Public | BindingFlags.Instance);
+        if (property?.GetValue(vendorConfig) is not IList vendorColumns || vendorColumns.Count == 0)
+        {
+            return;
+        }
+
+        var usedIndexes = new HashSet<int>();
+        for (var index = 0; index < localColumns.Count; index++)
+        {
+            var localColumn = localColumns[index];
+            var targetIndex = FindVendorPdfColumnIndex(vendorColumns, localColumn.Name, usedIndexes);
+            if (targetIndex < 0 && index < vendorColumns.Count && !usedIndexes.Contains(index))
+            {
+                targetIndex = index;
+            }
+
+            if (targetIndex < 0 || vendorColumns[targetIndex] is not { } vendorColumn)
+            {
+                continue;
+            }
+
+            usedIndexes.Add(targetIndex);
+            Set(vendorColumn, "Name", localColumn.Name);
+            Set(vendorColumn, "ColumnWidth", localColumn.Width);
+            Set(vendorColumn, "FontSize", localColumn.FontSize);
+            Set(vendorColumn, "FontFamily", localColumn.FontFamily);
+            Set(vendorColumn, "LineHeight", localColumn.LineHeight);
+        }
+    }
+
+    private static int FindVendorPdfColumnIndex(IList vendorColumns, string name, ISet<int> usedIndexes)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return -1;
+        }
+
+        for (var index = 0; index < vendorColumns.Count; index++)
+        {
+            if (usedIndexes.Contains(index) || vendorColumns[index] is not { } item)
+            {
+                continue;
+            }
+
+            var vendorName = Convert.ToString(GetPropertyValue(item, "Name"), CultureInfo.CurrentCulture);
+            if (string.Equals(vendorName, name, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static object? GetPropertyValue(object target, string propertyName)
+    {
+        return target.GetType()
+            .GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance)
+            ?.GetValue(target);
+    }
+
     private static void PrimeVendorDynamicImageCache(Assembly assembly, string vendorDir)
     {
         try
@@ -2612,16 +2801,43 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return HasPreferredTemplateAlias(name);
     }
 
-    private static bool CanUseQuestPdfFallback(PrintTemplate template)
-    {
-        return !template.IsSystem
-            && string.IsNullOrWhiteSpace(template.PdfData)
-            && (PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(template)
-                || template.Config.Columns.Count > 0);
-    }
+        private static bool CanUseQuestPdfFallback(PrintTemplate template)
+        {
+            return IsEditableQuestPdfTemplate(template)
+                || (!template.IsSystem
+                    && (PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(template)
+                        || template.Config.Columns.Count > 0));
+        }
+
+        private static bool ShouldUseEditableQuestPdfRenderer(PrintTemplate template)
+        {
+            return IsEditableQuestPdfTemplate(template)
+                || (!template.IsSystem
+                    && PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(template));
+        }
+
+        private static bool IsEditableQuestPdfTemplate(PrintTemplate template)
+        {
+            return !template.IsSystem
+                && template.Id > 0
+                && template.VendorId <= 0
+                && string.IsNullOrWhiteSpace(template.PdfData)
+                && (PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(template)
+                    || template.Config.Columns.Count > 0);
+        }
 
     private static IEnumerable<string> BuildCandidateTemplateNames(string name)
     {
+        if (TryRemoveDerivedTemplateSuffix(name, out var derivedSourceName))
+        {
+            foreach (var candidate in BuildCandidateTemplateNames(derivedSourceName))
+            {
+                yield return candidate;
+            }
+
+            yield return derivedSourceName;
+        }
+
         if (TryRemoveImportedTemplateSuffix(name, out var importedSourceName))
         {
             foreach (var alias in GetPreferredTemplateAliases(importedSourceName))
@@ -2693,6 +2909,36 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             yield return withoutDuplicateSuffix;
         }
+    }
+
+    private static bool TryRemoveDerivedTemplateSuffix(string name, out string sourceName)
+    {
+        sourceName = string.Empty;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var suffixes = new[] { "-复制", "_复制", " 复制", "-改", "_改", " 改" };
+        foreach (var suffix in suffixes)
+        {
+            var suffixIndex = name.LastIndexOf(suffix, StringComparison.Ordinal);
+            if (suffixIndex <= 0)
+            {
+                continue;
+            }
+
+            var remainder = name[(suffixIndex + suffix.Length)..];
+            if (remainder.Length > 0 && remainder.Any(item => !char.IsDigit(item)))
+            {
+                continue;
+            }
+
+            sourceName = name[..suffixIndex];
+            return !string.IsNullOrWhiteSpace(sourceName);
+        }
+
+        return false;
     }
 
     private static bool TryRemoveImportedTemplateSuffix(string name, out string sourceName)

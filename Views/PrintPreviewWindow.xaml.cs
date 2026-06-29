@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using SpeedEmulator.ViewModels;
 
@@ -10,6 +11,8 @@ namespace SpeedEmulator.Views;
 public partial class PrintPreviewWindow : Window
 {
     private readonly PrintPreviewViewModel viewModel;
+    private bool previewInitialized;
+    private Task? previewInitializationTask;
 
     public PrintPreviewWindow(PrintPreviewViewModel viewModel)
     {
@@ -22,9 +25,10 @@ public partial class PrintPreviewWindow : Window
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        await InitializePreviewAsync();
         await viewModel.LoadAsync();
-        NavigateToPreviewPath();
+        _ = Dispatcher.InvokeAsync(
+            async () => await EnsurePreviewInitializedAsync(),
+            DispatcherPriority.ApplicationIdle);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -39,37 +43,47 @@ public partial class PrintPreviewWindow : Window
         Close();
     }
 
+    private Task EnsurePreviewInitializedAsync()
+    {
+        if (previewInitialized)
+        {
+            return Task.CompletedTask;
+        }
+
+        previewInitializationTask ??= InitializePreviewAsync();
+        return previewInitializationTask;
+    }
+
     private async Task InitializePreviewAsync()
     {
         try
         {
             await PreviewWebView.EnsureCoreWebView2Async();
-            if (PreviewWebView.CoreWebView2 is not null)
-            {
-                PreviewFallback.Visibility = Visibility.Collapsed;
-            }
+            previewInitialized = PreviewWebView.CoreWebView2 is not null;
         }
         catch (WebView2RuntimeNotFoundException)
         {
             PreviewFallback.Text = "未检测到 WebView2 Runtime，可使用“打开PDF”查看预览。";
             PreviewFallback.Visibility = Visibility.Visible;
+            previewInitializationTask = null;
         }
         catch (Exception ex)
         {
             PreviewFallback.Text = $"PDF 预览初始化失败：{ex.Message}";
             PreviewFallback.Visibility = Visibility.Visible;
+            previewInitializationTask = null;
         }
     }
 
-    private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    private async void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(PrintPreviewViewModel.PreviewPath))
         {
-            NavigateToPreviewPath();
+            await NavigateToPreviewPathAsync();
         }
     }
 
-    private void NavigateToPreviewPath()
+    private async Task NavigateToPreviewPathAsync()
     {
         var path = viewModel.PreviewPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -79,6 +93,11 @@ public partial class PrintPreviewWindow : Window
 
         try
         {
+            PreviewFallback.Text = "正在加载 PDF 预览...";
+            PreviewFallback.Visibility = Visibility.Visible;
+
+            await EnsurePreviewInitializedAsync();
+
             if (PreviewWebView.CoreWebView2 is null)
             {
                 PreviewFallback.Text = path;
@@ -86,8 +105,8 @@ public partial class PrintPreviewWindow : Window
                 return;
             }
 
+            PreviewWebView.CoreWebView2.Navigate(new Uri(path).AbsoluteUri);
             PreviewFallback.Visibility = Visibility.Collapsed;
-            PreviewWebView.Source = new Uri(path);
         }
         catch (Exception ex)
         {

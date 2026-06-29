@@ -1,0 +1,272 @@
+<Window x:Class="SpeedEmulator.Views.PrintTemplateSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding WindowTitle}"
+        Width="580"
+        Height="820"
+        MinWidth="560"
+        MinHeight="720"
+        WindowStartupLocation="Manual"
+        Background="#F4F4F4">
+    <Window.Resources>
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,14,0,8" />
+        </Style>
+
+        <Style x:Key="SettingTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="BorderBrush" Value="#DDE2E5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#7AA7D9" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.65" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TableSettingHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+
+        <Style TargetType="Button">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinWidth" Value="82" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="Background" Value="#F8F8F8" />
+            <Setter Property="BorderBrush" Value="#D8DDE1" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#FFFFFF" />
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#BFC8CF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#ECEFF1" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="功能区" Style="{StaticResource SectionTitleStyle}" />
+            <Border BorderBrush="#DFDFDF" BorderThickness="0,1,0,0" Padding="0,10,0,4">
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="更新" Command="{Binding RefreshCommand}" />
+                    <Button Content="直接打开" Command="{Binding DirectOpenCommand}" />
+                    <Button Content="热更新" IsEnabled="False" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="0,0,4,0">
+            <StackPanel>
+                <TextBlock Text="外部设置" Style="{StaticResource SectionTitleStyle}" />
+                <Border BorderBrush="#DFDFDF" BorderThickness="0,1,0,0" Padding="0,10,0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="56" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="边距:" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="左" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="1" Text="{Binding MarginLeft, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Margin="26,0,0,0" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="2" Text="上" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="3" Text="{Binding MarginTop, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="4" Text="右" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="5" Text="{Binding MarginRight, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="6" Text="下" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="7" Text="{Binding MarginBottom, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Style="{StaticResource SettingTextBoxStyle}" />
+
+                        <TextBlock Grid.Row="2" Text="字体:" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="4" Text="{Binding FontFamily, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Row="2" Grid.Column="5" Text="Tab大小:" VerticalAlignment="Center" Margin="10,0,4,0" />
+                        <TextBox Grid.Row="2" Grid.Column="7" Text="{Binding TabSize, UpdateSourceTrigger=PropertyChanged, StringFormat=F2}" Style="{StaticResource SettingTextBoxStyle}" />
+
+                        <TextBlock Grid.Row="4" Text="表格行高:" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding ColumnMinHeight, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2" Text="表格行数:" VerticalAlignment="Center" Margin="10,0,4,0" />
+                        <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding PageRows, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Row="4" Grid.Column="4" Text="倒序:" VerticalAlignment="Center" Margin="10,0,4,0" />
+                        <CheckBox Grid.Row="4" Grid.Column="5" IsChecked="{Binding Descending}" VerticalAlignment="Center" />
+
+                        <TextBlock Grid.Row="6" Text="页面行数:" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding PageRows, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Row="6" Grid.Column="2" Grid.ColumnSpan="2" Text="首页偏移:" VerticalAlignment="Center" Margin="10,0,4,0" />
+                        <TextBox Grid.Row="6" Grid.Column="3" Text="{Binding FirstPageOffset, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="印章设置" Style="{StaticResource SectionTitleStyle}" />
+                <Border BorderBrush="#DFDFDF" BorderThickness="0,1,0,0" Padding="0,10,0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                            <ColumnDefinition Width="34" />
+                            <ColumnDefinition Width="76" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="印章坐标:" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="左" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="1" Text="{Binding SealLeft, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}" Margin="26,0,0,0" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="2" Text="上" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="3" Text="{Binding SealTop, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="4" Text="右" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="5" Text="{Binding SealRight, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBlock Grid.Column="6" Text="下" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,4,0" />
+                        <TextBox Grid.Column="7" Text="{Binding SealBottom, UpdateSourceTrigger=PropertyChanged, StringFormat=F0}" Style="{StaticResource SettingTextBoxStyle}" />
+
+                        <TextBlock Grid.Row="2" Text="印章大小:" VerticalAlignment="Center" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SealWidth, UpdateSourceTrigger=PropertyChanged, StringFormat=F2}" Style="{StaticResource SettingTextBoxStyle}" />
+                    </Grid>
+                </Border>
+
+                <TextBlock Text="表格设置" Style="{StaticResource SectionTitleStyle}" />
+                <Border BorderBrush="#DFDFDF" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="142" />
+                                <ColumnDefinition Width="18" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="70" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="56" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="单元格名字" Style="{StaticResource TableSettingHeaderStyle}" />
+                            <TextBlock Grid.Column="2" Text="宽度" Style="{StaticResource TableSettingHeaderStyle}" />
+                            <TextBlock Grid.Column="4" Text="字体大小" Style="{StaticResource TableSettingHeaderStyle}" />
+                            <TextBlock Grid.Column="6" Text="字体" Style="{StaticResource TableSettingHeaderStyle}" />
+                            <TextBlock Grid.Column="8" Text="行高" Style="{StaticResource TableSettingHeaderStyle}" />
+                        </Grid>
+
+                        <ScrollViewer MaxHeight="420"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Columns}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="142" />
+                                                <ColumnDefinition Width="18" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="12" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="12" />
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="12" />
+                                                <ColumnDefinition Width="56" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBox Grid.Column="0"
+                                                     Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                     HorizontalContentAlignment="Right"
+                                                     Style="{StaticResource SettingTextBoxStyle}" />
+                                            <TextBox Grid.Column="2"
+                                                     Text="{Binding Width, UpdateSourceTrigger=PropertyChanged, StringFormat=F2}"
+                                                     HorizontalContentAlignment="Center"
+                                                     Style="{StaticResource SettingTextBoxStyle}" />
+                                            <TextBox Grid.Column="4"
+                                                     Text="{Binding FontSize, UpdateSourceTrigger=PropertyChanged, StringFormat=F2}"
+                                                     HorizontalContentAlignment="Center"
+                                                     Style="{StaticResource SettingTextBoxStyle}" />
+                                            <TextBox Grid.Column="6"
+                                                     Text="{Binding FontFamily, UpdateSourceTrigger=PropertyChanged}"
+                                                     HorizontalContentAlignment="Center"
+                                                     Style="{StaticResource SettingTextBoxStyle}" />
+                                            <TextBox Grid.Column="8"
+                                                     Text="{Binding LineHeight, UpdateSourceTrigger=PropertyChanged}"
+                                                     HorizontalContentAlignment="Center"
+                                                     Style="{StaticResource SettingTextBoxStyle}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

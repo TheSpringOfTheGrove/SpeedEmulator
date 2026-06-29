@@ -31,15 +31,25 @@ public static class PrintTemplateQuestPdfConversionService
 
         var config = CreateConfig(bank, template);
         template.Config = config;
+        UpdateLayoutSnapshot(template);
+        return true;
+    }
+
+    public static PrintPdfConfig CreateDefaultConfig(Bank bank, PrintTemplate template)
+    {
+        return CreateConfig(bank, template);
+    }
+
+    public static void UpdateLayoutSnapshot(PrintTemplate template)
+    {
         template.QuestPdfLayoutData = JsonSerializer.Serialize(
             new QuestPdfLayoutSnapshot(
                 LayoutVersion,
                 template.Name,
                 template.PageSize,
                 template.PageRows,
-                config),
+                template.Config.Clone()),
             JsonOptions);
-        return true;
     }
 
     private static PrintPdfConfig CreateConfig(Bank bank, PrintTemplate template)
@@ -48,14 +58,12 @@ public static class PrintTemplateQuestPdfConversionService
         var pageSize = parsed?.PageSize ?? template.PageSize;
         var isPortrait = IsPortrait(pageSize);
         var existing = template.Config?.Clone() ?? new PrintPdfConfig();
-        var columns = parsed?.Columns.Count > 0
+        var hasExistingLayoutConfig = existing.Columns.Count > 0;
+        var columns = hasExistingLayoutConfig
+            ? existing.Columns.Select(item => item.Clone()).ToList()
+            : parsed?.Columns.Count > 0
             ? parsed.Columns
             : CreateColumnsFromBank(bank).ToList();
-
-        if (columns.Count == 0 && existing.Columns.Count > 0)
-        {
-            columns = existing.Columns.Select(item => item.Clone()).ToList();
-        }
 
         if (columns.Count == 0)
         {
@@ -75,15 +83,22 @@ public static class PrintTemplateQuestPdfConversionService
             Name = string.IsNullOrWhiteSpace(existing.Name) ? template.Name : existing.Name,
             Desc = existing.Desc,
             RowCount = template.PageRows > 0 ? template.PageRows : existing.RowCount,
-            MarginLeft = existing.MarginLeft > 0 ? existing.MarginLeft : parsed?.Margins.Left ?? (isPortrait ? 54 : 22),
-            MarginTop = existing.MarginTop > 0 ? existing.MarginTop : parsed?.Margins.Top ?? (isPortrait ? 54 : 22),
-            MarginRight = existing.MarginRight > 0 ? existing.MarginRight : parsed?.Margins.Right ?? (isPortrait ? 54 : 22),
-            MarginBottom = existing.MarginBottom > 0 ? existing.MarginBottom : parsed?.Margins.Bottom ?? (isPortrait ? 40 : 22),
+            MarginLeft = hasExistingLayoutConfig ? existing.MarginLeft : existing.MarginLeft > 0 ? existing.MarginLeft : parsed?.Margins.Left ?? (isPortrait ? 54 : 22),
+            MarginTop = hasExistingLayoutConfig ? existing.MarginTop : existing.MarginTop > 0 ? existing.MarginTop : parsed?.Margins.Top ?? (isPortrait ? 54 : 22),
+            MarginRight = hasExistingLayoutConfig ? existing.MarginRight : existing.MarginRight > 0 ? existing.MarginRight : parsed?.Margins.Right ?? (isPortrait ? 54 : 22),
+            MarginBottom = hasExistingLayoutConfig ? existing.MarginBottom : existing.MarginBottom > 0 ? existing.MarginBottom : parsed?.Margins.Bottom ?? (isPortrait ? 40 : 22),
             FontFamily = string.IsNullOrWhiteSpace(existing.FontFamily) ? "Microsoft YaHei" : existing.FontFamily,
-            HeaderFontSize = existing.HeaderFontSize > 0 ? existing.HeaderFontSize : isPortrait ? 7 : 8,
-            BodyFontSize = existing.BodyFontSize > 0 ? existing.BodyFontSize : isPortrait ? 5.2 : 6.2,
-            ColumnMinHeight = existing.ColumnMinHeight > 0 ? existing.ColumnMinHeight : isPortrait ? 13 : 15,
-            SealWidth = existing.SealWidth > 0 ? existing.SealWidth : isPortrait ? 86 : 104,
+            TabSize = existing.TabSize,
+            HeaderFontSize = hasExistingLayoutConfig ? existing.HeaderFontSize : existing.HeaderFontSize > 0 ? existing.HeaderFontSize : isPortrait ? 7 : 8,
+            BodyFontSize = hasExistingLayoutConfig ? existing.BodyFontSize : existing.BodyFontSize > 0 ? existing.BodyFontSize : isPortrait ? 5.2 : 6.2,
+            ColumnMinHeight = hasExistingLayoutConfig ? existing.ColumnMinHeight : existing.ColumnMinHeight > 0 ? existing.ColumnMinHeight : isPortrait ? 13 : 15,
+            Descending = existing.Descending,
+            FirstPageOffset = existing.FirstPageOffset,
+            SealLeft = existing.SealLeft,
+            SealTop = existing.SealTop,
+            SealRight = hasExistingLayoutConfig ? existing.SealRight : existing.SealRight <= 0 ? 70 : existing.SealRight,
+            SealBottom = existing.SealBottom,
+            SealWidth = hasExistingLayoutConfig ? existing.SealWidth : existing.SealWidth > 0 ? existing.SealWidth : isPortrait ? 86 : 104,
             Columns = columns
         };
     }

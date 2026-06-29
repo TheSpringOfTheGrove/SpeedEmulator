@@ -11,6 +11,7 @@ using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
 using SpeedEmulator.Repositories;
 using SpeedEmulator.Services;
+using SpeedEmulator.Views;
 
 namespace SpeedEmulator.ViewModels;
 
@@ -53,7 +54,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
         NewTemplateCommand = new AsyncRelayCommand(NewTemplateAsync);
         CopyTemplateCommand = new AsyncRelayCommand(CopyTemplateAsync);
-        SettingTemplateCommand = new AsyncRelayCommand(OpenTemplateDesignerAsync);
+        SettingTemplateCommand = new AsyncRelayCommand(OpenTemplateEditorAsync);
         SaveTemplateCommand = new AsyncRelayCommand(SaveTemplateAsync);
         ImportTemplateCommand = new AsyncRelayCommand(ImportTemplateAsync);
         ExportTemplateCommand = new AsyncRelayCommand(ExportTemplateAsync);
@@ -78,7 +79,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             if (SetProperty(ref selectedTemplate, value))
             {
                 StatusMessage = value is null ? "请选择打印模板" : $"当前模板：{value.Name}";
-                if (value is not null && !suppressAutoPreview && !string.IsNullOrWhiteSpace(PreviewPath))
+                if (value is not null && !suppressAutoPreview)
                 {
                     if (IsBusy)
                     {
@@ -145,12 +146,17 @@ public sealed class PrintPreviewViewModel : ObservableObject
         }
 
         IsBusy = true;
+        suppressAutoPreview = true;
         try
         {
-            await ReloadTemplatesAsync();
-            if (SelectedTemplate is null)
+            await ReloadTemplatesAsync(selectFallback: false);
+            if (Templates.Count == 0)
             {
                 StatusMessage = "没有可用打印模板";
+            }
+            else
+            {
+                StatusMessage = "\u8bf7\u9009\u62e9\u6253\u5370\u6a21\u677f";
             }
         }
         catch (Exception ex)
@@ -160,12 +166,8 @@ public sealed class PrintPreviewViewModel : ObservableObject
         }
         finally
         {
+            suppressAutoPreview = false;
             IsBusy = false;
-        }
-
-        if (SelectedTemplate is not null)
-        {
-            await GeneratePreviewAsync();
         }
     }
 
@@ -187,6 +189,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         {
             await EnsureQuestPdfLayoutAsync(SelectedTemplate);
             PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(SelectedTemplate));
+            OnPropertyChanged(nameof(PreviewPath));
             StatusMessage = $"预览已生成：{PreviewPath}";
         }
         catch (Exception ex)
@@ -317,7 +320,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         var template = CreateBlankTemplate();
         if (!TryCreateBlankEditableTemplate(template))
         {
-            MessageBox.Show("没有可用的真诚模板，无法新增可编辑模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("没有可用的模板，无法新增可编辑模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -338,30 +341,174 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        var template = SelectedTemplate!.Clone();
-        if (string.IsNullOrWhiteSpace(template.PdfData))
+        var selectedTemplate = SelectedTemplate!;
+        var template = selectedTemplate.Clone();
+        if (ShouldRefreshBlankEditableShell(template))
         {
-            var source = GetTemplateSource(SelectedTemplate);
-            if (source is null || string.IsNullOrWhiteSpace(source.PdfData))
+            template.PdfData = string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(template.PdfData) && !TryHydrateTemplateData(template))
+        {
+            var source = GetTemplateSource(selectedTemplate);
+            if (source is not null && !string.IsNullOrWhiteSpace(source.PdfData))
             {
-                MessageBox.Show("当前模板缺少可复制的真诚模板数据，请先复制或导入一个真诚模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                template = source.Clone();
+                template.Name = selectedTemplate.Name;
+                template.PageRows = selectedTemplate.PageRows;
+                template.Remark = selectedTemplate.Remark;
+                template.Config = selectedTemplate.Config.Clone();
+            }
+            else if (CanCopyAsConfigTemplate(template))
+            {
+                template.PdfData = string.Empty;
+                template.QuestPdfLayoutData = string.Empty;
+            }
+            else
+            {
+                MessageBox.Show("当前模板缺少可复制的模板数据，请先选择一个可复制模板或导入模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-
-            template = source.Clone();
-            template.Name = SelectedTemplate.Name;
-            template.PageRows = SelectedTemplate.PageRows;
-            template.Remark = SelectedTemplate.Remark;
-            template.Config = SelectedTemplate.Config.Clone();
         }
+
         template.Id = 0;
         template.BankId = Bank.Id;
         template.IsSystem = false;
         template.Name = CreateUniqueTemplateName($"{template.Name}-复制");
         await EnsureQuestPdfLayoutAsync(template);
+
         await templateRepository.SaveAsync(Bank, template);
         await ReloadTemplatesAsync(template.Name);
         MessageBox.Show("复制模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async Task OpenTemplateEditorAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        var selectedTemplate = SelectedTemplate!;
+        if (!IsSavedQuestPdfConfigTemplate(selectedTemplate))
+        {
+            TryHydrateTemplateData(selectedTemplate, requirePdfData: false);
+        }
+
+        if (ShouldOpenTemplateDesigner(selectedTemplate))
+        {
+            await OpenTemplateDesignerAsync();
+            return;
+        }
+
+        await OpenTemplateSettingsAsync();
+    }
+
+    private async Task OpenTemplateSettingsAsync()
+    {
+        if (!EnsureTemplateSelected())
+        {
+            return;
+        }
+
+        var selectedTemplate = SelectedTemplate!;
+        if (IsTemplateSettingsReadonly(selectedTemplate))
+        {
+            MessageBox.Show("当前模板不支持参数设置，请选择可设置模板或复制成自定义模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (IsBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            TryHydrateTemplateData(selectedTemplate, requirePdfData: false);
+            await EnsureQuestPdfLayoutAsync(selectedTemplate);
+
+            var viewModel = new PrintTemplateSettingsViewModel(
+                Bank,
+                selectedTemplate,
+                async settings => await UpdatePreviewFromSettingsAsync(selectedTemplate, settings),
+                async settings =>
+                {
+                    if (await UpdatePreviewFromSettingsAsync(selectedTemplate, settings) && !string.IsNullOrWhiteSpace(PreviewPath))
+                    {
+                        OpenPdf();
+                    }
+                },
+                async settings => await SaveSettingsTemplateAsync(selectedTemplate, settings));
+            var owner = Application.Current?.Windows.OfType<Window>().FirstOrDefault(window => window.IsActive);
+            var window = new PrintTemplateSettingsWindow(viewModel)
+            {
+                Owner = owner,
+                Left = 60,
+                Top = 20
+            };
+
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"设置模板失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task<bool> UpdatePreviewFromSettingsAsync(PrintTemplate template, PrintTemplateSettingsViewModel settings)
+    {
+        if (IsBusy)
+        {
+            return false;
+        }
+
+        IsBusy = true;
+        try
+        {
+            settings.ApplyTo(template);
+            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(template));
+            OnPropertyChanged(nameof(PreviewPath));
+            StatusMessage = $"预览已生成：{PreviewPath}";
+            return true;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task SaveSettingsTemplateAsync(PrintTemplate template, PrintTemplateSettingsViewModel settings)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            if (template.IsSystem || template.Id <= 0)
+            {
+                MessageBox.Show("系统模板不能保存，请先复制成自定义模板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            settings.ApplyTo(template);
+            await templateRepository.SaveAsync(Bank, template);
+            StatusMessage = $"模板已设置：{template.Name}";
+            MessageBox.Show("保存成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     private async Task OpenTemplateDesignerAsync()
@@ -379,13 +526,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
         if (!await EnsureTemplateHasPdfDataAsync(SelectedTemplate))
         {
-            MessageBox.Show("当前模板不是可编辑的真诚模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("当前模板不是可编辑模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(SelectedTemplate.PdfData))
         {
-            MessageBox.Show("当前模板不是可编辑的真诚模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("当前模板不是可编辑模板", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -405,6 +552,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
         {
             var before = TemplateSnapshot.From(SelectedTemplate);
             zhenchengPrintBridgeService.OpenTemplateDesigner(SelectedTemplate);
+            if (string.IsNullOrWhiteSpace(SelectedTemplate.PdfData) || ShouldRefreshBlankEditableShell(SelectedTemplate))
+            {
+                before.Restore(SelectedTemplate);
+                MessageBox.Show("模板未保存：设计器返回了空白模板数据，请重新打开模板后再试。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             SelectedTemplate.QuestPdfLayoutData = string.Empty;
             var after = TemplateSnapshot.From(SelectedTemplate);
             if (!before.Equals(after))
@@ -435,6 +589,16 @@ public sealed class PrintPreviewViewModel : ObservableObject
             IsBusy = false;
         }
 
+    }
+
+    private static bool IsTemplateSettingsReadonly(PrintTemplate template)
+    {
+        return template.IsSystem && !string.IsNullOrWhiteSpace(template.PdfData);
+    }
+
+    private static bool ShouldOpenTemplateDesigner(PrintTemplate template)
+    {
+        return !string.IsNullOrWhiteSpace(template.PdfData);
     }
 
     private async Task SaveTemplateAsync()
@@ -559,7 +723,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         MessageBox.Show("删除模板成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private async Task ReloadTemplatesAsync(string? preferredName = null, long? preferredId = null)
+    private async Task ReloadTemplatesAsync(string? preferredName = null, long? preferredId = null, bool selectFallback = true)
     {
         Templates.Clear();
         var templates = await templateRepository.ListByBankAsync(Bank);
@@ -576,7 +740,10 @@ public sealed class PrintPreviewViewModel : ObservableObject
             ? Templates.FirstOrDefault(item => string.Equals(item.Name, preferredName, StringComparison.Ordinal))
             : null;
 
-        SelectedTemplate ??= Templates.FirstOrDefault();
+        if (selectFallback)
+        {
+            SelectedTemplate ??= Templates.FirstOrDefault();
+        }
     }
 
     private bool EnsureTemplateSelected()
@@ -637,6 +804,12 @@ public sealed class PrintPreviewViewModel : ObservableObject
             && zhenchengPrintBridgeService.TryCreateBlankTemplate(template);
     }
 
+    private bool TryHydrateTemplateData(PrintTemplate template, bool requirePdfData = true)
+    {
+        return printPdfService is ZhenchengPrintBridgeService zhenchengPrintBridgeService
+            && zhenchengPrintBridgeService.TryHydrateTemplate(CreateContext(template), template, requirePdfData);
+    }
+
     private async Task EnsureQuestPdfLayoutAsync(PrintTemplate? template)
     {
         if (template is null)
@@ -659,15 +832,32 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
-        if (!template.IsSystem && template.Id > 0)
+        if (template.Id > 0)
         {
             await templateRepository.SaveAsync(Bank, template);
         }
     }
 
+    private static bool IsSavedQuestPdfConfigTemplate(PrintTemplate template)
+    {
+        return template.Id > 0
+            && template.VendorId <= 0
+            && string.IsNullOrWhiteSpace(template.PdfData)
+            && template.Config.Columns.Count > 0;
+    }
+
     private async Task<bool> EnsureTemplateHasPdfDataAsync(PrintTemplate? template)
     {
-        if (template is null || !string.IsNullOrWhiteSpace(template.PdfData))
+        if (template is null)
+        {
+            return true;
+        }
+
+        if (ShouldRefreshBlankEditableShell(template))
+        {
+            template.PdfData = string.Empty;
+        }
+        else if (!string.IsNullOrWhiteSpace(template.PdfData))
         {
             return true;
         }
@@ -677,8 +867,19 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return false;
         }
 
+        if (TryHydrateTemplateData(template))
+        {
+            await EnsureQuestPdfLayoutAsync(template);
+            if (template.Id > 0)
+            {
+                await templateRepository.SaveAsync(Bank, template);
+            }
+
+            return true;
+        }
+
         var source = GetTemplateSource(template);
-        if (source is null)
+        if (source is null || string.IsNullOrWhiteSpace(source.PdfData))
         {
             return false;
         }
@@ -701,15 +902,52 @@ public sealed class PrintPreviewViewModel : ObservableObject
         return true;
     }
 
+    private static bool ShouldRefreshBlankEditableShell(PrintTemplate template)
+    {
+        if (!IsDerivedTemplateName(template.Name) || string.IsNullOrWhiteSpace(template.PdfData))
+        {
+            return false;
+        }
+
+        var data = template.PdfData;
+        return data.Length < 12_000
+            && data.Contains("<BusinessObjects isList=\"true\" count=\"0\"", StringComparison.Ordinal)
+            && data.Contains("<Components isList=\"true\" count=\"0\"", StringComparison.Ordinal)
+            && !data.Contains("StiText", StringComparison.Ordinal)
+            && !data.Contains("DataBand", StringComparison.Ordinal);
+    }
+
+    private static bool IsDerivedTemplateName(string name)
+    {
+        return name.Contains("-复制", StringComparison.Ordinal)
+            || name.Contains("_复制", StringComparison.Ordinal)
+            || name.Contains(" 复制", StringComparison.Ordinal)
+            || name.Contains("-导入", StringComparison.Ordinal)
+            || name.Contains("-改", StringComparison.Ordinal)
+            || name.Contains("_改", StringComparison.Ordinal)
+            || name.Contains(" 改", StringComparison.Ordinal);
+    }
+
+    private bool CanCopyAsConfigTemplate(PrintTemplate template)
+    {
+        return template.Config.Columns.Count > 0
+            || Bank.FlowColumns.Any(item => item.Show && !string.IsNullOrWhiteSpace(item.Field));
+    }
+
     private PrintTemplate? GetTemplateSource(PrintTemplate? preferred)
     {
-        if (preferred is not null && !string.IsNullOrWhiteSpace(preferred.PdfData))
+        if (preferred is not null
+            && !string.IsNullOrWhiteSpace(preferred.PdfData)
+            && !ShouldRefreshBlankEditableShell(preferred))
         {
             return preferred;
         }
 
         var candidates = Templates
-            .Where(item => !ReferenceEquals(item, preferred) && !string.IsNullOrWhiteSpace(item.PdfData))
+            .Where(item =>
+                !ReferenceEquals(item, preferred)
+                && !string.IsNullOrWhiteSpace(item.PdfData)
+                && !ShouldRefreshBlankEditableShell(item))
             .ToList();
 
         if (preferred is not null && preferred.PageRows > 0)
@@ -848,6 +1086,15 @@ public sealed class PrintPreviewViewModel : ObservableObject
         public static TemplateSnapshot From(PrintTemplate template)
         {
             return new TemplateSnapshot(template.Name, template.PageRows, template.Remark, template.PdfData, template.QuestPdfLayoutData);
+        }
+
+        public void Restore(PrintTemplate template)
+        {
+            template.Name = Name;
+            template.PageRows = PageRows;
+            template.Remark = Remark;
+            template.PdfData = PdfData;
+            template.QuestPdfLayoutData = QuestPdfLayoutData;
         }
     }
 }
