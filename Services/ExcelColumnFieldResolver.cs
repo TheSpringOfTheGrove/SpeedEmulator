@@ -33,7 +33,8 @@ public static class ExcelColumnFieldResolver
     {
         return columnName switch
         {
-            "ID" or "序号" => (nameof(FlowRecord.Index), "Text"),
+            "ID" => (nameof(FlowRecord.Index), "Text"),
+            "序号" => (nameof(FlowRecord.SequenceNum), "Text"),
             "日期" or "时间" or "交易日期" or "交易时间" or "记账时间" or "记帐日期" or "记账日期" or "工作日期" or "记账日" => (nameof(FlowRecord.AccountTime), "DateTime"),
             "交易金额" or "金额" or "发生额" or "借贷方发生额" => (nameof(FlowRecord.TradeMoney), "Money"),
             "收入" or "存入" or "存入金额" or "贷方" or "贷方发生额" or "贷方交易金额" => (nameof(FlowRecord.CreditAmount), "Money"),

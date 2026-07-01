@@ -13,8 +13,9 @@ public sealed class LoginViewModel : ObservableObject
     private readonly IFrontApiClient frontApiClient;
     private readonly IMachineIdService machineIdService;
     private readonly INetworkLocationService networkLocationService;
-    private string email = "demo@qq.com";
-    private bool remindMe = true;
+    private readonly ILoginCredentialStore credentialStore;
+    private string email = string.Empty;
+    private bool remindMe;
     private bool logining;
     private string statusMessage = "输入邮箱/手机号和密码后登录";
 
@@ -23,13 +24,24 @@ public sealed class LoginViewModel : ObservableObject
         Action<FrontSession> onLoginSucceeded,
         IFrontApiClient frontApiClient,
         IMachineIdService machineIdService,
-        INetworkLocationService networkLocationService)
+        INetworkLocationService networkLocationService,
+        ILoginCredentialStore credentialStore)
     {
         this.getPassword = getPassword;
         this.onLoginSucceeded = onLoginSucceeded;
         this.frontApiClient = frontApiClient;
         this.machineIdService = machineIdService;
         this.networkLocationService = networkLocationService;
+        this.credentialStore = credentialStore;
+
+        var credentials = credentialStore.Load();
+        if (credentials is not null)
+        {
+            email = credentials.Account;
+            InitialPassword = credentials.Password;
+            remindMe = true;
+        }
+
         LoginCommand = new AsyncRelayCommand(LoginAsync, CanLogin);
     }
 
@@ -68,6 +80,8 @@ public sealed class LoginViewModel : ObservableObject
         get => statusMessage;
         private set => SetProperty(ref statusMessage, value);
     }
+
+    public string InitialPassword { get; } = string.Empty;
 
     public ICommand LoginCommand { get; }
 
@@ -108,6 +122,15 @@ public sealed class LoginViewModel : ObservableObject
                 location.LoginRegion);
             var name = string.IsNullOrWhiteSpace(session.DisplayName) ? session.Account : session.DisplayName;
             StatusMessage = $"{name} 登录成功，正在进入首页...";
+            if (RemindMe)
+            {
+                credentialStore.Save(account, password);
+            }
+            else
+            {
+                credentialStore.Clear();
+            }
+
             onLoginSucceeded(session);
         }
         catch (FrontApiException ex)

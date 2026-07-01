@@ -55,7 +55,6 @@
                          Grid.Column="1"
                          Height="32"
                          Padding="8,5"
-                         Password="Aa123456!"
                          BorderBrush="#D8DDE0"
                          KeyDown="PasswordInput_KeyDown" />
         </Grid>

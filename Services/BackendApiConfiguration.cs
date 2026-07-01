@@ -5,7 +5,7 @@ namespace SpeedEmulator.Services;
 
 public sealed class BackendApiOptions
 {
-    public const string DefaultBaseAddress = "http://localhost:8088";
+    public const string DefaultBaseAddress = "http://159.75.125.68:8088";
 
     public string BaseAddress { get; set; } = DefaultBaseAddress;
 

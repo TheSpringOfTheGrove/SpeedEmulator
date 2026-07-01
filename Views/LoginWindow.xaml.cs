@@ -23,8 +23,10 @@ public partial class LoginWindow : Window
             OpenMainWindow,
             frontApiClient,
             new MachineIdService(),
-            new NetworkLocationService());
+            new NetworkLocationService(),
+            new LoginCredentialStore());
         DataContext = viewModel;
+        PasswordInput.Password = viewModel.InitialPassword;
     }
 
     private void PasswordInput_KeyDown(object sender, KeyEventArgs e)
