@@ -384,6 +384,23 @@ public partial class BankUsersWindow : Window
 
     private static DataGridTemplateColumn CreateDateColumn(SpeedEmulator.Models.ColumnDefinition column)
     {
+        static FrameworkElementFactory CreateTextFactory(string field)
+        {
+            var binding = new Binding(CreateBindingPath(field))
+            {
+                Mode = BindingMode.OneWay,
+                StringFormat = "yyyy-MM-dd HH:mm:ss"
+            };
+            ApplyExtraDateFieldConverter(binding, field);
+
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, binding);
+            text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Left);
+            text.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            text.SetValue(TextBlock.PaddingProperty, new Thickness(8, 0, 0, 0));
+            return text;
+        }
+
         static FrameworkElementFactory CreatePickerFactory(string field)
         {
             var bindingPath = CreateBindingPath(field);
@@ -396,6 +413,7 @@ public partial class BankUsersWindow : Window
 
             var picker = new FrameworkElementFactory(typeof(FormattedDatePicker));
             picker.SetBinding(FormattedDatePicker.SelectedDateProperty, binding);
+            picker.SetValue(FormattedDatePicker.DisplayFormatProperty, "yyyy-MM-dd HH:mm:ss");
             picker.SetValue(FrameworkElement.HeightProperty, 26d);
             picker.SetValue(Control.FontSizeProperty, 13d);
             picker.SetValue(Control.PaddingProperty, new Thickness(4, 0, 4, 0));
@@ -408,11 +426,11 @@ public partial class BankUsersWindow : Window
         return new DataGridTemplateColumn
         {
             Header = column.Name,
-            CellTemplate = new DataTemplate { VisualTree = CreatePickerFactory(column.Field!) },
+            CellTemplate = new DataTemplate { VisualTree = CreateTextFactory(column.Field!) },
             CellEditingTemplate = new DataTemplate { VisualTree = CreatePickerFactory(column.Field!) },
             Width = new DataGridLength(Math.Max(column.Width, 120)),
             MinWidth = 120,
-            IsReadOnly = true
+            IsReadOnly = false
         };
     }
 

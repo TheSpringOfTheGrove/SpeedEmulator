@@ -34,6 +34,8 @@ public sealed class TableExcelService : ITableExcelService
     private const int HeaderCellStyleIndex = 1;
     private const int TextCellStyleIndex = 2;
     private const int MoneyCellStyleIndex = 3;
+    private const string ExportDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
+    private static readonly string[] DateColumnMarkers = ["\u65e5\u671f", "\u65f6\u95f4", "date", "time"];
 
     public string? PickImportFile()
     {
@@ -511,7 +513,7 @@ public sealed class TableExcelService : ITableExcelService
 
         if (TryGetIndexerField(column.Field, out var indexerField))
         {
-            return GetIndexerValue(entity, indexerField);
+            return FormatCellValue(GetIndexerValue(entity, indexerField), column);
         }
 
         if (entity is FlowRecord record)
@@ -519,12 +521,12 @@ public sealed class TableExcelService : ITableExcelService
             var derived = GetDerivedFlowValue(record, column.Field);
             if (derived is not null)
             {
-                return FormatCellValue(derived, column.Type);
+                return FormatCellValue(derived, column);
             }
         }
 
         var property = GetEntityProperty(entity.GetType(), column.Field);
-        return FormatCellValue(property?.GetValue(entity), column.Type);
+        return FormatCellValue(property?.GetValue(entity), column);
     }
 
     private static object? GetDerivedFlowValue(FlowRecord record, string field)
@@ -552,13 +554,15 @@ public sealed class TableExcelService : ITableExcelService
         return null;
     }
 
-    private static object? FormatCellValue(object? value, string? columnType)
+    private static object? FormatCellValue(object? value, ColumnDefinition column)
     {
         return value switch
         {
             null => null,
-            DateTime dateTime => dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-            DateTimeOffset dateTimeOffset => dateTimeOffset.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            DateTime dateTime => dateTime.ToString(ExportDateTimeFormat, CultureInfo.InvariantCulture),
+            DateTimeOffset dateTimeOffset => dateTimeOffset.ToString(ExportDateTimeFormat, CultureInfo.InvariantCulture),
+            string text when IsDateLikeColumn(column) && TryParseDateTime(text, out var parsedDateTime) =>
+                parsedDateTime.ToString(ExportDateTimeFormat, CultureInfo.InvariantCulture),
             bool boolean => boolean,
             decimal decimalValue => decimalValue,
             double doubleValue => doubleValue,
@@ -567,6 +571,27 @@ public sealed class TableExcelService : ITableExcelService
             long longValue => longValue,
             _ => Convert.ToString(value, CultureInfo.InvariantCulture)
         };
+    }
+
+    private static bool IsDateLikeColumn(ColumnDefinition column)
+    {
+        if (string.Equals(column.Type, "Date", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(column.Type, "DateTime", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return ContainsDateMarker(column.Name) || ContainsDateMarker(column.Field);
+    }
+
+    private static bool ContainsDateMarker(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return DateColumnMarkers.Any(marker => value.Contains(marker, StringComparison.OrdinalIgnoreCase));
     }
 
     private static void NormalizeImportedFlowRecord(FlowRecord record, Bank bank, BankUser bankUser)
@@ -728,12 +753,16 @@ public sealed class TableExcelService : ITableExcelService
             "yyyy-M-d H:mm:ss",
             "yyyy/MM/dd HH:mm:ss",
             "yyyy/M/d H:mm:ss",
+            "yyyy\u5e74MM\u6708dd\u65e5 HH:mm:ss",
+            "yyyy\u5e74M\u6708d\u65e5 H:mm:ss",
             "yyyy年MM月dd日 HH:mm:ss",
             "yyyy年M月d日 H:mm:ss",
             "yyyy-MM-dd",
             "yyyy-M-d",
             "yyyy/MM/dd",
             "yyyy/M/d",
+            "yyyy\u5e74MM\u6708dd\u65e5",
+            "yyyy\u5e74M\u6708d\u65e5",
             "yyyy年MM月dd日",
             "yyyy年M月d日"
         };
