@@ -16,6 +16,11 @@ namespace SpeedEmulator.Services;
 public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 {
     private static readonly object SyncRoot = new();
+    private static readonly HashSet<string> AgriculturalPaperWideDetailPropertyNames = new(StringComparer.Ordinal)
+    {
+        nameof(FlowRecord.Remark)
+    };
+
     private static VendorBridge? bridge;
 
     private readonly IPrintPdfService? fallbackService;
@@ -775,7 +780,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
                 Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
                 ApplyResolvedFlowTextFields(target, context.Bank, source, values);
-                ApplyTemplateSpecificFlowTextLimits(context, target);
+                ApplyTemplateSpecificFlowTextLimits(context, source, values, target);
                 records.Add(target);
             }
 
@@ -1345,7 +1350,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
                 Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
                 ApplyResolvedFlowTextFields(target, context.Bank, source, values);
-                ApplyTemplateSpecificFlowTextLimits(context, target);
+                ApplyTemplateSpecificFlowTextLimits(context, source, values, target);
                 records.Add(target);
             }
 
@@ -2079,7 +2084,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "CreditAmount", source.CreditAmount ?? (tradeMoney > 0 ? tradeMoney : null));
                 Set(target, "DebitAmount", source.DebitAmount ?? (tradeMoney < 0 ? Math.Abs(tradeMoney) : null));
                 ApplyResolvedFlowTextFields(target, context.Bank, source, values);
-                ApplyTemplateSpecificFlowTextLimits(context, target);
+                ApplyTemplateSpecificFlowTextLimits(context, source, values, target);
                 records.Add(target);
             }
 
@@ -2323,51 +2328,267 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, nameof(FlowRecord.Remark), remark);
     }
 
-    private static void ApplyTemplateSpecificFlowTextLimits(PrintRenderContext context, object target)
+    private static void ApplyTemplateSpecificFlowTextLimits(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
     {
         if (!IsAgriculturalBankPersonalPaperTemplate(context))
         {
             return;
         }
 
-        TrimTextProperty(target, nameof(FlowRecord.ProductBrief), 8);
-        TrimTextProperty(target, nameof(FlowRecord.OppositeAccount), 14);
-        TrimTextProperty(target, nameof(FlowRecord.OppositeUsername), 8);
-        TrimTextProperty(target, nameof(FlowRecord.OppositeBank), 8);
-        TrimTextProperty(target, nameof(FlowRecord.Usage), 8);
-        TrimTextProperty(target, nameof(FlowRecord.Remark), 8);
-        TrimTextProperty(target, nameof(FlowRecord.TradeExplain), 8);
-        TrimTextProperty(target, nameof(FlowRecord.TradePlace), 8);
+        MoveAgriculturalPaperLongDetailToWideField(source, values, target);
         TrimTextProperty(target, nameof(FlowRecord.NetNum), 8);
-        TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 8);
-        TrimAllStringProperties(target, 14, new Dictionary<string, int>(StringComparer.Ordinal)
+        TrimTextProperty(target, nameof(FlowRecord.TradePlace), 8);
+        TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.SerialNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.SequenceNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.LogNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.OppositeBank), 8);
+    }
+
+    private static void MoveAgriculturalPaperLongDetailToWideField(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var rawWideDetail = GetAgriculturalPaperLongDetailCandidates(source, values, target)
+            .Select(NormalizeSingleLinePrintText)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .FirstOrDefault(LooksLikeLongPaperDetail);
+        if (string.IsNullOrWhiteSpace(rawWideDetail))
         {
-            [nameof(FlowRecord.ProductBrief)] = 8,
-            [nameof(FlowRecord.OppositeUsername)] = 8,
-            [nameof(FlowRecord.OppositeBank)] = 8,
-            [nameof(FlowRecord.Usage)] = 8,
-            [nameof(FlowRecord.Remark)] = 8,
-            [nameof(FlowRecord.TradeExplain)] = 8,
-            [nameof(FlowRecord.TradePlace)] = 8,
-            [nameof(FlowRecord.NetNum)] = 8,
-            [nameof(FlowRecord.VoucherNum)] = 8,
-            [nameof(FlowRecord.OppositeAccount)] = 14,
-            [nameof(FlowRecord.SerialNum)] = 14,
-            [nameof(FlowRecord.LogNum)] = 14,
-            [nameof(FlowRecord.MerchantName)] = 14,
-            [nameof(FlowRecord.AccountNum)] = 14,
-            [nameof(FlowRecord.SubAccountNum)] = 14,
-            [nameof(FlowRecord.ReceiptNum)] = 14
-        });
+            return;
+        }
+
+        var safeWideDetail = InsertSoftLineBreaks(rawWideDetail, 12);
+        SetAgriculturalPaperWideDetail(target, safeWideDetail);
+        RestoreAgriculturalPaperCounterpartyFields(source, values, target);
+
+        ClearAgriculturalPaperNarrowDetailFields(target);
+        ClearAgriculturalPaperUnsafeLongTextFields(target, rawWideDetail, safeWideDetail);
+    }
+
+    private static IEnumerable<string> GetAgriculturalPaperLongDetailCandidates(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        yield return source.Remark;
+        yield return source.TradeExplain;
+        yield return source.Usage;
+        yield return source.MerchantName;
+
+        foreach (var fieldName in new[]
+                 {
+                     nameof(FlowRecord.Remark),
+                     nameof(FlowRecord.TradeExplain),
+                     nameof(FlowRecord.Usage),
+                     nameof(FlowRecord.MerchantName),
+                     "TradeMemo",
+                     "Description",
+                     "Note",
+                     "Postscript",
+                     "AdditionalInfo",
+                     "AttachedInfo",
+                     "AppendInfo",
+                     "MerchantOrderNo",
+                     "MerchantOrderNum",
+                     "MerchantNo"
+                 })
+        {
+            yield return GetValue(values, fieldName) ?? string.Empty;
+            yield return ReadStringProperty(target, fieldName, string.Empty);
+        }
+
+        foreach (var item in source.ExtraFields)
+        {
+            if (IsAgriculturalPaperLongDetailFieldName(item.Key))
+            {
+                yield return item.Value;
+            }
+        }
+    }
+
+    private static bool IsAgriculturalPaperLongDetailFieldName(string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+        {
+            return false;
+        }
+
+        return fieldName.Contains("\u5907\u6CE8", StringComparison.Ordinal)
+            || fieldName.Contains("\u9644\u8A00", StringComparison.Ordinal)
+            || fieldName.Contains("\u7559\u8A00", StringComparison.Ordinal)
+            || fieldName.Contains("\u8BF4\u660E", StringComparison.Ordinal)
+            || fieldName.Contains("\u7528\u9014", StringComparison.Ordinal)
+            || fieldName.Contains("\u5546\u6237", StringComparison.Ordinal)
+            || fieldName.Contains("\u5546\u5BB6", StringComparison.Ordinal)
+            || fieldName.Contains("\u4EA4\u6613\u5BF9\u65B9", StringComparison.Ordinal)
+            || fieldName.Contains("\u5BF9\u65B9\u6237\u540D", StringComparison.Ordinal)
+            || fieldName.Contains("\u5BF9\u65B9\u540D\u79F0", StringComparison.Ordinal)
+            || fieldName.Contains("\u6237\u540D", StringComparison.Ordinal);
+    }
+
+    private static void SetAgriculturalPaperWideDetail(object target, string wideDetail)
+    {
+        Set(target, nameof(FlowRecord.Remark), wideDetail);
+    }
+
+    private static void RestoreAgriculturalPaperCounterpartyFields(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var oppositeUsername = FirstNotBlank(
+            source.OppositeUsername,
+            GetValue(values, nameof(FlowRecord.OppositeUsername)),
+            GetValue(values, "OppositeUserName"),
+            GetValue(values, "OppositeName"),
+            GetValue(values, "CounterpartyName"));
+        if (!string.IsNullOrWhiteSpace(oppositeUsername))
+        {
+            Set(target, nameof(FlowRecord.OppositeUsername), NormalizeSingleLinePrintText(oppositeUsername));
+        }
+
+        var oppositeAccount = FirstNotBlank(
+            source.OppositeAccount,
+            GetValue(values, nameof(FlowRecord.OppositeAccount)),
+            GetValue(values, "CounterpartyAccount"),
+            GetValue(values, "OtherAccount"));
+        if (!string.IsNullOrWhiteSpace(oppositeAccount))
+        {
+            Set(target, nameof(FlowRecord.OppositeAccount), NormalizePrintNumber(oppositeAccount));
+        }
+    }
+
+    private static void ClearAgriculturalPaperNarrowDetailFields(object target)
+    {
+        foreach (var propertyName in new[]
+                 {
+                     nameof(FlowRecord.TradeExplain),
+                     nameof(FlowRecord.Usage),
+                     nameof(FlowRecord.MerchantName),
+                     nameof(FlowRecord.OppositeBank),
+                     "MerchantOrderNo",
+                     "MerchantOrderNum",
+                     "MerchantNo",
+                     "AccountNameAndNumber",
+                     "AccountAndName",
+                     "OppositeAccountAndName",
+                     "CounterpartyAccountAndName"
+                 })
+        {
+            ClearStringPropertyIfLongPaperDetail(target, propertyName);
+        }
+    }
+
+    private static void ClearAgriculturalPaperUnsafeLongTextFields(object target, params string[] unsafeTexts)
+    {
+        var normalizedUnsafeTexts = unsafeTexts
+            .Select(NormalizeSingleLinePrintText)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var property in target.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanRead || !property.CanWrite || property.PropertyType != typeof(string))
+            {
+                continue;
+            }
+
+            if (AgriculturalPaperWideDetailPropertyNames.Contains(property.Name))
+            {
+                continue;
+            }
+
+            if (string.Equals(property.Name, nameof(FlowRecord.OppositeUsername), StringComparison.Ordinal)
+                || string.Equals(property.Name, nameof(FlowRecord.OppositeAccount), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = property.GetValue(target) as string;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            var normalizedText = NormalizeSingleLinePrintText(text);
+            if (normalizedUnsafeTexts.Any(unsafeText => string.Equals(normalizedText, unsafeText, StringComparison.Ordinal))
+                || LooksLikeLongPaperDetail(normalizedText))
+            {
+                property.SetValue(target, string.Empty);
+            }
+        }
+    }
+
+    private static bool LooksLikeLongPaperDetail(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var normalizedText = NormalizeSingleLinePrintText(text);
+        if (normalizedText.Length < 20)
+        {
+            return false;
+        }
+
+        var consecutiveLettersOrDigits = 0;
+        foreach (var character in normalizedText)
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                consecutiveLettersOrDigits++;
+                if (consecutiveLettersOrDigits >= 12)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                consecutiveLettersOrDigits = 0;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ClearStringPropertyIfLongPaperDetail(object target, string propertyName)
+    {
+        var current = NormalizeSingleLinePrintText(ReadStringProperty(target, propertyName, string.Empty));
+        if (LooksLikeLongPaperDetail(current))
+        {
+            Set(target, propertyName, string.Empty);
+        }
+    }
+
+    private static string ReadStringProperty(object target, string propertyName, string fallback)
+    {
+        var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        var value = property?.GetValue(target);
+        var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+        return string.IsNullOrWhiteSpace(text) ? fallback : text;
     }
 
     private static bool IsAgriculturalBankPersonalPaperTemplate(PrintRenderContext context)
     {
-        // Copied/imported agricultural paper templates can lose their vendor
-        // bank id or system flag. The template name itself is enough to keep
-        // them on the vendor-compatible renderer; the generic QuestPDF fallback
-        // cannot reliably fit these dense paper layouts.
-        return context.Template.Name.Contains("\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+        var templateName = context.Template.Name ?? string.Empty;
+        var bankName = context.Bank.Name ?? string.Empty;
+        var isAgriculturalBank = context.Bank.Id == 11
+            || context.Template.BankId == 11
+            || context.Template.VendorBankId == 55
+            || bankName.Contains("\u519C\u884C", StringComparison.Ordinal)
+            || templateName.Contains("\u519C\u884C", StringComparison.Ordinal);
+        var isPersonalPaper = templateName.Contains("\u4E2A\u4EBA", StringComparison.Ordinal)
+            && templateName.Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+
+        return isAgriculturalBank && isPersonalPaper;
     }
 
     private static void TrimTextProperty(object target, string propertyName, int maxLength)
@@ -2421,6 +2642,39 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 property.SetValue(target, limitedText);
             }
         }
+    }
+
+    private static string InsertSoftLineBreaks(string text, int runLength)
+    {
+        if (runLength <= 0 || string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        text = text.Replace("\u200B", string.Empty, StringComparison.Ordinal);
+        var builder = new StringBuilder(text.Length + (text.Length / runLength));
+        var run = 0;
+        foreach (var character in text)
+        {
+            builder.Append(character);
+
+            if (char.IsWhiteSpace(character)
+                || char.IsPunctuation(character)
+                || char.IsSymbol(character))
+            {
+                run = 0;
+                continue;
+            }
+
+            run++;
+            if (run >= runLength)
+            {
+                builder.Append('\u200B');
+                run = 0;
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static string LimitSingleLinePrintText(string text, int maxLength)
