@@ -2,7 +2,6 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using SpeedEmulator.ViewModels;
 
@@ -26,9 +25,6 @@ public partial class PrintPreviewWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         await viewModel.LoadAsync();
-        _ = Dispatcher.InvokeAsync(
-            async () => await EnsurePreviewInitializedAsync(),
-            DispatcherPriority.ApplicationIdle);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -121,6 +117,31 @@ public partial class PrintPreviewWindow : Window
         {
             row.IsSelected = true;
             row.Focus();
+        }
+    }
+
+    private void TemplateGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject) is not { } row)
+        {
+            return;
+        }
+
+        if (sender is DataGrid grid)
+        {
+            grid.SelectedItem = row.Item;
+            if (grid.Columns.Count > 0)
+            {
+                grid.CurrentCell = new DataGridCellInfo(row.Item, grid.Columns[0]);
+            }
+        }
+
+        row.IsSelected = true;
+        row.Focus();
+
+        if (viewModel.GeneratePreviewCommand.CanExecute(null))
+        {
+            viewModel.GeneratePreviewCommand.Execute(null);
         }
     }
 

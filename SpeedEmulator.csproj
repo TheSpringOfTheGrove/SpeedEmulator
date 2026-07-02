@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <StartupObject>SpeedEmulator.Program</StartupObject>
     <ApplicationIcon>Assets\SpeedEmulatorIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -15,16 +16,13 @@
     <Resource Include="Assets\SpeedEmulatorIcon.png" />
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="VendorRuntime\Zhencheng\**\*"
-             Exclude="VendorRuntime\Zhencheng\.gitkeep"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest"
-             TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Content Include="VendorRuntime\Zhencheng\**\*" Exclude="VendorRuntime\Zhencheng\.gitkeep" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3405.78" />
     <PackageReference Include="QuestPDF" Version="2026.6.0" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
 </Project>

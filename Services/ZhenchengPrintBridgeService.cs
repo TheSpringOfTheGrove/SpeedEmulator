@@ -83,7 +83,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Directory.CreateDirectory(directory);
         }
 
-        if (fallbackService is not null && ShouldUseEditableQuestPdfRenderer(context.Template))
+        var forceVendorRenderer = ShouldForceVendorRenderer(context);
+        if (fallbackService is not null
+            && !forceVendorRenderer
+            && ShouldUseEditableQuestPdfRenderer(context.Template))
         {
             await fallbackService.ExportAsync(context, path);
             return;
@@ -94,7 +97,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             currentBridge = GetBridge();
         }
-        catch when (fallbackService is not null && CanUseQuestPdfFallback(context.Template))
+        catch when (fallbackService is not null
+            && !forceVendorRenderer
+            && CanUseQuestPdfFallback(context.Template))
         {
             await fallbackService.ExportAsync(context, path);
             return;
@@ -105,7 +110,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
-        if (fallbackService is not null && CanUseQuestPdfFallback(context.Template))
+        if (fallbackService is not null
+            && !forceVendorRenderer
+            && CanUseQuestPdfFallback(context.Template))
         {
             await fallbackService.ExportAsync(context, path);
             return;
@@ -576,8 +583,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            Set(target, "IsPrintStamp", context.BankUser.ShouldPrintSeal);
-            Set(target, "ZhangImg", context.BankUser.ShouldPrintSeal ? context.BankUser.SealImagePath : string.Empty);
+            ApplyVendorBankUserStampFields(target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -1141,8 +1147,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            Set(target, "IsPrintStamp", context.BankUser.ShouldPrintSeal);
-            Set(target, "ZhangImg", context.BankUser.ShouldPrintSeal ? context.BankUser.SealImagePath : string.Empty);
+            ApplyVendorBankUserStampFields(target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -1876,8 +1881,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            Set(target, "IsPrintStamp", context.BankUser.ShouldPrintSeal);
-            Set(target, "ZhangImg", context.BankUser.ShouldPrintSeal ? context.BankUser.SealImagePath : string.Empty);
+            ApplyVendorBankUserStampFields(target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -2051,6 +2055,27 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static void ApplyVendorBankUserStampFields(object target, BankUser bankUser, IReadOnlyDictionary<string, object?> values)
+    {
+        var stampCode = FirstNotBlank(
+            bankUser.ChapterCode,
+            GetValue(values, "StampCode"),
+            GetValue(values, "ChapterCode"),
+            GetValue(values, "ZhangCode"));
+        var stampBranch = FirstNotBlank(
+            bankUser.ChapterBranch,
+            GetValue(values, "StampBranch"),
+            GetValue(values, "ChapterBranch"),
+            GetValue(values, "PrintBranch"),
+            GetValue(values, "OpenBranch"));
+
+        Set(target, "IsPrintStamp", bankUser.ShouldPrintSeal);
+        Set(target, "ZhangImg", bankUser.ShouldPrintSeal ? FirstNotBlank(bankUser.SealImagePath, GetValue(values, "ZhangImg")) : string.Empty);
+        Set(target, "StampCode", stampCode);
+        Set(target, "StampBranch", stampBranch);
+        Set(target, "PrintBranch", FirstNotBlank(GetValue(values, "PrintBranch"), stampBranch));
+    }
+
     private static void ApplyFlowRecordColumnAliases(Bank bank, FlowRecord source, Dictionary<string, object?> values)
     {
         if (source.ExtraFields.Count == 0 || bank.FlowColumns.Count == 0)
@@ -2152,21 +2177,43 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         TrimTextProperty(target, nameof(FlowRecord.ProductBrief), 8);
-        TrimTextProperty(target, nameof(FlowRecord.OppositeAccount), 18);
+        TrimTextProperty(target, nameof(FlowRecord.OppositeAccount), 14);
         TrimTextProperty(target, nameof(FlowRecord.OppositeUsername), 8);
         TrimTextProperty(target, nameof(FlowRecord.OppositeBank), 8);
         TrimTextProperty(target, nameof(FlowRecord.Usage), 8);
-        TrimTextProperty(target, nameof(FlowRecord.Remark), 10);
-        TrimTextProperty(target, nameof(FlowRecord.TradeExplain), 10);
-        TrimTextProperty(target, nameof(FlowRecord.TradePlace), 10);
-        TrimTextProperty(target, nameof(FlowRecord.NetNum), 10);
-        TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 10);
+        TrimTextProperty(target, nameof(FlowRecord.Remark), 8);
+        TrimTextProperty(target, nameof(FlowRecord.TradeExplain), 8);
+        TrimTextProperty(target, nameof(FlowRecord.TradePlace), 8);
+        TrimTextProperty(target, nameof(FlowRecord.NetNum), 8);
+        TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 8);
+        TrimAllStringProperties(target, 14, new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [nameof(FlowRecord.ProductBrief)] = 8,
+            [nameof(FlowRecord.OppositeUsername)] = 8,
+            [nameof(FlowRecord.OppositeBank)] = 8,
+            [nameof(FlowRecord.Usage)] = 8,
+            [nameof(FlowRecord.Remark)] = 8,
+            [nameof(FlowRecord.TradeExplain)] = 8,
+            [nameof(FlowRecord.TradePlace)] = 8,
+            [nameof(FlowRecord.NetNum)] = 8,
+            [nameof(FlowRecord.VoucherNum)] = 8,
+            [nameof(FlowRecord.OppositeAccount)] = 14,
+            [nameof(FlowRecord.SerialNum)] = 14,
+            [nameof(FlowRecord.LogNum)] = 14,
+            [nameof(FlowRecord.MerchantName)] = 14,
+            [nameof(FlowRecord.AccountNum)] = 14,
+            [nameof(FlowRecord.SubAccountNum)] = 14,
+            [nameof(FlowRecord.ReceiptNum)] = 14
+        });
     }
 
     private static bool IsAgriculturalBankPersonalPaperTemplate(PrintRenderContext context)
     {
-        return context.Bank.Name.Contains("\u519C\u884C", StringComparison.Ordinal)
-            && context.Template.Name.Contains("\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+        // Copied/imported agricultural paper templates can lose their vendor
+        // bank id or system flag. The template name itself is enough to keep
+        // them on the vendor-compatible renderer; the generic QuestPDF fallback
+        // cannot reliably fit these dense paper layouts.
+        return context.Template.Name.Contains("\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal);
     }
 
     private static void TrimTextProperty(object target, string propertyName, int maxLength)
@@ -2178,12 +2225,89 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         var text = property.GetValue(target) as string;
-        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+        if (string.IsNullOrEmpty(text))
         {
             return;
         }
 
-        property.SetValue(target, text[..maxLength]);
+        var limitedText = LimitSingleLinePrintText(text, maxLength);
+        if (!string.Equals(text, limitedText, StringComparison.Ordinal))
+        {
+            property.SetValue(target, limitedText);
+        }
+    }
+
+    private static void TrimAllStringProperties(object target, int defaultMaxLength, IReadOnlyDictionary<string, int> propertyMaxLengths)
+    {
+        foreach (var property in target.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanRead || !property.CanWrite || property.PropertyType != typeof(string))
+            {
+                continue;
+            }
+
+            if (property.Name.Contains("Date", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("Time", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var text = property.GetValue(target) as string;
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            var maxLength = propertyMaxLengths.TryGetValue(property.Name, out var configuredMaxLength)
+                ? configuredMaxLength
+                : defaultMaxLength;
+            var limitedText = LimitSingleLinePrintText(text, maxLength);
+            if (!string.Equals(text, limitedText, StringComparison.Ordinal))
+            {
+                property.SetValue(target, limitedText);
+            }
+        }
+    }
+
+    private static string LimitSingleLinePrintText(string text, int maxLength)
+    {
+        var normalizedText = NormalizeSingleLinePrintText(text);
+        if (maxLength <= 0 || normalizedText.Length <= maxLength)
+        {
+            return normalizedText;
+        }
+
+        return normalizedText[..maxLength];
+    }
+
+    private static string NormalizeSingleLinePrintText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = text.Normalize(NormalizationForm.FormKC);
+        var builder = new StringBuilder(normalized.Length);
+        var previousWasSpace = false;
+        foreach (var character in normalized)
+        {
+            if (char.IsControl(character) || char.IsWhiteSpace(character))
+            {
+                if (!previousWasSpace && builder.Length > 0)
+                {
+                    builder.Append(' ');
+                    previousWasSpace = true;
+                }
+
+                continue;
+            }
+
+            builder.Append(character);
+            previousWasSpace = false;
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static string GetFlowExtraFieldValue(Bank bank, FlowRecord source, IReadOnlyDictionary<string, object?> values, params string[] columnNames)
@@ -2809,6 +2933,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         || template.Config.Columns.Count > 0));
         }
 
+        private static bool ShouldForceVendorRenderer(PrintRenderContext context)
+        {
+            return context.Template.IsSystem
+                || context.Template.VendorId > 0
+                || context.Template.VendorBankId > 0
+                || !string.IsNullOrWhiteSpace(context.Template.PdfData)
+                || IsAgriculturalBankPersonalPaperTemplate(context);
+        }
+
         private static bool ShouldUseEditableQuestPdfRenderer(PrintTemplate template)
         {
             return IsEditableQuestPdfTemplate(template)
@@ -3008,8 +3141,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72486"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487"],
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484_\u6C34\u5370"],
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484"],
-            ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72482"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
-            ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u7248"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
             ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u72482"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u7248"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72484"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],
@@ -3020,11 +3151,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
             ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248(\u6700\u65B0\u7248)"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
             ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248(\u6700\u65B0)"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
-            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72488"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
-            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72487"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
-            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72486"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
-            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72485"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
-            ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72482"] = ["\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u72483"],
             ["\u846B\u82A6\u5C9B"] = ["\u5B89\u5FBD\u519C\u91D1"],
         };
 

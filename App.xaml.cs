@@ -1,5 +1,5 @@
-using System.Configuration;
-using System.Data;
+using SpeedEmulator.Services;
+using SpeedEmulator.Views;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -15,6 +15,13 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         base.OnStartup(e);
+
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        AppUpdateService.StartBackgroundCheck();
+
+        var loginWindow = new LoginWindow();
+        MainWindow = loginWindow;
+        loginWindow.Show();
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -31,4 +38,3 @@ public partial class App : Application
         }
     }
 }
-

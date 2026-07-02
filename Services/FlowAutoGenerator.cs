@@ -128,6 +128,7 @@ public sealed class FlowAutoGenerator
             NormalizeExpenseTotal(records, targetExpense, request, start, end, random, monthlyPlan);
         }
 
+        PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -184,6 +185,7 @@ public sealed class FlowAutoGenerator
             return CreateEmptyResult(openingBalance, request.Config.LastMoney);
         }
 
+        PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
         var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
         var finalDelta = RoundMoney(finalBalance - request.Config.LastMoney);
@@ -208,6 +210,7 @@ public sealed class FlowAutoGenerator
             }
         }
 
+        PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -882,6 +885,18 @@ public sealed class FlowAutoGenerator
             && (value == InterestRowKind || value == InterestTaxRowKind);
     }
 
+    private static bool IsInterestTaxRecord(FlowRecord record)
+    {
+        return record.ExtraFields.TryGetValue(SystemRowKindField, out var value)
+            && value == InterestTaxRowKind;
+    }
+
+    private static void PruneZeroAmountRecords(List<FlowRecord> records)
+    {
+        records.RemoveAll(item => !IsInterestTaxRecord(item)
+            && Math.Abs(RoundMoney(item.TradeMoney ?? 0)) <= 0.009d);
+    }
+
     private static bool IsRecordInRange(FlowRecord record, DateTime start, DateTime end)
     {
         var accountTime = record.AccountTime;
@@ -1391,6 +1406,7 @@ public sealed class FlowAutoGenerator
         bool requiresCorrection,
         double requiredOpeningBalance)
     {
+        PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
         var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
         var minimumBalance = records.Select(item => item.Balance ?? openingBalance).Append(openingBalance).Min();
@@ -2446,7 +2462,8 @@ public sealed class FlowAutoGenerator
 
     private static double RoundMoney(double value)
     {
-        return Math.Round(value, 2, MidpointRounding.AwayFromZero);
+        var rounded = Math.Round(value, 2, MidpointRounding.AwayFromZero);
+        return Math.Abs(rounded) <= 0.0000001d ? 0 : rounded;
     }
 
     private static int CreateSeed(FlowAutoGenerationRequest request, DateTime start, DateTime end)

@@ -78,6 +78,8 @@ public sealed class PrintPreviewViewModel : ObservableObject
         {
             if (SetProperty(ref selectedTemplate, value))
             {
+                var wasSuppressingAutoPreview = suppressAutoPreview;
+                suppressAutoPreview = true;
                 StatusMessage = value is null ? "请选择打印模板" : $"当前模板：{value.Name}";
                 if (value is not null && !suppressAutoPreview)
                 {
@@ -90,6 +92,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
                         _ = GeneratePreviewAsync();
                     }
                 }
+
+                suppressAutoPreview = wasSuppressingAutoPreview;
+                PreviewPath = string.Empty;
+                pendingPreviewRefresh = false;
+                StatusMessage = value is null
+                    ? "\u8bf7\u9009\u62e9\u6253\u5370\u6a21\u677f"
+                    : $"\u5f53\u524d\u6a21\u677f\uff1a{value.Name}\uff0c\u53cc\u51fb\u751f\u6210\u9884\u89c8";
             }
         }
     }
@@ -184,11 +193,14 @@ public sealed class PrintPreviewViewModel : ObservableObject
             return;
         }
 
+        var template = SelectedTemplate;
         IsBusy = true;
         try
         {
-            await EnsureQuestPdfLayoutAsync(SelectedTemplate);
-            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(SelectedTemplate));
+            StatusMessage = $"\u6b63\u5728\u751f\u6210 PDF \u9884\u89c8\uff1a{template.Name}";
+            PreviewPath = string.Empty;
+            await EnsureQuestPdfLayoutAsync(template);
+            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(template));
             OnPropertyChanged(nameof(PreviewPath));
             StatusMessage = $"预览已生成：{PreviewPath}";
         }

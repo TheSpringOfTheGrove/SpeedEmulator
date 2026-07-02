@@ -1,4 +1,4 @@
-<Window x:Class="SpeedEmulator.Views.PrintPreviewWindow"
+﻿<Window x:Class="SpeedEmulator.Views.PrintPreviewWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
@@ -10,6 +10,8 @@
         Loaded="Window_Loaded"
         Background="#E9E9E9">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+
         <Style x:Key="PrintButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="30" />
             <Setter Property="MinWidth" Value="86" />
@@ -74,7 +76,8 @@
                       ItemsSource="{Binding Templates}"
                       SelectedItem="{Binding SelectedTemplate}"
                       Style="{StaticResource TemplateGridStyle}"
-                      PreviewMouseRightButtonDown="TemplateGrid_PreviewMouseRightButtonDown">
+                      PreviewMouseRightButtonDown="TemplateGrid_PreviewMouseRightButtonDown"
+                      MouseDoubleClick="TemplateGrid_MouseDoubleClick">
                 <DataGrid.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                         <MenuItem Header="新增模板" Command="{Binding NewTemplateCommand}" />
@@ -102,11 +105,20 @@
                     <wv2:WebView2 x:Name="PreviewWebView"
                                   DefaultBackgroundColor="#DADADA" />
                     <TextBlock x:Name="PreviewFallback"
-                               Text="请选择模板后点击生成预览"
+                               Text="请选择模板，双击生成预览"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                FontSize="15"
                                Foreground="#404040" />
+                    <Border Background="#66FFFFFF"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"
+                            IsHitTestVisible="False">
+                        <TextBlock Text="正在处理，请稍候..."
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontSize="15"
+                                   Foreground="#404040" />
+                    </Border>
                 </Grid>
             </Border>
         </Grid>
@@ -125,7 +137,6 @@
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center">
-                <Button Content="生成预览" Command="{Binding GeneratePreviewCommand}" Style="{StaticResource PrintButtonStyle}" />
                 <Button Content="打开PDF" Command="{Binding OpenPdfCommand}" Style="{StaticResource PrintButtonStyle}" />
                 <Button Content="打印" Command="{Binding PrintPdfCommand}" Style="{StaticResource PrintButtonStyle}" />
                 <Button Content="导出PDF" Command="{Binding ExportPdfCommand}" Style="{StaticResource PrintButtonStyle}" />
