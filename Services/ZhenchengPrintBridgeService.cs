@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using SpeedEmulator.Models;
@@ -77,6 +78,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private async Task ExportInternalAsync(PrintRenderContext context, string path)
     {
+        try
+        {
+            await ExportInternalCoreAsync(context, path);
+        }
+        catch (Exception ex)
+        {
+            TryWritePrintFailureDiagnostic(context, path, ex);
+            throw;
+        }
+    }
+
+    private async Task ExportInternalCoreAsync(PrintRenderContext context, string path)
+    {
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
@@ -119,6 +133,134 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         throw new InvalidOperationException("模板未找到");
+    }
+
+    private static bool ShouldApplyLocalPdfConfig(PrintRenderContext context)
+    {
+        return !context.Template.IsSystem;
+    }
+
+    private static void TryWritePrintFailureDiagnostic(PrintRenderContext context, string path, Exception exception)
+    {
+        try
+        {
+            var directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SpeedEmulator",
+                "print-debug");
+            Directory.CreateDirectory(directory);
+
+            var filePath = Path.Combine(directory, $"print-error-{DateTime.Now:yyyyMMddHHmmssfff}.json");
+            var payload = new
+            {
+                generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                outputPath = path,
+                bank = new
+                {
+                    context.Bank.Id,
+                    context.Bank.Name,
+                    context.Bank.Type
+                },
+                user = new
+                {
+                    context.BankUser.Id,
+                    context.BankUser.BankId,
+                    context.BankUser.BankName,
+                    context.BankUser.AccountName,
+                    context.BankUser.AccountNo,
+                    context.BankUser.ChapterCode,
+                    context.BankUser.ChapterBranch
+                },
+                template = new
+                {
+                    context.Template.Id,
+                    context.Template.BankId,
+                    context.Template.VendorId,
+                    context.Template.VendorBankId,
+                    context.Template.IsSystem,
+                    context.Template.Name,
+                    context.Template.PageRows,
+                    context.Template.Remark
+                },
+                recordCount = context.Records.Count,
+                localConfig = new
+                {
+                    context.Template.Config.RowCount,
+                    context.Template.Config.MarginLeft,
+                    context.Template.Config.MarginTop,
+                    context.Template.Config.MarginRight,
+                    context.Template.Config.MarginBottom,
+                    context.Template.Config.FontFamily,
+                    context.Template.Config.ColumnMinHeight,
+                    context.Template.Config.SealLeft,
+                    context.Template.Config.SealTop,
+                    context.Template.Config.SealRight,
+                    context.Template.Config.SealBottom,
+                    context.Template.Config.SealWidth,
+                    columnCount = context.Template.Config.Columns.Count
+                },
+                longestTextValues = GetLongestFlowTextValues(context.Records),
+                exception = exception.ToString()
+            };
+
+            File.WriteAllText(
+                filePath,
+                JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+                Encoding.UTF8);
+        }
+        catch
+        {
+            // Diagnostics must never hide the original print/rendering error.
+        }
+    }
+
+    private static IReadOnlyList<object> GetLongestFlowTextValues(IReadOnlyList<FlowRecord> records)
+    {
+        var properties = typeof(FlowRecord)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.PropertyType == typeof(string) && property.GetIndexParameters().Length == 0)
+            .ToList();
+
+        var values = new List<(int Row, string Field, string Value)>();
+        for (var index = 0; index < records.Count; index++)
+        {
+            var record = records[index];
+            var row = record.Index > 0 ? record.Index : index + 1;
+            foreach (var property in properties)
+            {
+                if (property.GetValue(record) is string value && !string.IsNullOrWhiteSpace(value))
+                {
+                    values.Add((row, property.Name, value));
+                }
+            }
+
+            foreach (var item in record.ExtraFields)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Value))
+                {
+                    values.Add((row, item.Key, item.Value));
+                }
+            }
+        }
+
+        return values
+            .OrderByDescending(item => item.Value.Length)
+            .ThenBy(item => item.Row)
+            .Take(25)
+            .Select(item => new
+            {
+                item.Row,
+                item.Field,
+                Length = item.Value.Length,
+                Value = TruncateForDiagnostic(item.Value, 160)
+            })
+            .Cast<object>()
+            .ToList();
+    }
+
+    private static string TruncateForDiagnostic(string value, int maxLength)
+    {
+        return value.Length <= maxLength ? value : value[..maxLength] + "...";
     }
 
     private static VendorBridge GetBridge()
@@ -391,7 +533,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, vendorPageRows);
                 }
 
-                ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
+                if (ShouldApplyLocalPdfConfig(context))
+                {
+                    ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
+                }
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, vendorPageRows);
             }
@@ -401,7 +546,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var config = CreateVendorConfig([name]);
                 if (config is not null)
                 {
-                    ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
+                    if (ShouldApplyLocalPdfConfig(context))
+                    {
+                        ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
+                    }
                     return new ResolvedTemplate(name, config, null, string.Empty, context.Template.PageRows);
                 }
             }
@@ -1026,7 +1174,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     return null;
                 }
 
-                ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
+                if (ShouldApplyLocalPdfConfig(context))
+                {
+                    ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
+                }
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
             }
@@ -1036,7 +1187,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var config = CreateConfig([name]);
                 if (config is not null)
                 {
-                    ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
+                    if (ShouldApplyLocalPdfConfig(context))
+                    {
+                        ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
+                    }
                     return new ResolvedTemplate(name, config, null);
                 }
             }
