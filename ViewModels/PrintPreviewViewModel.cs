@@ -1077,9 +1077,13 @@ public sealed class PrintPreviewViewModel : ObservableObject
         }
 
         var baseException = current.GetBaseException();
-        return string.IsNullOrWhiteSpace(baseException.Message)
+        var message = string.IsNullOrWhiteSpace(baseException.Message)
             ? current.Message
             : baseException.Message;
+        var diagnosticMessage = ZhenchengPrintBridgeService.GetPrintDiagnosticMessageForUi(ex);
+        return string.IsNullOrWhiteSpace(diagnosticMessage)
+            ? message
+            : $"{message}{Environment.NewLine}{diagnosticMessage}";
     }
 
     private PrintRenderContext CreateContext(PrintTemplate template)

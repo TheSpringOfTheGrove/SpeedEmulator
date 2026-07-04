@@ -163,9 +163,13 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                         .FontSize((float)config.BodyFontSize)
                         .FontColor(Colors.Black));
 
-                    page.Header().Element(ComposeHeader);
-                    page.Content().Element(content => ComposeContent(content, pageRecords, isFirstPage));
-                    page.Footer().Element(ComposeFooter);
+                    page.Content().Column(column =>
+                    {
+                        column.Item().Element(ComposeHeader);
+                        column.Item().Element(content => ComposeContent(content, pageRecords, isFirstPage));
+                        column.Item().ExtendVertical();
+                        column.Item().Element(ComposeFooter);
+                    });
                 });
             }
         }
@@ -271,6 +275,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             var columns = context.Template.Config.Columns.Count == 0
                 ? [new PrintPdfColumn { Name = "交易日期", Field = nameof(FlowRecord.AccountTime), Type = "Date", Width = 52 }]
                 : context.Template.Config.Columns;
+            var renderPaperSubrows = IsPaperTemplate();
             container.PaddingTop(4).Table(table =>
             {
                 table.ColumnsDefinition(definition =>
@@ -321,8 +326,59 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                                 }
                             });
                     }
+
+                    if (renderPaperSubrows)
+                    {
+                        var subrowLines = GetPaperSubrowLines(record);
+                        if (subrowLines.Count > 0)
+                        {
+                            table.Cell()
+                                .ColumnSpan((uint)columns.Count)
+                                .Element(PaperSubrowCellStyle)
+                                .Column(column =>
+                                {
+                                    foreach (var line in subrowLines)
+                                    {
+                                        column.Item()
+                                            .Text(PreparePaperSubrowLine(line))
+                                            .FontFamily(GetPaperSubrowFontFamily())
+                                            .FontSize((float)GetPaperSubrowFontSize());
+                                    }
+                                });
+                        }
+                    }
                 }
             });
+        }
+
+        private bool IsPaperTemplate()
+        {
+            var templateName = context.Template.Name ?? string.Empty;
+            return templateName.Contains("\u7EB8\u8D28", StringComparison.Ordinal);
+        }
+
+        private IContainer PaperSubrowCellStyle(IContainer container)
+        {
+            var minHeight = Math.Max(context.Template.Config.ColumnMinHeight * 0.6, 7);
+            var leftPadding = Math.Max(context.Template.Config.TabSize, 70);
+            return container
+                .MinHeight((float)minHeight)
+                .PaddingLeft((float)leftPadding)
+                .PaddingRight(2)
+                .PaddingVertical(0.5f)
+                .AlignMiddle();
+        }
+
+        private string GetPaperSubrowFontFamily()
+        {
+            return string.IsNullOrWhiteSpace(context.Template.Config.FontFamily)
+                ? "Microsoft YaHei"
+                : context.Template.Config.FontFamily;
+        }
+
+        private double GetPaperSubrowFontSize()
+        {
+            return Math.Max(context.Template.Config.BodyFontSize - 0.5, 5);
         }
 
         private void ComposeFooter(IContainer container)
@@ -351,16 +407,53 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 return [records];
             }
 
-            var pages = records
-                .Chunk(rowCount)
-                .Select(chunk => (IReadOnlyList<FlowRecord>)chunk.ToList())
-                .ToList();
+            if (!IsPaperTemplate())
+            {
+                var chunkedPages = records
+                    .Chunk(rowCount)
+                    .Select(chunk => (IReadOnlyList<FlowRecord>)chunk.ToList())
+                    .ToList();
+                if (chunkedPages.Count == 0)
+                {
+                    chunkedPages.Add([]);
+                }
+
+                return chunkedPages;
+            }
+
+            var pages = new List<IReadOnlyList<FlowRecord>>();
+            var currentPage = new List<FlowRecord>();
+            var usedRows = 0;
+            foreach (var record in records)
+            {
+                var recordRows = GetPaperRecordRowUnits(record);
+                if (currentPage.Count > 0 && usedRows + recordRows > rowCount)
+                {
+                    pages.Add(currentPage.ToList());
+                    currentPage.Clear();
+                    usedRows = 0;
+                }
+
+                currentPage.Add(record);
+                usedRows += recordRows;
+            }
+
+            if (currentPage.Count > 0)
+            {
+                pages.Add(currentPage.ToList());
+            }
+
             if (pages.Count == 0)
             {
                 pages.Add([]);
             }
 
             return pages;
+        }
+
+        private int GetPaperRecordRowUnits(FlowRecord record)
+        {
+            return Math.Max(1, 1 + GetPaperSubrowLines(record).Count);
         }
 
         private IContainer HeaderCellStyle(IContainer container)
@@ -419,7 +512,298 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 value = record.BalanceAmount;
             }
 
-            return ApplyTabSize(FormatValue(value, column.Type));
+            var formatted = ApplyTabSize(FormatValue(value, column.Type));
+            if (ShouldSuppressPaperMainRowValue(record, column, formatted))
+            {
+                return GetPaperMainRowFallback(record, column);
+            }
+
+            return formatted;
+        }
+
+        private bool ShouldSuppressPaperMainRowValue(FlowRecord record, PrintPdfColumn column, string value)
+        {
+            if (!IsPaperTemplate() || string.IsNullOrWhiteSpace(value) || !IsPaperDetailColumn(column))
+            {
+                return false;
+            }
+
+            if (LooksLikePaperSubrowDetail(value))
+            {
+                return true;
+            }
+
+            return IsPaperCounterpartyColumn(column)
+                && HasPaperSubrowDetail(record);
+        }
+
+        private string GetPaperMainRowFallback(FlowRecord record, PrintPdfColumn column)
+        {
+            if (!IsPaperRemarkColumn(column))
+            {
+                return string.Empty;
+            }
+
+            var fallback = NormalizePaperText(FirstNotBlank(
+                record.TradeExplain,
+                record.Usage,
+                record.MerchantName,
+                record.ProductBrief));
+
+            return LooksLikePaperSubrowDetail(fallback) ? string.Empty : fallback;
+        }
+
+        private bool HasPaperSubrowDetail(FlowRecord record)
+        {
+            return GetPaperSubrowParts(record).Count > 0;
+        }
+
+        private IReadOnlyList<string> GetPaperSubrowLines(FlowRecord record)
+        {
+            var parts = GetPaperSubrowParts(record);
+            if (parts.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var maxLineLength = GetPaperSubrowMaxLineLength();
+            var lines = new List<string>();
+            var current = string.Empty;
+
+            foreach (var part in parts)
+            {
+                foreach (var segment in SplitPaperSubrowPart(part, maxLineLength))
+                {
+                    if (string.IsNullOrWhiteSpace(current))
+                    {
+                        current = segment;
+                        continue;
+                    }
+
+                    if (current.Length + 1 + segment.Length <= maxLineLength)
+                    {
+                        current = $"{current} {segment}";
+                        continue;
+                    }
+
+                    lines.Add(current);
+                    current = segment;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(current))
+            {
+                lines.Add(current);
+            }
+
+            return lines;
+        }
+
+        private IReadOnlyList<string> GetPaperSubrowParts(FlowRecord record)
+        {
+            var detail = FindPaperSubrowDetail(record);
+            var parts = new List<string>();
+
+            AddPaperSubrowPart(parts, record.OppositeAccount, detail);
+            AddPaperSubrowPart(parts, record.OppositeUsername, detail);
+            AddPaperSubrowPart(parts, detail, null);
+
+            return parts;
+        }
+
+        private static IReadOnlyList<string> SplitPaperSubrowPart(string value, int maxLineLength)
+        {
+            var normalized = NormalizePaperText(value);
+            if (normalized.Length == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            if (normalized.Length <= maxLineLength)
+            {
+                return [normalized];
+            }
+
+            var result = new List<string>();
+            var tokens = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var token in tokens)
+            {
+                if (token.Length <= maxLineLength)
+                {
+                    result.Add(token);
+                    continue;
+                }
+
+                for (var index = 0; index < token.Length; index += maxLineLength)
+                {
+                    result.Add(token.Substring(index, Math.Min(maxLineLength, token.Length - index)));
+                }
+            }
+
+            return result;
+        }
+
+        private int GetPaperSubrowMaxLineLength()
+        {
+            var fontSize = Math.Max(GetPaperSubrowFontSize(), 1);
+            var contentWidth = GetPageContentWidth();
+            var availableWidth = Math.Max(contentWidth - Math.Max(context.Template.Config.TabSize, 70) - 4, 120);
+            var estimatedCharacters = (int)Math.Floor(availableWidth / (fontSize * 0.72));
+            return Math.Clamp(estimatedCharacters, 28, 64);
+        }
+
+        private string PreparePaperSubrowLine(string value)
+        {
+            var normalized = NormalizePaperText(value);
+            if (normalized.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            var segmentLength = Math.Max(8, GetPaperSubrowMaxLineLength() / 2);
+            return InsertSoftBreaks(normalized, segmentLength);
+        }
+
+        private string FindPaperSubrowDetail(FlowRecord record)
+        {
+            var candidates = new List<string?>
+            {
+                record.Remark,
+                record.TradeExplain,
+                record.Usage,
+                record.MerchantName,
+                record.ProductBrief,
+                record.OppositeBank
+            };
+
+            candidates.AddRange(record.ExtraFields.Values);
+            return NormalizePaperText(candidates.FirstOrDefault(LooksLikePaperSubrowDetail));
+        }
+
+        private static void AddPaperSubrowPart(List<string> parts, string? value, string? textAlreadyContainingValue)
+        {
+            var normalized = NormalizePaperText(value);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(textAlreadyContainingValue)
+                && NormalizePaperText(textAlreadyContainingValue).Contains(normalized, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (parts.Any(item => item.Contains(normalized, StringComparison.Ordinal)
+                || normalized.Contains(item, StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            parts.Add(normalized);
+        }
+
+        private static bool IsPaperDetailColumn(PrintPdfColumn column)
+        {
+            return IsPaperRemarkColumn(column) || IsPaperCounterpartyColumn(column);
+        }
+
+        private static bool IsPaperRemarkColumn(PrintPdfColumn column)
+        {
+            var name = column.Name ?? string.Empty;
+            var field = column.Field ?? string.Empty;
+            return string.Equals(field, nameof(FlowRecord.Remark), StringComparison.OrdinalIgnoreCase)
+                || string.Equals(field, nameof(FlowRecord.TradeExplain), StringComparison.OrdinalIgnoreCase)
+                || string.Equals(field, nameof(FlowRecord.Usage), StringComparison.OrdinalIgnoreCase)
+                || ContainsAny(name, "\u5907\u6CE8", "\u9644\u8A00", "\u6458\u8981", "\u7528\u9014")
+                || ContainsAny(field, "Remark", "Postscript", "Detail", "Explain", "Usage", "Append", "Attached");
+        }
+
+        private static bool IsPaperCounterpartyColumn(PrintPdfColumn column)
+        {
+            var name = column.Name ?? string.Empty;
+            var field = column.Field ?? string.Empty;
+            return string.Equals(field, nameof(FlowRecord.OppositeAccount), StringComparison.OrdinalIgnoreCase)
+                || string.Equals(field, nameof(FlowRecord.OppositeUsername), StringComparison.OrdinalIgnoreCase)
+                || string.Equals(field, nameof(FlowRecord.OppositeBank), StringComparison.OrdinalIgnoreCase)
+                || ContainsAny(name, "\u5BF9\u65B9", "\u6237\u540D", "\u9644\u8A00")
+                || ContainsAny(field, "Opposite", "Counterparty", "AccountNameAnd", "CounterpartyAccountAnd");
+        }
+
+        private static bool LooksLikePaperSubrowDetail(string? value)
+        {
+            var normalized = NormalizePaperText(value);
+            if (normalized.Length < 18)
+            {
+                return false;
+            }
+
+            return normalized.Contains("NG20", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("UA20", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("NA20", StringComparison.OrdinalIgnoreCase)
+                || (HasLongContinuousRun(normalized, 16) && ContainsCjk(normalized))
+                || (normalized.Count(char.IsDigit) >= 16 && ContainsCjk(normalized));
+        }
+
+        private static bool HasLongContinuousRun(string value, int minimumLength)
+        {
+            var count = 0;
+            foreach (var character in value)
+            {
+                if (char.IsWhiteSpace(character) || char.IsPunctuation(character))
+                {
+                    count = 0;
+                    continue;
+                }
+
+                count++;
+                if (count >= minimumLength)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool ContainsCjk(string value)
+        {
+            return value.Any(character => character >= '\u4E00' && character <= '\u9FFF');
+        }
+
+        private static bool ContainsAny(string value, params string[] candidates)
+        {
+            return candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string FirstNotBlank(params string?[] values)
+        {
+            return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+        }
+
+        private static string NormalizePaperText(string? value)
+        {
+            return string.Join(
+                " ",
+                (value ?? string.Empty)
+                    .Replace("\u200B", string.Empty, StringComparison.Ordinal)
+                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        private static string InsertSoftBreaks(string value, int segmentLength)
+        {
+            if (value.Length <= segmentLength)
+            {
+                return value;
+            }
+
+            var result = new List<string>();
+            for (var index = 0; index < value.Length; index += segmentLength)
+            {
+                result.Add(value.Substring(index, Math.Min(segmentLength, value.Length - index)));
+            }
+
+            return string.Join("\u200B", result);
         }
 
         private string ApplyTabSize(string value)

@@ -338,9 +338,13 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
     private static string GetFriendlyExceptionMessage(Exception ex)
     {
         var baseException = ex.GetBaseException();
-        return string.IsNullOrWhiteSpace(baseException.Message)
+        var message = string.IsNullOrWhiteSpace(baseException.Message)
             ? ex.Message
             : baseException.Message;
+        var diagnosticMessage = ZhenchengPrintBridgeService.GetPrintDiagnosticMessageForUi(ex);
+        return string.IsNullOrWhiteSpace(diagnosticMessage)
+            ? message
+            : $"{message}{Environment.NewLine}{diagnosticMessage}";
     }
 }
 

@@ -38,6 +38,17 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             var templates = CreateSystemTemplates(bank);
             if (templatesByBank.TryGetValue(bank.Id, out var savedTemplates))
             {
+                if (RequiresVendorTemplateResync(bank, templates))
+                {
+                    var filteredTemplates = RemoveStaleVendorTemplateOverrides(savedTemplates, templates);
+                    if (filteredTemplates.Count != savedTemplates.Count)
+                    {
+                        templatesByBank[bank.Id] = filteredTemplates;
+                        savedTemplates = filteredTemplates;
+                        Persist();
+                    }
+                }
+
                 var deletedTemplates = savedTemplates
                     .Where(item => item.IsDeleted)
                     .Select(item => item.Clone())
@@ -57,6 +68,66 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             templates = DeduplicateDisplayTemplates(templates);
             return Task.FromResult<IReadOnlyList<PrintTemplate>>(templates);
         }
+    }
+
+    private static bool RequiresVendorTemplateResync(Bank bank, IReadOnlyCollection<PrintTemplate> systemTemplates)
+    {
+        if (bank.Id is 11 or 16 or 105 or 116)
+        {
+            return true;
+        }
+
+        return systemTemplates.Any(item => item.VendorBankId is 50 or 55);
+    }
+
+    private static List<PrintTemplate> RemoveStaleVendorTemplateOverrides(
+        IEnumerable<PrintTemplate> savedTemplates,
+        IReadOnlyCollection<PrintTemplate> systemTemplates)
+    {
+        var systemNameKeys = systemTemplates
+            .Where(item => item.IsSystem && !item.IsDeleted)
+            .Select(GetTemplateNameKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var systemNameOnlyKeys = systemTemplates
+            .Where(item => item.IsSystem && !item.IsDeleted)
+            .Select(GetTemplateNameOnlyKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var systemVendorKeys = systemTemplates
+            .Where(item => item.IsSystem && !item.IsDeleted && item.VendorId > 0)
+            .Select(GetVendorTemplateKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return savedTemplates
+            .Where(item => !IsStaleVendorTemplateOverride(item, systemNameKeys, systemNameOnlyKeys, systemVendorKeys))
+            .ToList();
+    }
+
+    private static bool IsStaleVendorTemplateOverride(
+        PrintTemplate template,
+        HashSet<string> systemNameKeys,
+        HashSet<string> systemNameOnlyKeys,
+        HashSet<string> systemVendorKeys)
+    {
+        if (template.IsSystem)
+        {
+            return false;
+        }
+
+        if (template.IsDeleted)
+        {
+            return systemNameKeys.Contains(GetTemplateNameKey(template))
+                || systemNameOnlyKeys.Contains(GetTemplateNameOnlyKey(template))
+                || systemVendorKeys.Contains(GetVendorTemplateKey(template));
+        }
+
+        if (IsDerivedLocalTemplateNameStable(template.Name))
+        {
+            return false;
+        }
+
+        return systemNameKeys.Contains(GetTemplateNameKey(template))
+            || systemNameOnlyKeys.Contains(GetTemplateNameOnlyKey(template))
+            || (template.VendorId > 0 && systemVendorKeys.Contains(GetVendorTemplateKey(template)));
     }
 
     public Task SaveAsync(Bank bank, PrintTemplate template)
@@ -259,8 +330,66 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             && !template.IsDeleted
             && template.VendorId <= 0
             && !string.IsNullOrWhiteSpace(template.PdfData)
-            && !IsDerivedLocalTemplateName(template.Name)
+            && !IsDerivedLocalTemplateNameStable(template.Name)
             && systemKeys.Contains(GetTemplateNameKey(template));
+    }
+
+    private static bool IsDerivedLocalTemplateNameSafe(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var derivedMarkers = new[]
+        {
+            "-复制",
+            "_复制",
+            " 复制",
+            "-导入",
+            "_导入",
+            " 导入",
+            "-改",
+            "_改",
+            " 改",
+            "-copy",
+            "_copy",
+            " copy",
+            "-import",
+            "_import",
+            " import"
+        };
+
+        return derivedMarkers.Any(marker => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsDerivedLocalTemplateNameStable(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var derivedMarkers = new[]
+        {
+            "-\u590d\u5236",
+            "_\u590d\u5236",
+            " \u590d\u5236",
+            "-\u5bfc\u5165",
+            "_\u5bfc\u5165",
+            " \u5bfc\u5165",
+            "-\u6539",
+            "_\u6539",
+            " \u6539",
+            "-copy",
+            "_copy",
+            " copy",
+            "-import",
+            "_import",
+            " import"
+        };
+
+        return derivedMarkers.Any(marker => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsDerivedLocalTemplateName(string? name)
@@ -288,6 +417,22 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             NormalizeTemplateKeyPart(template.Name),
             NormalizeTemplateKeyPart(template.Remark),
             template.PageRows.ToString());
+    }
+
+    private static string GetTemplateNameOnlyKey(PrintTemplate template)
+    {
+        return NormalizeTemplateKeyPart(template.Name);
+    }
+
+    private static string GetVendorTemplateKey(PrintTemplate template)
+    {
+        return string.Join(
+            '\u001f',
+            template.VendorBankId.ToString(CultureInfo.InvariantCulture),
+            template.VendorId.ToString(CultureInfo.InvariantCulture),
+            NormalizeTemplateKeyPart(template.Name),
+            NormalizeTemplateKeyPart(template.Remark),
+            template.PageRows.ToString(CultureInfo.InvariantCulture));
     }
 
     private static int FindExistingTemplateIndex(List<PrintTemplate> templates, PrintTemplate template)

@@ -30,6 +30,8 @@ dotnet publish $projectPath `
     -r $Runtime `
     --self-contained true `
     -o $publishDir `
+    /p:Version=$Version `
+    /p:InformationalVersion=$Version `
     /p:PublishSingleFile=false `
     /p:PublishReadyToRun=false
 

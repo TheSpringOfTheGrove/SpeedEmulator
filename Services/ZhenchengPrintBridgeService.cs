@@ -16,9 +16,34 @@ namespace SpeedEmulator.Services;
 public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 {
     private static readonly object SyncRoot = new();
+    private const string PrintDiagnosticsWrittenDataKey = "SpeedEmulator.PrintDiagnosticsWritten";
+    private const string PrintDiagnosticPathDataKey = "SpeedEmulator.PrintDiagnosticPath";
+    private const string PrintDiagnosticSummaryDataKey = "SpeedEmulator.PrintDiagnosticSummary";
     private static readonly HashSet<string> AgriculturalPaperWideDetailPropertyNames = new(StringComparer.Ordinal)
     {
-        nameof(FlowRecord.Remark)
+        "AccountNameAndNumber",
+        "AccountAndName",
+        "OppositeAccountAndName",
+        "CounterpartyAccountAndName",
+        "AccountNameAndRemark",
+        "AccountAndRemark",
+        "OppositeAccountAndRemark",
+        "CounterpartyAccountAndRemark",
+        "OppositeAccountNameAndRemark",
+        "OppositeAccountNameRemark",
+        "CounterpartyNameAndRemark",
+        "OppositeInfo",
+        "CounterpartyInfo",
+        "CounterpartySummary",
+        "CounterpartyDetail",
+        "SubRemark",
+        "SubDetail",
+        "DetailRemark",
+        "WideDetail",
+        "Postscript",
+        "AdditionalInfo",
+        "AttachedInfo",
+        "AppendInfo"
     };
 
     private static VendorBridge? bridge;
@@ -81,6 +106,74 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    public static string GetPrintDiagnosticMessage(Exception exception)
+    {
+        var current = exception;
+        while (current is not null)
+        {
+            var summary = ReadExceptionData(current, PrintDiagnosticSummaryDataKey);
+            var path = ReadExceptionData(current, PrintDiagnosticPathDataKey);
+            if (!string.IsNullOrWhiteSpace(summary) || !string.IsNullOrWhiteSpace(path))
+            {
+                var builder = new StringBuilder();
+                if (!string.IsNullOrWhiteSpace(summary))
+                {
+                    builder.Append("调试定位：").Append(summary);
+                }
+
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.Append(Environment.NewLine);
+                    }
+
+                    builder.Append("诊断文件：").Append(path);
+                }
+
+                return builder.ToString();
+            }
+
+            current = current.InnerException;
+        }
+
+        return string.Empty;
+    }
+
+    public static string GetPrintDiagnosticMessageForUi(Exception exception)
+    {
+        var current = exception;
+        while (current is not null)
+        {
+            var summary = ReadExceptionData(current, PrintDiagnosticSummaryDataKey);
+            var path = ReadExceptionData(current, PrintDiagnosticPathDataKey);
+            if (!string.IsNullOrWhiteSpace(summary) || !string.IsNullOrWhiteSpace(path))
+            {
+                var builder = new StringBuilder();
+                if (!string.IsNullOrWhiteSpace(summary))
+                {
+                    builder.Append("Debug: ").Append(summary);
+                }
+
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.Append(Environment.NewLine);
+                    }
+
+                    builder.Append("File: ").Append(path);
+                }
+
+                return builder.ToString();
+            }
+
+            current = current.InnerException;
+        }
+
+        return string.Empty;
+    }
+
     private async Task ExportInternalAsync(PrintRenderContext context, string path)
     {
         try
@@ -89,7 +182,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
         catch (Exception ex)
         {
-            TryWritePrintFailureDiagnostic(context, path, ex);
+            if (!HasPrintDiagnosticsWritten(ex))
+            {
+                TryWritePrintFailureDiagnostic(context, path, ex, renderBranch: "outer");
+            }
+
             throw;
         }
     }
@@ -145,7 +242,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return !context.Template.IsSystem;
     }
 
-    private static void TryWritePrintFailureDiagnostic(PrintRenderContext context, string path, Exception exception)
+    private static void TryWritePrintFailureDiagnostic(
+        PrintRenderContext context,
+        string path,
+        Exception exception,
+        IEnumerable? transformedRecords = null,
+        string? renderBranch = null)
     {
         try
         {
@@ -156,10 +258,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Directory.CreateDirectory(directory);
 
             var filePath = Path.Combine(directory, $"print-error-{DateTime.Now:yyyyMMddHHmmssfff}.json");
+            var sourceLongestTextValues = GetLongestFlowTextValues(context.Records);
+            var transformedLongestTextValues = GetLongestObjectTextValues(transformedRecords);
+            var suspectedOverflowTextValues = GetSuspectedOverflowTextValues(transformedRecords);
+            var sourceSuspectedOverflowTextValues = GetSuspectedOverflowTextValues(context.Records);
             var payload = new
             {
                 generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
                 outputPath = path,
+                renderBranch,
                 bank = new
                 {
                     context.Bank.Id,
@@ -204,8 +311,84 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     context.Template.Config.SealWidth,
                     columnCount = context.Template.Config.Columns.Count
                 },
-                longestTextValues = GetLongestFlowTextValues(context.Records),
+                longestTextValues = sourceLongestTextValues,
+                sourceSuspectedOverflowTextValues,
+                sourceRecordSamples = GetObjectRecordSnapshots(context.Records, 8),
+                transformedLongestTextValues,
+                suspectedOverflowTextValues,
+                transformedRecordSamples = GetObjectRecordSnapshots(transformedRecords, 8),
                 exception = exception.ToString()
+            };
+
+            File.WriteAllText(
+                filePath,
+                JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+                Encoding.UTF8);
+            SetPrintDiagnosticExceptionData(
+                exception,
+                filePath,
+                suspectedOverflowTextValues,
+                transformedLongestTextValues,
+                sourceSuspectedOverflowTextValues,
+                sourceLongestTextValues);
+        }
+        catch
+        {
+            // Diagnostics must never hide the original print/rendering error.
+        }
+    }
+
+    private static void TryWritePrintRenderProbe(
+        PrintRenderContext context,
+        string path,
+        IEnumerable? transformedRecords,
+        string? renderBranch = null)
+    {
+        if (!ShouldWriteVerbosePrintDiagnostics(context))
+        {
+            return;
+        }
+
+        try
+        {
+            var suspectedOverflowValues = GetSuspectedOverflowTextValues(transformedRecords);
+            var directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SpeedEmulator",
+                "print-debug");
+            Directory.CreateDirectory(directory);
+
+            var filePath = Path.Combine(directory, $"print-probe-{DateTime.Now:yyyyMMddHHmmssfff}.json");
+            var payload = new
+            {
+                generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                outputPath = path,
+                renderBranch,
+                bank = new
+                {
+                    context.Bank.Id,
+                    context.Bank.Name,
+                    context.Bank.Type
+                },
+                user = new
+                {
+                    context.BankUser.Id,
+                    context.BankUser.AccountName,
+                    context.BankUser.AccountNo
+                },
+                template = new
+                {
+                    context.Template.Id,
+                    context.Template.VendorId,
+                    context.Template.VendorBankId,
+                    context.Template.Name,
+                    context.Template.PageRows
+                },
+                sourceLongestTextValues = GetLongestFlowTextValues(context.Records),
+                suspectedOverflowTextValues = suspectedOverflowValues,
+                sourceRecordSamples = GetObjectRecordSnapshots(context.Records, 8),
+                transformedLongestTextValues = GetLongestObjectTextValues(transformedRecords),
+                transformedRecordSamples = GetObjectRecordSnapshots(transformedRecords, 8)
             };
 
             File.WriteAllText(
@@ -215,7 +398,196 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
         catch
         {
-            // Diagnostics must never hide the original print/rendering error.
+            // Diagnostics must never block print rendering.
+        }
+    }
+
+    private static bool ShouldWriteVerbosePrintDiagnostics(PrintRenderContext context)
+    {
+        if (IsPrintBridgeDebugEnabledGlobal())
+        {
+            return true;
+        }
+
+        var templateName = context.Template.Name ?? string.Empty;
+        return templateName.Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+    }
+
+    private static void MarkPrintDiagnosticsWritten(Exception exception)
+    {
+        try
+        {
+            exception.Data[PrintDiagnosticsWrittenDataKey] = true;
+        }
+        catch
+        {
+            // Best-effort marker only.
+        }
+    }
+
+    private static bool HasPrintDiagnosticsWritten(Exception exception)
+    {
+        var current = exception;
+        while (current is not null)
+        {
+            try
+            {
+                if (current.Data.Contains(PrintDiagnosticsWrittenDataKey))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
+    }
+
+    private static void SetPrintDiagnosticExceptionData(
+        Exception exception,
+        string filePath,
+        IReadOnlyList<object> suspectedOverflowTextValues,
+        IReadOnlyList<object> transformedLongestTextValues,
+        IReadOnlyList<object> sourceSuspectedOverflowTextValues,
+        IReadOnlyList<object> sourceLongestTextValues)
+    {
+        try
+        {
+            exception.Data[PrintDiagnosticPathDataKey] = filePath;
+            var summary = BuildPrintDiagnosticSummaryAscii(
+                suspectedOverflowTextValues,
+                transformedLongestTextValues,
+                sourceSuspectedOverflowTextValues,
+                sourceLongestTextValues);
+            if (!string.IsNullOrWhiteSpace(summary))
+            {
+                exception.Data[PrintDiagnosticSummaryDataKey] = summary;
+            }
+        }
+        catch
+        {
+            // Best-effort diagnostics only.
+        }
+    }
+
+    private static string BuildPrintDiagnosticSummaryAscii(params IReadOnlyList<object>[] diagnosticGroups)
+    {
+        var items = diagnosticGroups
+            .Where(group => group.Count > 0)
+            .SelectMany(group => group)
+            .Select(FormatDiagnosticItemAscii)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .Take(5)
+            .ToList();
+
+        return string.Join("; ", items);
+    }
+
+    private static string FormatDiagnosticItemAscii(object item)
+    {
+        var row = Convert.ToString(GetPropertyValue(item, "Row"), CultureInfo.InvariantCulture);
+        var field = Convert.ToString(GetPropertyValue(item, "Field"), CultureInfo.InvariantCulture);
+        var length = Convert.ToString(GetPropertyValue(item, "Length"), CultureInfo.InvariantCulture);
+        var longestRun = Convert.ToString(GetPropertyValue(item, "LongestRun"), CultureInfo.InvariantCulture);
+        var value = Convert.ToString(GetPropertyValue(item, "Value"), CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(field) && string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(row))
+        {
+            builder.Append("Row ").Append(row).Append(' ');
+        }
+
+        builder.Append("Field ").Append(string.IsNullOrWhiteSpace(field) ? "<unknown>" : field);
+        if (!string.IsNullOrWhiteSpace(length))
+        {
+            builder.Append(" Length ").Append(length);
+        }
+
+        if (!string.IsNullOrWhiteSpace(longestRun))
+        {
+            builder.Append(" LongestRun ").Append(longestRun);
+        }
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            builder.Append(" Value: ").Append(value);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildPrintDiagnosticSummary(params IReadOnlyList<object>[] diagnosticGroups)
+    {
+        var items = diagnosticGroups
+            .Where(group => group.Count > 0)
+            .SelectMany(group => group)
+            .Select(FormatDiagnosticItem)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .Take(5)
+            .ToList();
+
+        return string.Join("；", items);
+    }
+
+    private static string FormatDiagnosticItem(object item)
+    {
+        var row = Convert.ToString(GetPropertyValue(item, "Row"), CultureInfo.InvariantCulture);
+        var field = Convert.ToString(GetPropertyValue(item, "Field"), CultureInfo.InvariantCulture);
+        var length = Convert.ToString(GetPropertyValue(item, "Length"), CultureInfo.InvariantCulture);
+        var longestRun = Convert.ToString(GetPropertyValue(item, "LongestRun"), CultureInfo.InvariantCulture);
+        var value = Convert.ToString(GetPropertyValue(item, "Value"), CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(field) && string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(row))
+        {
+            builder.Append("第 ").Append(row).Append(" 行 ");
+        }
+
+        builder.Append(string.IsNullOrWhiteSpace(field) ? "未知字段" : field);
+        if (!string.IsNullOrWhiteSpace(length))
+        {
+            builder.Append(" 长度 ").Append(length);
+        }
+
+        if (!string.IsNullOrWhiteSpace(longestRun))
+        {
+            builder.Append(" 连续字符 ").Append(longestRun);
+        }
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            builder.Append(" 值：").Append(value);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string? ReadExceptionData(Exception exception, string key)
+    {
+        try
+        {
+            return exception.Data.Contains(key)
+                ? Convert.ToString(exception.Data[key], CultureInfo.CurrentCulture)
+                : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -261,6 +633,312 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             })
             .Cast<object>()
             .ToList();
+    }
+
+    private static IReadOnlyList<object> GetLongestObjectTextValues(IEnumerable? records)
+    {
+        if (records is null)
+        {
+            return [];
+        }
+
+        var values = ReadObjectTextValues(records);
+        return values
+            .OrderByDescending(item => NormalizeSingleLinePrintText(item.Value).Length)
+            .ThenBy(item => item.Row)
+            .Take(40)
+            .Select(item => new
+            {
+                item.Row,
+                item.Field,
+                Length = NormalizeSingleLinePrintText(item.Value).Length,
+                Value = TruncateForDiagnostic(item.Value, 220)
+            })
+            .Cast<object>()
+            .ToList();
+    }
+
+    private static IReadOnlyList<object> GetSuspectedOverflowTextValues(IEnumerable? records)
+    {
+        if (records is null)
+        {
+            return [];
+        }
+
+        var values = ReadObjectTextValues(records);
+        return values
+            .Select(item => new
+            {
+                item.Row,
+                item.Field,
+                Value = NormalizeSingleLinePrintText(item.Value)
+            })
+            .Where(item => LooksLikeLongPaperDetail(item.Value) || HasLongContinuousTextRun(item.Value, 16))
+            .OrderByDescending(item => item.Value.Length)
+            .ThenBy(item => item.Row)
+            .Take(40)
+            .Select(item => new
+            {
+                item.Row,
+                item.Field,
+                Length = item.Value.Length,
+                LongestRun = GetLongestContinuousTextRunLength(item.Value),
+                Value = TruncateForDiagnostic(item.Value, 220)
+            })
+            .Cast<object>()
+            .ToList();
+    }
+
+    private static List<(int Row, string Field, string Value)> ReadObjectTextValues(IEnumerable records)
+    {
+        var values = new List<(int Row, string Field, string Value)>();
+        var index = 0;
+        foreach (var record in records)
+        {
+            index++;
+            if (record is null || record is string)
+            {
+                continue;
+            }
+
+            var row = ReadDiagnosticRow(record, index);
+            foreach (var property in record.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length != 0 || !property.CanRead)
+                {
+                    continue;
+                }
+
+                object? value;
+                try
+                {
+                    value = property.GetValue(record);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (value is string text && !string.IsNullOrWhiteSpace(text))
+                {
+                    values.Add((row, property.Name, text));
+                    continue;
+                }
+
+                if (string.Equals(property.Name, nameof(FlowRecord.ExtraFields), StringComparison.Ordinal)
+                    || string.Equals(property.Name, "ExtraFields", StringComparison.Ordinal))
+                {
+                    ReadDiagnosticExtraFields(value, row, values);
+                }
+            }
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<object> GetObjectRecordSnapshots(IEnumerable? records, int take)
+    {
+        if (records is null || take <= 0)
+        {
+            return [];
+        }
+
+        var snapshots = new List<object>();
+        var index = 0;
+        foreach (var record in records)
+        {
+            index++;
+            if (record is null || record is string)
+            {
+                continue;
+            }
+
+            var fields = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in record.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (property.GetIndexParameters().Length != 0 || !property.CanRead)
+                {
+                    continue;
+                }
+
+                object? value;
+                try
+                {
+                    value = property.GetValue(record);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (string.Equals(property.Name, nameof(FlowRecord.ExtraFields), StringComparison.Ordinal)
+                    || string.Equals(property.Name, "ExtraFields", StringComparison.Ordinal))
+                {
+                    AddDiagnosticExtraFields(value, fields);
+                    continue;
+                }
+
+                var text = Convert.ToString(value, CultureInfo.CurrentCulture);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    fields[property.Name] = TruncateForDiagnostic(text, 220);
+                }
+            }
+
+            snapshots.Add(new
+            {
+                Row = ReadDiagnosticRow(record, index),
+                Fields = fields
+            });
+
+            if (snapshots.Count >= take)
+            {
+                break;
+            }
+        }
+
+        return snapshots;
+    }
+
+    private static int ReadDiagnosticRow(object record, int fallback)
+    {
+        foreach (var propertyName in new[] { "Index", "Id" })
+        {
+            var property = record.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (property is null || !property.CanRead || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                var value = property.GetValue(record);
+                if (value is not null && int.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out var row) && row > 0)
+                {
+                    return row;
+                }
+            }
+            catch
+            {
+                // Best-effort diagnostics only.
+            }
+        }
+
+        return fallback;
+    }
+
+    private static void AddDiagnosticExtraFields(object? extraFields, IDictionary<string, string> fields)
+    {
+        if (extraFields is null)
+        {
+            return;
+        }
+
+        if (extraFields is IDictionary dictionary)
+        {
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                var key = Convert.ToString(entry.Key, CultureInfo.CurrentCulture) ?? string.Empty;
+                var value = Convert.ToString(entry.Value, CultureInfo.CurrentCulture) ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+                {
+                    fields[$"ExtraFields.{key}"] = TruncateForDiagnostic(value, 220);
+                }
+            }
+
+            return;
+        }
+
+        if (extraFields is not IEnumerable enumerable || extraFields is string)
+        {
+            return;
+        }
+
+        foreach (var item in enumerable)
+        {
+            if (item is null)
+            {
+                continue;
+            }
+
+            var key = Convert.ToString(GetPropertyValue(item, "Key"), CultureInfo.CurrentCulture) ?? string.Empty;
+            var value = Convert.ToString(GetPropertyValue(item, "Value"), CultureInfo.CurrentCulture) ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+            {
+                fields[$"ExtraFields.{key}"] = TruncateForDiagnostic(value, 220);
+            }
+        }
+    }
+
+    private static void ReadDiagnosticExtraFields(
+        object? extraFields,
+        int row,
+        ICollection<(int Row, string Field, string Value)> values)
+    {
+        if (extraFields is null)
+        {
+            return;
+        }
+
+        if (extraFields is IDictionary dictionary)
+        {
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                var key = Convert.ToString(entry.Key, CultureInfo.CurrentCulture) ?? string.Empty;
+                var value = Convert.ToString(entry.Value, CultureInfo.CurrentCulture) ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    values.Add((row, $"ExtraFields.{key}", value));
+                }
+            }
+
+            return;
+        }
+
+        if (extraFields is not IEnumerable enumerable || extraFields is string)
+        {
+            return;
+        }
+
+        foreach (var item in enumerable)
+        {
+            if (item is null)
+            {
+                continue;
+            }
+
+            var key = Convert.ToString(GetPropertyValue(item, "Key"), CultureInfo.CurrentCulture) ?? string.Empty;
+            var value = Convert.ToString(GetPropertyValue(item, "Value"), CultureInfo.CurrentCulture) ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                values.Add((row, $"ExtraFields.{key}", value));
+            }
+        }
+    }
+
+    private static bool HasLongContinuousTextRun(string text, int minRunLength)
+    {
+        return GetLongestContinuousTextRunLength(text) >= minRunLength;
+    }
+
+    private static int GetLongestContinuousTextRunLength(string text)
+    {
+        var maxRun = 0;
+        var currentRun = 0;
+        foreach (var character in text)
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                currentRun++;
+                maxRun = Math.Max(maxRun, currentRun);
+            }
+            else
+            {
+                currentRun = 0;
+            }
+        }
+
+        return maxRun;
     }
 
     private static string TruncateForDiagnostic(string value, int maxLength)
@@ -391,12 +1069,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
                     catch (Exception ex)
                     {
-                        throw CreateRenderException("Stimulsoft", context.Template, ex);
+                        TryWritePrintFailureDiagnostic(context, path, ex, renderBranch: "vendor-stimulsoft");
+                        var wrapped = CreateRenderException("Stimulsoft", context.Template, ex);
+                        MarkPrintDiagnosticsWritten(wrapped);
+                        throw wrapped;
                     }
                 }
 
                 var bankUser = CreateVendorBankUser(context);
                 var records = CreateVendorFlowRecords(context);
+                TryWritePrintRenderProbe(context, path, records, "vendor-records-created");
                 try
                 {
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
@@ -423,20 +1105,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         }
                     }
 
-                    var template = CreateVendorTemplate(context, resolvedTemplate);
-                    var document = renderFactory.Invoke(null, [bankUser, records, template]);
-                    if (document is null)
-                    {
-                        return false;
-                    }
-
-                    NormalizeVendorDynamicImageDocument(context, document);
-                    generatePdfMethod.Invoke(null, [document, path]);
-                    return true;
+                    return TryExportWithVendorQuestPdf(context, resolvedTemplate, bankUser, records, path);
                 }
                 catch (Exception ex)
                 {
-                    throw CreateRenderException("QuestPDF", context.Template, ex);
+                    TryWritePrintFailureDiagnostic(context, path, ex, records, "vendor-questpdf");
+                    var wrapped = CreateRenderException("QuestPDF", context.Template, ex);
+                    MarkPrintDiagnosticsWritten(wrapped);
+                    throw wrapped;
                 }
             }
             finally
@@ -736,7 +1412,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            ApplyVendorBankUserStampFields(target, context.BankUser, values);
+            ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -787,7 +1463,121 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return records;
         }
 
+        private bool TryExportWithVendorQuestPdf(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate,
+            object bankUser,
+            object records,
+            string path)
+        {
+            Exception? lastLayoutException = null;
+            foreach (var pageRows in GetVendorQuestPdfPageRowAttempts(context, resolvedTemplate))
+            {
+                try
+                {
+                    var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
+                    var document = renderFactory.Invoke(null, [bankUser, records, template]);
+                    if (document is null)
+                    {
+                        return false;
+                    }
+
+                    NormalizeVendorDynamicImageDocument(context, document);
+                    generatePdfMethod.Invoke(null, [document, path]);
+                    return true;
+                }
+                catch (Exception ex) when (ShouldRetryVendorQuestPdfWithFewerRows(context, ex, pageRows))
+                {
+                    lastLayoutException = ex;
+                    TryDeleteFile(path);
+                }
+            }
+
+            if (lastLayoutException is not null)
+            {
+                throw lastLayoutException;
+            }
+
+            return false;
+        }
+
+        private static IEnumerable<int?> GetVendorQuestPdfPageRowAttempts(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate)
+        {
+            var pageRows = resolvedTemplate.PageRows > 0 ? resolvedTemplate.PageRows : context.Template.PageRows;
+            if (pageRows <= 0)
+            {
+                yield return null;
+                yield break;
+            }
+
+            yield return pageRows;
+
+            if (!IsPaperPrintTemplate(context))
+            {
+                yield break;
+            }
+
+            for (var rows = pageRows - 1; rows >= 1; rows--)
+            {
+                yield return rows;
+            }
+        }
+
+        private static bool ShouldRetryVendorQuestPdfWithFewerRows(PrintRenderContext context, Exception ex, int? pageRows)
+        {
+            return pageRows > 1
+                && IsPaperPrintTemplate(context)
+                && IsQuestPdfLayoutConflict(ex);
+        }
+
+        private static bool IsQuestPdfLayoutConflict(Exception ex)
+        {
+            for (Exception? current = ex; current is not null; current = current.InnerException)
+            {
+                var typeName = current.GetType().FullName ?? string.Empty;
+                var message = current.Message ?? string.Empty;
+                if (typeName.Contains("DocumentLayoutException", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("conflicting size constraints", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("Decoration slot", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("more space than is available", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            var root = UnwrapReflectionException(ex);
+            var rootTypeName = root.GetType().FullName ?? string.Empty;
+            var rootMessage = root.Message ?? string.Empty;
+            return rootTypeName.Contains("DocumentLayoutException", StringComparison.OrdinalIgnoreCase)
+                || rootMessage.Contains("conflicting size constraints", StringComparison.OrdinalIgnoreCase)
+                || rootMessage.Contains("Decoration slot", StringComparison.OrdinalIgnoreCase)
+                || rootMessage.Contains("more space than is available", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch
+            {
+                // Ignore intermediate render artifacts; the next attempt can
+                // normally overwrite the same preview path.
+            }
+        }
+
         private object CreateVendorTemplate(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
+        {
+            return CreateVendorTemplate(context, resolvedTemplate, null);
+        }
+
+        private object CreateVendorTemplate(PrintRenderContext context, ResolvedTemplate resolvedTemplate, int? pageRowsOverride)
         {
             var target = Activator.CreateInstance(templateType) ?? throw new InvalidOperationException("Cannot create vendor PDFTemplate.");
             var source = resolvedTemplate.Template;
@@ -795,7 +1585,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "BankId", source is null ? GetVendorBankId(context) : ReadLong(source, "BankId", GetVendorBankId(context)));
             Set(target, "IsSystem", source is null ? context.Template.IsSystem : ReadBoolean(source, "IsSystem", context.Template.IsSystem));
             Set(target, "Name", resolvedTemplate.Name);
-            Set(target, "PageSize", source is null ? resolvedTemplate.PageRows : ReadLong(source, "PageSize", resolvedTemplate.PageRows));
+            Set(target, "PageSize", pageRowsOverride ?? (source is null ? resolvedTemplate.PageRows : ReadLong(source, "PageSize", resolvedTemplate.PageRows)));
             Set(target, "Remark", source is null ? context.Template.Remark : ReadString(source, "Remark", context.Template.Remark));
             Set(target, "PdfConfig", resolvedTemplate.Config);
             Set(target, "PdfData", FirstNotBlank(source is null ? null : ReadString(source, "PdfData", string.Empty), resolvedTemplate.PdfData, context.Template.PdfData));
@@ -1306,7 +2096,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            ApplyVendorBankUserStampFields(target, context.BankUser, values);
+            ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -2040,7 +2830,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
-            ApplyVendorBankUserStampFields(target, context.BankUser, values);
+            ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
             return target;
         }
@@ -2214,7 +3004,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
-    private static void ApplyVendorBankUserStampFields(object target, BankUser bankUser, IReadOnlyDictionary<string, object?> values)
+    private static void ApplyVendorBankUserStampFields(
+        PrintRenderContext context,
+        object target,
+        BankUser bankUser,
+        IReadOnlyDictionary<string, object?> values)
     {
         var stampCode = FirstNotBlank(
             bankUser.ChapterCode,
@@ -2225,14 +3019,86 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             bankUser.ChapterBranch,
             GetValue(values, "StampBranch"),
             GetValue(values, "ChapterBranch"),
-            GetValue(values, "PrintBranch"),
             GetValue(values, "OpenBranch"));
+        var printBranch = ResolveBankUserPrintBranch(context, values);
+
+        if (IsAgriculturalBankPersonalPaperTemplate(context))
+        {
+            stampCode = NormalizeAgriculturalPaperStampCode(stampCode);
+            stampBranch = NormalizeAgriculturalPaperStampBranch(stampBranch);
+            printBranch = NormalizeAgriculturalPaperPrintBranch(printBranch);
+        }
 
         Set(target, "IsPrintStamp", bankUser.ShouldPrintSeal);
         Set(target, "ZhangImg", bankUser.ShouldPrintSeal ? FirstNotBlank(bankUser.SealImagePath, GetValue(values, "ZhangImg")) : string.Empty);
         Set(target, "StampCode", stampCode);
         Set(target, "StampBranch", stampBranch);
-        Set(target, "PrintBranch", FirstNotBlank(GetValue(values, "PrintBranch"), stampBranch));
+        Set(target, "ChapterCode", stampCode);
+        Set(target, "ChapterBranch", stampBranch);
+        Set(target, "ZhangCode", stampCode);
+        var resolvedPrintBranch = FirstNotBlank(printBranch, IsAgriculturalBankPersonalPaperTemplate(context) ? string.Empty : stampBranch);
+        Set(target, "PrintBranch", resolvedPrintBranch);
+        Set(target, "PrintAgency", resolvedPrintBranch);
+        Set(target, "PrintOrg", resolvedPrintBranch);
+        Set(target, "PrintInstitution", resolvedPrintBranch);
+        Set(target, "PrintNet", resolvedPrintBranch);
+        Set(target, "PrintNetwork", resolvedPrintBranch);
+    }
+
+    private static string ResolveBankUserPrintBranch(PrintRenderContext context, IReadOnlyDictionary<string, object?> values)
+    {
+        var configured = GetBankUserColumnValue(
+            context,
+            values,
+            "\u6253\u5370\u673A\u6784",
+            "\u6253\u5370\u7F51\u70B9",
+            "\u64CD\u4F5C\u7F51\u70B9",
+            "\u53D7\u7406\u884C",
+            "\u673A\u6784\u53F7",
+            "\u7F51\u70B9\u53F7");
+
+        return FirstNotBlank(
+            configured,
+            GetValue(values, "PrintAgency"),
+            GetValue(values, "PrintOrg"),
+            GetValue(values, "PrintInstitution"),
+            GetValue(values, "PrintBranch"),
+            GetValue(values, "PrintNet"),
+            GetValue(values, "PrintNetwork"),
+            GetValue(values, "OpenBranch"));
+    }
+
+    private static string NormalizeAgriculturalPaperStampCode(string? value)
+    {
+        var text = NormalizeSingleLinePrintText(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        return LimitSingleLinePrintText(text, 16);
+    }
+
+    private static string NormalizeAgriculturalPaperStampBranch(string? value)
+    {
+        var text = NormalizeSingleLinePrintText(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        return LimitSingleLinePrintText(text, 16);
+    }
+
+    private static string NormalizeAgriculturalPaperPrintBranch(string? value)
+    {
+        var text = NormalizeSingleLinePrintText(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        return LimitSingleLinePrintText(text, 12);
     }
 
     private static void ApplyFlowRecordColumnAliases(Bank bank, FlowRecord source, Dictionary<string, object?> values)
@@ -2339,7 +3205,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
-        MoveAgriculturalPaperLongDetailToWideField(source, values, target);
+        NormalizeAgriculturalPaperPaperRowFields(source, values, target);
+
         TrimTextProperty(target, nameof(FlowRecord.NetNum), 8);
         TrimTextProperty(target, nameof(FlowRecord.TradePlace), 8);
         TrimTextProperty(target, nameof(FlowRecord.VoucherNum), 10);
@@ -2363,12 +3230,216 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
-        var safeWideDetail = InsertSoftLineBreaks(rawWideDetail, 12);
+        var safeWideDetail = NormalizeSingleLinePrintText(rawWideDetail);
         SetAgriculturalPaperWideDetail(target, safeWideDetail);
+        RestoreAgriculturalPaperMainRowRemark(source, values, target, rawWideDetail);
         RestoreAgriculturalPaperCounterpartyFields(source, values, target);
 
         ClearAgriculturalPaperNarrowDetailFields(target);
         ClearAgriculturalPaperUnsafeLongTextFields(target, rawWideDetail, safeWideDetail);
+    }
+
+    private static void NormalizeAgriculturalPaperPaperRowFields(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var longDetail = GetAgriculturalPaperLongDetailCandidates(source, values, target)
+            .Select(NormalizeSingleLinePrintText)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .FirstOrDefault(LooksLikeLongPaperDetail);
+        var oppositeUsername = NormalizeSingleLinePrintText(FirstNotBlank(
+            source.OppositeUsername,
+            GetValue(values, nameof(FlowRecord.OppositeUsername)),
+            GetValue(values, "OppositeUserName"),
+            GetValue(values, "OppositeName"),
+            GetValue(values, "CounterpartyName"),
+            ReadStringProperty(target, nameof(FlowRecord.OppositeUsername), string.Empty)));
+        var oppositeAccount = NormalizeSingleLinePrintText(FirstNotBlank(
+            source.OppositeAccount,
+            GetValue(values, nameof(FlowRecord.OppositeAccount)),
+            GetValue(values, "OppositeAccountNum"),
+            GetValue(values, "CounterpartyAccount"),
+            GetValue(values, "OtherAccount"),
+            ReadStringProperty(target, nameof(FlowRecord.OppositeAccount), string.Empty)));
+        var subAccountToken = ExtractAgriculturalPaperAccountToken(
+            source.SubAccountNum,
+            GetValue(values, nameof(FlowRecord.SubAccountNum)),
+            ReadStringProperty(target, nameof(FlowRecord.SubAccountNum), string.Empty),
+            oppositeAccount);
+
+        var paperSubrowDetail = NormalizeSingleLinePrintText(longDetail ?? string.Empty);
+        var resolvedOppositeUsername = string.IsNullOrWhiteSpace(paperSubrowDetail)
+            ? oppositeUsername
+            : paperSubrowDetail;
+
+        if (!string.IsNullOrWhiteSpace(resolvedOppositeUsername))
+        {
+            Set(target, nameof(FlowRecord.OppositeUsername), PrepareAgriculturalPaperDetailText(resolvedOppositeUsername));
+        }
+
+        if (!string.IsNullOrWhiteSpace(subAccountToken))
+        {
+            Set(target, nameof(FlowRecord.OppositeAccount), PrepareAgriculturalPaperAccountText(subAccountToken));
+        }
+        else if (!string.IsNullOrWhiteSpace(oppositeAccount))
+        {
+            var accountToken = ExtractAgriculturalPaperAccountToken(oppositeAccount);
+            Set(
+                target,
+                nameof(FlowRecord.OppositeAccount),
+                PrepareAgriculturalPaperAccountText(
+                    string.IsNullOrWhiteSpace(accountToken) ? oppositeAccount : accountToken));
+        }
+
+        RestoreAgriculturalPaperMainRowRemark(source, values, target, longDetail ?? string.Empty);
+
+        ClearAgriculturalPaperNarrowDetailFields(target);
+        ClearAgriculturalPaperUnsafeLongTextFields(target, longDetail ?? string.Empty);
+        ClearStringProperties(target, AgriculturalPaperWideDetailPropertyNames.ToArray());
+        ClearStringProperties(
+            target,
+            nameof(FlowRecord.Account),
+            nameof(FlowRecord.AccountNum),
+            nameof(FlowRecord.SubAccountNum),
+            "CardNum",
+            "CardNo",
+            "BankAccount",
+            "BankAccountNo",
+            "BankCardNo");
+    }
+
+    private static void NormalizeAgriculturalPaperMainRowFields(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var detailParts = new List<string>();
+        AddAgriculturalPaperDetailPart(
+            detailParts,
+            ReadFirstStringProperty(target, AgriculturalPaperWideDetailPropertyNames));
+
+        var oppositeAccount = NormalizeSingleLinePrintText(FirstNotBlank(
+            source.OppositeAccount,
+            GetValue(values, nameof(FlowRecord.OppositeAccount)),
+            GetValue(values, "OppositeAccountNum"),
+            GetValue(values, "CounterpartyAccount"),
+            GetValue(values, "OtherAccount"),
+            ReadStringProperty(target, nameof(FlowRecord.OppositeAccount), string.Empty)));
+        var subAccountToken = ExtractAgriculturalPaperAccountToken(
+            source.SubAccountNum,
+            GetValue(values, nameof(FlowRecord.SubAccountNum)),
+            ReadStringProperty(target, nameof(FlowRecord.SubAccountNum), string.Empty),
+            oppositeAccount);
+        if (!string.IsNullOrWhiteSpace(subAccountToken))
+        {
+            Set(target, nameof(FlowRecord.SubAccountNum), subAccountToken);
+        }
+
+        var longDetail = GetAgriculturalPaperLongDetailCandidates(source, values, target)
+            .Select(NormalizeSingleLinePrintText)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .FirstOrDefault(LooksLikeLongPaperDetail);
+        AddAgriculturalPaperDetailPart(detailParts, longDetail);
+
+        var hasWideDetail = detailParts.Count > 0;
+        if (hasWideDetail)
+        {
+            SetAgriculturalPaperWideDetail(target, string.Join(" ", detailParts));
+        }
+
+        ClearStringProperties(
+            target,
+            nameof(FlowRecord.Account),
+            nameof(FlowRecord.AccountNum),
+            "CardNum",
+            "CardNo",
+            "BankAccount",
+            "BankAccountNo",
+            "BankCardNo");
+    }
+
+    private static string ExtractAgriculturalPaperAccountToken(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            var normalized = NormalizeSingleLinePrintText(value ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                continue;
+            }
+
+            foreach (var token in normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var candidate = new string(token
+                    .Where(character => char.IsLetterOrDigit(character) || character == '*' || character == '-')
+                    .ToArray());
+                var significantCount = candidate.Count(character => char.IsLetterOrDigit(character));
+                if (candidate.Length is >= 6 and <= 32 && significantCount >= 6)
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static bool HasWritableStringProperty(object target, IEnumerable<string> propertyNames)
+    {
+        var type = target.GetType();
+        foreach (var propertyName in propertyNames)
+        {
+            var property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (property is { CanWrite: true } && property.PropertyType == typeof(string))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ReadFirstStringProperty(object target, IEnumerable<string> propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            var value = NormalizeSingleLinePrintText(ReadStringProperty(target, propertyName, string.Empty));
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static void AddAgriculturalPaperDetailPart(ICollection<string> parts, string? value)
+    {
+        var normalized = NormalizeSingleLinePrintText(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        if (!parts.Contains(normalized, StringComparer.Ordinal))
+        {
+            parts.Add(normalized);
+        }
+    }
+
+    private static void ClearStringProperties(object target, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (property is null || !property.CanWrite || property.PropertyType != typeof(string))
+            {
+                continue;
+            }
+
+            property.SetValue(target, string.Empty);
+        }
     }
 
     private static IEnumerable<string> GetAgriculturalPaperLongDetailCandidates(
@@ -2434,7 +3505,51 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static void SetAgriculturalPaperWideDetail(object target, string wideDetail)
     {
-        Set(target, nameof(FlowRecord.Remark), wideDetail);
+        foreach (var propertyName in AgriculturalPaperWideDetailPropertyNames)
+        {
+            Set(target, propertyName, wideDetail);
+        }
+    }
+
+    private static string PrepareAgriculturalPaperAccountText(string text)
+    {
+        return InsertSoftLineBreaks(NormalizeSingleLinePrintText(text), 14);
+    }
+
+    private static string PrepareAgriculturalPaperDetailText(string text)
+    {
+        return InsertSoftLineBreaks(NormalizeSingleLinePrintText(text), 14);
+    }
+
+    private static void RestoreAgriculturalPaperMainRowRemark(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target,
+        string rawWideDetail)
+    {
+        var currentRemark = NormalizeSingleLinePrintText(ReadStringProperty(target, nameof(FlowRecord.Remark), string.Empty));
+        if (string.IsNullOrWhiteSpace(currentRemark))
+        {
+            return;
+        }
+
+        var normalizedRawDetail = NormalizeSingleLinePrintText(rawWideDetail);
+        if (!string.Equals(currentRemark, normalizedRawDetail, StringComparison.Ordinal)
+            && !LooksLikeLongPaperDetail(currentRemark))
+        {
+            return;
+        }
+
+        var shortRemark = NormalizeSingleLinePrintText(FirstNotBlank(
+            source.TradeExplain,
+            GetValue(values, nameof(FlowRecord.TradeExplain)),
+            source.Usage,
+            GetValue(values, nameof(FlowRecord.Usage)),
+            source.MerchantName,
+            GetValue(values, nameof(FlowRecord.MerchantName)),
+            source.ProductBrief,
+            GetValue(values, nameof(FlowRecord.ProductBrief))));
+        Set(target, nameof(FlowRecord.Remark), LooksLikeLongPaperDetail(shortRemark) ? string.Empty : shortRemark);
     }
 
     private static void RestoreAgriculturalPaperCounterpartyFields(
@@ -2460,7 +3575,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, "OtherAccount"));
         if (!string.IsNullOrWhiteSpace(oppositeAccount))
         {
-            Set(target, nameof(FlowRecord.OppositeAccount), NormalizePrintNumber(oppositeAccount));
+            var accountToken = ExtractAgriculturalPaperAccountToken(oppositeAccount);
+            Set(
+                target,
+                nameof(FlowRecord.OppositeAccount),
+                string.IsNullOrWhiteSpace(accountToken)
+                    ? NormalizeSingleLinePrintText(oppositeAccount)
+                    : accountToken);
         }
     }
 
@@ -2474,11 +3595,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                      nameof(FlowRecord.OppositeBank),
                      "MerchantOrderNo",
                      "MerchantOrderNum",
-                     "MerchantNo",
-                     "AccountNameAndNumber",
-                     "AccountAndName",
-                     "OppositeAccountAndName",
-                     "CounterpartyAccountAndName"
+                     "MerchantNo"
                  })
         {
             ClearStringPropertyIfLongPaperDetail(target, propertyName);
@@ -2501,6 +3618,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             if (AgriculturalPaperWideDetailPropertyNames.Contains(property.Name))
+            {
+                continue;
+            }
+
+            if (string.Equals(property.Name, nameof(FlowRecord.Remark), StringComparison.Ordinal))
             {
                 continue;
             }
@@ -2591,6 +3713,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return isAgriculturalBank && isPersonalPaper;
     }
 
+    private static bool IsPaperPrintTemplate(PrintRenderContext context)
+    {
+        return (context.Template.Name ?? string.Empty).Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal);
+    }
+
     private static void TrimTextProperty(object target, string propertyName, int maxLength)
     {
         var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
@@ -2677,6 +3804,39 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return builder.ToString();
     }
 
+    private static string InsertHardLineBreaks(string text, int runLength)
+    {
+        if (runLength <= 0 || string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        var normalized = text.Replace("\u200B", string.Empty, StringComparison.Ordinal);
+        var builder = new StringBuilder(normalized.Length + (normalized.Length / runLength));
+        var run = 0;
+        foreach (var character in normalized)
+        {
+            builder.Append(character);
+
+            if (char.IsWhiteSpace(character)
+                || char.IsPunctuation(character)
+                || char.IsSymbol(character))
+            {
+                run = 0;
+                continue;
+            }
+
+            run++;
+            if (run >= runLength)
+            {
+                builder.Append('\n');
+                run = 0;
+            }
+        }
+
+        return builder.ToString().TrimEnd('\n');
+    }
+
     private static string LimitSingleLinePrintText(string text, int maxLength)
     {
         var normalizedText = NormalizeSingleLinePrintText(text);
@@ -2700,6 +3860,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var previousWasSpace = false;
         foreach (var character in normalized)
         {
+            if (char.GetUnicodeCategory(character) == UnicodeCategory.Format)
+            {
+                continue;
+            }
+
             if (char.IsControl(character) || char.IsWhiteSpace(character))
             {
                 if (!previousWasSpace && builder.Length > 0)
