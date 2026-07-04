@@ -738,7 +738,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
     private async Task ReloadTemplatesAsync(string? preferredName = null, long? preferredId = null, bool selectFallback = true)
     {
         Templates.Clear();
-        var templates = await templateRepository.ListByBankAsync(Bank);
+        var templates = await Task.Run(() => templateRepository.ListByBankAsync(Bank));
         foreach (var template in templates)
         {
             Templates.Add(template);

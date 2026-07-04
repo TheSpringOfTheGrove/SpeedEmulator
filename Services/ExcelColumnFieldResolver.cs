@@ -61,7 +61,7 @@ public static class ExcelColumnFieldResolver
             "存期" => (nameof(FlowRecord.DepositTerm), "Text"),
             "约转期" => (nameof(FlowRecord.AgreedTerm), "Text"),
             "通知种类发行代码" => (nameof(FlowRecord.NoticeType), "Text"),
-            "地区号" => (nameof(FlowRecord.AreaNum), "Text"),
+            "地区" or "地区号" => (nameof(FlowRecord.AreaNum), "Text"),
             "网点号" or "机构号" or "机构码" or "交易机构号" or "机构柜员流水" or "交易机构" => (nameof(FlowRecord.NetNum), "Text"),
             "操作员" or "柜员" or "业务柜员" or "交易柜员" or "操作柜员" => (nameof(FlowRecord.Operator), "Text"),
             "柜员号" or "柜员交易号" or "交易柜员号" or "操作员编号" => (nameof(FlowRecord.OperatorNum), "Text"),

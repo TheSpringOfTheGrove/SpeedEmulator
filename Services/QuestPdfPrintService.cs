@@ -513,12 +513,116 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             }
 
             var formatted = ApplyTabSize(FormatValue(value, column.Type));
+            if (string.IsNullOrWhiteSpace(formatted))
+            {
+                formatted = GetKnownColumnFallback(record, column);
+            }
+
             if (ShouldSuppressPaperMainRowValue(record, column, formatted))
             {
                 return GetPaperMainRowFallback(record, column);
             }
 
             return formatted;
+        }
+
+        private static string GetKnownColumnFallback(FlowRecord record, PrintPdfColumn column)
+        {
+            var name = column.Name ?? string.Empty;
+            if (name.Contains("\u4EA4\u6613\u5355\u53F7", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.SerialNum,
+                    record.SequenceNum,
+                    record.LogNum,
+                    record.TradeCode,
+                    record.MerchantName);
+            }
+
+            if (name.Contains("\u4EA4\u6613\u7C7B\u578B", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.ProductName,
+                    record.ProductType,
+                    record.TradeExplain,
+                    record.ProductBrief,
+                    record.CashCheck,
+                    record.Usage);
+            }
+
+            if (name.Contains("\u5546\u5BB6\u8BA2\u5355\u53F7", StringComparison.Ordinal)
+                || name.Contains("\u5546\u6237\u5355\u53F7", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.MerchantName,
+                    record.ReceiptNum,
+                    record.SerialNum);
+            }
+
+            if (name.Contains("\u5546\u54C1\u8BF4\u660E", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.Remark,
+                    record.ProductBrief,
+                    record.TradeExplain,
+                    record.Usage);
+            }
+
+            if (string.Equals(name, "\u6458\u8981", StringComparison.Ordinal)
+                || name.Contains("\u4EA4\u6613\u6458\u8981", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.Remark,
+                    record.ProductBrief,
+                    record.TradeExplain,
+                    record.ProductName,
+                    record.TradeCode,
+                    record.ProductCode,
+                    record.Usage);
+            }
+
+            if (name.Contains("\u4EA4\u6613\u540D\u79F0", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.ProductName,
+                    record.TradeExplain,
+                    record.ProductBrief,
+                    record.TradeCode,
+                    record.ProductCode,
+                    record.CashCheck,
+                    record.Remark,
+                    record.Usage);
+            }
+
+            if (string.Equals(name, "\u5730\u533A", StringComparison.Ordinal)
+                || name.Contains("\u5730\u533A\u53F7", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.AreaNum,
+                    record.TradePlace,
+                    record.NetNum);
+            }
+
+            if (name.Contains("\u4EA4\u6613\u673A\u6784", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.NetNum,
+                    record.BranchNum,
+                    record.TradePlace);
+            }
+
+            if (name.Contains("\u4EA4\u6613\u7F51\u70B9", StringComparison.Ordinal)
+                || name.Contains("\u4EA4\u6613\u5730\u70B9", StringComparison.Ordinal)
+                || string.Equals(name, "\u5730\u70B9", StringComparison.Ordinal))
+            {
+                return FirstNotBlank(
+                    record.TradePlace,
+                    record.NetNum,
+                    record.AreaNum,
+                    record.BranchNum);
+            }
+
+            return string.Empty;
         }
 
         private bool ShouldSuppressPaperMainRowValue(FlowRecord record, PrintPdfColumn column, string value)

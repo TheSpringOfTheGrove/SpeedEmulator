@@ -20,6 +20,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
     private readonly object syncRoot = new();
     private readonly string storagePath;
     private Dictionary<long, List<PrintTemplate>> templatesByBank = [];
+    private readonly Dictionary<string, List<PrintTemplate>> systemTemplateCache = [];
     private bool loaded;
 
     public JsonPrintTemplateRepository()
@@ -35,7 +36,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         lock (syncRoot)
         {
             EnsureLoaded();
-            var templates = CreateSystemTemplates(bank);
+            var templates = GetCachedSystemTemplates(bank);
             if (templatesByBank.TryGetValue(bank.Id, out var savedTemplates))
             {
                 if (RequiresVendorTemplateResync(bank, templates))
@@ -209,6 +210,40 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
 
         return templates;
+    }
+
+    private List<PrintTemplate> GetCachedSystemTemplates(Bank bank)
+    {
+        var cacheKey = GetSystemTemplateCacheKey(bank);
+        if (!systemTemplateCache.TryGetValue(cacheKey, out var templates))
+        {
+            templates = CreateSystemTemplates(bank);
+            systemTemplateCache[cacheKey] = templates.Select(item => item.Clone()).ToList();
+        }
+
+        return templates.Select(item => item.Clone()).ToList();
+    }
+
+    private static string GetSystemTemplateCacheKey(Bank bank)
+    {
+        var columns = bank.FlowColumns
+            .OrderBy(item => item.Order)
+            .ThenBy(item => item.Name, StringComparer.Ordinal)
+            .Select(item => string.Join(
+                '\u001e',
+                item.Order.ToString(CultureInfo.InvariantCulture),
+                item.Name ?? string.Empty,
+                item.Field ?? string.Empty,
+                item.Type ?? string.Empty,
+                item.Width.ToString(CultureInfo.InvariantCulture),
+                item.Show ? "1" : "0"));
+
+        return string.Join(
+            '\u001f',
+            bank.Id.ToString(CultureInfo.InvariantCulture),
+            bank.Name,
+            bank.Type,
+            string.Join('\u001d', columns));
     }
 
     private static IEnumerable<PrintTemplateDefinition> DeduplicateTemplateDefinitions(IEnumerable<PrintTemplateDefinition> definitions)

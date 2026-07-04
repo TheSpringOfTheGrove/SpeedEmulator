@@ -5,7 +5,15 @@ param(
 
     [string]$LocalReleaseDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\hot-update\releases'),
 
-    [string]$PublicBaseUrl = 'http://159.75.125.68/speedemulator'
+    [string]$PublicBaseUrl = 'http://159.75.125.68/speedemulator',
+
+    [ValidateRange(1, 20)]
+    [int]$KeepFullReleases = 1,
+
+    [ValidateRange(0, 20)]
+    [int]$KeepDeltaReleases = 1,
+
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +33,85 @@ function Invoke-Native {
     }
 }
 
+function ConvertTo-ReleaseVersionKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    $baseVersion = ($Version -split '-', 2)[0]
+    try {
+        [version]$baseVersion
+    } catch {
+        throw "Unable to parse release version '$Version'."
+    }
+}
+
+function Get-ReleasePackageInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileInfo]$File
+    )
+
+    if ($File.Name -notmatch '^SpeedEmulator-(?<Version>.+)-(?<Kind>full|delta)\.nupkg$') {
+        return $null
+    }
+
+    $version = $Matches.Version
+    [pscustomobject]@{
+        File       = $File
+        FileName   = $File.Name
+        Version    = $version
+        VersionKey = ConvertTo-ReleaseVersionKey $version
+        Kind       = $Matches.Kind
+    }
+}
+
+function Copy-PrunedMetadata {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReleasePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$StagingPath,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$SelectedPackageNames
+    )
+
+    $assetsPath = Join-Path $ReleasePath 'assets.win.json'
+    $releasesPath = Join-Path $ReleasePath 'RELEASES'
+    $jsonPath = Join-Path $ReleasePath 'releases.win.json'
+
+    foreach ($path in @($assetsPath, $releasesPath, $jsonPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Required release metadata is missing: $path"
+        }
+    }
+
+    Copy-Item -LiteralPath $assetsPath -Destination (Join-Path $StagingPath 'assets.win.json') -Force
+
+    $releaseLines = @(Get-Content -LiteralPath $releasesPath | Where-Object {
+        $parts = $_ -split '\s+'
+        $parts.Count -ge 2 -and $SelectedPackageNames.ContainsKey($parts[1])
+    })
+    if ($releaseLines.Count -eq 0) {
+        throw 'No RELEASES entries remain after pruning.'
+    }
+    Set-Content -LiteralPath (Join-Path $StagingPath 'RELEASES') -Value $releaseLines -Encoding ASCII
+
+    $releaseJson = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
+    $releaseJson.Assets = @($releaseJson.Assets | Where-Object {
+        $SelectedPackageNames.ContainsKey($_.FileName)
+    })
+    if ($releaseJson.Assets.Count -eq 0) {
+        throw 'No releases.win.json assets remain after pruning.'
+    }
+    $releaseJsonContent = $releaseJson | ConvertTo-Json -Depth 10 -Compress
+    $releaseJsonTarget = Join-Path $StagingPath 'releases.win.json'
+    [System.IO.File]::WriteAllText($releaseJsonTarget, $releaseJsonContent + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+}
+
 if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
     throw 'ssh was not found. Please verify Windows OpenSSH is available.'
 }
@@ -34,15 +121,60 @@ if (-not (Get-Command scp -ErrorAction SilentlyContinue)) {
 }
 
 $releasePath = (Resolve-Path -LiteralPath $LocalReleaseDir).Path
-$releaseFiles = Get-ChildItem -LiteralPath $releasePath -File |
-    Where-Object { $_.Name -notlike '*Portable.zip' -and $_.Name -notlike '*Setup.exe' }
-if ($releaseFiles.Count -eq 0) {
-    throw "No release files found: $releasePath"
+$stamp = Get-Date -Format 'yyyyMMddHHmmss'
+$stagingRoot = Join-Path (Split-Path -Parent $releasePath) 'upload-staging'
+$stagingPath = Join-Path $stagingRoot $stamp
+New-Item -ItemType Directory -Path $stagingPath -Force | Out-Null
+
+$packageInfos = @(Get-ChildItem -LiteralPath $releasePath -File -Filter 'SpeedEmulator-*.nupkg' |
+    ForEach-Object { Get-ReleasePackageInfo $_ } |
+    Where-Object { $_ -ne $null })
+
+$fullPackages = @($packageInfos |
+    Where-Object { $_.Kind -eq 'full' } |
+    Sort-Object -Property VersionKey -Descending |
+    Select-Object -First $KeepFullReleases)
+if ($fullPackages.Count -eq 0) {
+    throw "No full release package found: $releasePath"
 }
 
-$stamp = Get-Date -Format 'yyyyMMddHHmmss'
+$deltaPackages = @()
+if ($KeepDeltaReleases -gt 0) {
+    $deltaPackages = @($packageInfos |
+        Where-Object { $_.Kind -eq 'delta' } |
+        Sort-Object -Property VersionKey -Descending |
+        Select-Object -First $KeepDeltaReleases)
+}
+
+$selectedPackages = @($fullPackages + $deltaPackages)
+$selectedPackageNames = @{}
+foreach ($package in $selectedPackages) {
+    $selectedPackageNames[$package.FileName] = $true
+    Copy-Item -LiteralPath $package.File.FullName -Destination (Join-Path $stagingPath $package.FileName) -Force
+}
+
+Copy-PrunedMetadata -ReleasePath $releasePath -StagingPath $stagingPath -SelectedPackageNames $selectedPackageNames
+
+$releaseFiles = @(Get-ChildItem -LiteralPath $stagingPath -File)
+if ($releaseFiles.Count -eq 0) {
+    throw "No release files found: $stagingPath"
+}
+
 $remoteTemp = "$RemoteBase/upload-$stamp"
 $sshOptions = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15')
+
+Write-Host 'Release upload set:'
+foreach ($file in ($releaseFiles | Sort-Object Name)) {
+    Write-Host ("  {0} ({1:N0} bytes)" -f $file.Name, $file.Length)
+}
+Write-Host ""
+Write-Host "Local staging: $stagingPath"
+Write-Host ""
+
+if ($DryRun) {
+    Write-Host 'Dry run only. No files were uploaded.'
+    return
+}
 
 Invoke-Native ssh @sshOptions $HostName "mkdir -p '$remoteTemp' '$RemoteBase/download'"
 
@@ -89,3 +221,8 @@ Write-Host ""
 Write-Host "Update feed: $PublicBaseUrl/updates/"
 Write-Host "Installer: $PublicBaseUrl/download/SpeedEmulator-Setup.exe"
 Write-Host "Download page: $PublicBaseUrl/download/"
+
+if (Test-Path -LiteralPath $stagingPath -PathType Container) {
+    Remove-Item -LiteralPath $stagingPath -Recurse -Force
+    Write-Host "Cleaned local staging: $stagingPath"
+}
