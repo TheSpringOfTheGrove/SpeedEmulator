@@ -72,12 +72,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
     private static bool RequiresVendorTemplateResync(Bank bank, IReadOnlyCollection<PrintTemplate> systemTemplates)
     {
-        if (bank.Id is 11 or 16 or 105 or 116)
-        {
-            return true;
-        }
-
-        return systemTemplates.Any(item => item.VendorBankId is 50 or 55);
+        return systemTemplates.Any(IsVendorBackedSystemTemplate);
     }
 
     private static List<PrintTemplate> RemoveStaleVendorTemplateOverrides(
@@ -93,7 +88,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             .Select(GetTemplateNameOnlyKey)
             .ToHashSet(StringComparer.Ordinal);
         var systemVendorKeys = systemTemplates
-            .Where(item => item.IsSystem && !item.IsDeleted && item.VendorId > 0)
+            .Where(item => IsVendorBackedSystemTemplate(item) && !item.IsDeleted)
             .Select(GetVendorTemplateKey)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -113,21 +108,9 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             return false;
         }
 
-        if (template.IsDeleted)
-        {
-            return systemNameKeys.Contains(GetTemplateNameKey(template))
-                || systemNameOnlyKeys.Contains(GetTemplateNameOnlyKey(template))
-                || systemVendorKeys.Contains(GetVendorTemplateKey(template));
-        }
-
-        if (IsDerivedLocalTemplateNameStable(template.Name))
-        {
-            return false;
-        }
-
         return systemNameKeys.Contains(GetTemplateNameKey(template))
             || systemNameOnlyKeys.Contains(GetTemplateNameOnlyKey(template))
-            || (template.VendorId > 0 && systemVendorKeys.Contains(GetVendorTemplateKey(template)));
+            || (HasVendorIdentity(template) && systemVendorKeys.Contains(GetVendorTemplateKey(template)));
     }
 
     public Task SaveAsync(Bank bank, PrintTemplate template)
@@ -281,8 +264,9 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
     {
         var items = group.ToList();
         var selected = items
-            .OrderByDescending(item => item.Id > 0)
+            .OrderByDescending(IsVendorBackedSystemTemplate)
             .ThenByDescending(item => item.IsSystem)
+            .ThenByDescending(item => item.Id > 0)
             .First();
 
         var systemTemplate = items.FirstOrDefault(item => item.IsSystem && !item.IsDeleted);
@@ -435,6 +419,16 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             template.PageRows.ToString(CultureInfo.InvariantCulture));
     }
 
+    private static bool IsVendorBackedSystemTemplate(PrintTemplate template)
+    {
+        return template.IsSystem && HasVendorIdentity(template);
+    }
+
+    private static bool HasVendorIdentity(PrintTemplate template)
+    {
+        return template.VendorId > 0 || template.VendorBankId > 0;
+    }
+
     private static int FindExistingTemplateIndex(List<PrintTemplate> templates, PrintTemplate template)
     {
         if (template.Id > 0)
@@ -456,7 +450,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
     private static string GetTemplateIdentityKey(PrintTemplate template)
     {
-        var vendorKey = template.VendorId > 0
+        var vendorKey = HasVendorIdentity(template)
             ? $"vendor:{template.VendorBankId}:{template.VendorId}"
             : "local";
 

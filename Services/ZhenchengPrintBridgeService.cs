@@ -247,6 +247,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         string path,
         Exception exception,
         IEnumerable? transformedRecords = null,
+        object? transformedBankUser = null,
         string? renderBranch = null)
     {
         try
@@ -314,6 +315,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 longestTextValues = sourceLongestTextValues,
                 sourceSuspectedOverflowTextValues,
                 sourceRecordSamples = GetObjectRecordSnapshots(context.Records, 8),
+                transformedBankUser = GetObjectRecordSnapshots(transformedBankUser is null ? null : new[] { transformedBankUser }, 1).FirstOrDefault(),
                 transformedLongestTextValues,
                 suspectedOverflowTextValues,
                 transformedRecordSamples = GetObjectRecordSnapshots(transformedRecords, 8),
@@ -1109,7 +1111,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 }
                 catch (Exception ex)
                 {
-                    TryWritePrintFailureDiagnostic(context, path, ex, records, "vendor-questpdf");
+                    TryWritePrintFailureDiagnostic(context, path, ex, records, bankUser, "vendor-questpdf");
                     var wrapped = CreateRenderException("QuestPDF", context.Template, ex);
                     MarkPrintDiagnosticsWritten(wrapped);
                     throw wrapped;
@@ -1407,7 +1409,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
             Set(target, "StartTime", context.BankUser.StartDate);
             Set(target, "EndTime", context.BankUser.EndDate);
-            Set(target, "OpenBranch", FirstNotBlank(context.BankUser.OpenBranch, GetValue(values, "OpenBranch")));
+            Set(target, "OpenBranch", ResolveVendorOpenBranch(context, values));
             Set(target, "Currency", NormalizeCurrency(FirstNotBlank(context.BankUser.Currency, GetValue(values, "Currency"))));
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
@@ -2091,7 +2093,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
             Set(target, "StartTime", context.BankUser.StartDate);
             Set(target, "EndTime", context.BankUser.EndDate);
-            Set(target, "OpenBranch", FirstNotBlank(context.BankUser.OpenBranch, GetValue(values, "OpenBranch")));
+            Set(target, "OpenBranch", ResolveVendorOpenBranch(context, values));
             Set(target, "Currency", NormalizeCurrency(FirstNotBlank(context.BankUser.Currency, GetValue(values, "Currency"))));
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
@@ -2825,7 +2827,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IdNum", FirstNotBlank(context.BankUser.IdNumber, GetValue(values, "IdNum")));
             Set(target, "StartTime", context.BankUser.StartDate);
             Set(target, "EndTime", context.BankUser.EndDate);
-            Set(target, "OpenBranch", FirstNotBlank(context.BankUser.OpenBranch, GetValue(values, "OpenBranch")));
+            Set(target, "OpenBranch", ResolveVendorOpenBranch(context, values));
             Set(target, "Currency", NormalizeCurrency(FirstNotBlank(context.BankUser.Currency, GetValue(values, "Currency"))));
             Set(target, "Remark", context.BankUser.Remark);
             Set(target, "InitialBalance", (double)context.BankUser.OpeningBalance);
@@ -3068,6 +3070,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, "OpenBranch"));
     }
 
+    private static string ResolveVendorOpenBranch(PrintRenderContext context, IReadOnlyDictionary<string, object?> values)
+    {
+        var openBranch = FirstNotBlank(context.BankUser.OpenBranch, GetValue(values, "OpenBranch"));
+        return IsAgriculturalBankPersonalPaperTemplate(context)
+            ? NormalizeAgriculturalPaperPrintBranch(openBranch)
+            : openBranch;
+    }
+
     private static string NormalizeAgriculturalPaperStampCode(string? value)
     {
         var text = NormalizeSingleLinePrintText(value ?? string.Empty);
@@ -3098,7 +3108,41 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return string.Empty;
         }
 
-        return LimitSingleLinePrintText(text, 12);
+        text = CompactAgriculturalPaperBranchName(text);
+        return LimitSingleLinePrintText(text, 4);
+    }
+
+    private static string CompactAgriculturalPaperBranchName(string value)
+    {
+        var text = NormalizeSingleLinePrintText(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        if (text.StartsWith("\u4E2D\u56FD\u519C\u4E1A\u94F6\u884C\u80A1\u4EFD\u6709\u9650\u516C\u53F8", StringComparison.Ordinal))
+        {
+            text = "\u519C\u884C" + text["\u4E2D\u56FD\u519C\u4E1A\u94F6\u884C\u80A1\u4EFD\u6709\u9650\u516C\u53F8".Length..];
+        }
+        else if (text.StartsWith("\u4E2D\u56FD\u519C\u4E1A\u94F6\u884C", StringComparison.Ordinal))
+        {
+            text = "\u519C\u884C" + text["\u4E2D\u56FD\u519C\u4E1A\u94F6\u884C".Length..];
+        }
+        else if (text.StartsWith("\u519C\u4E1A\u94F6\u884C", StringComparison.Ordinal))
+        {
+            text = "\u519C\u884C" + text["\u519C\u4E1A\u94F6\u884C".Length..];
+        }
+
+        if (text.Length > 4 && text.EndsWith("\u652F\u884C", StringComparison.Ordinal))
+        {
+            text = text[..^2];
+        }
+        else if (text.Length > 4 && text.EndsWith("\u8425\u4E1A\u90E8", StringComparison.Ordinal))
+        {
+            text = text[..^3];
+        }
+
+        return text;
     }
 
     private static void ApplyFlowRecordColumnAliases(Bank bank, FlowRecord source, Dictionary<string, object?> values)
@@ -4714,6 +4758,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72486"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72487"],
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485_\u6C34\u5370"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484_\u6C34\u5370"],
             ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72485"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7535\u5B50\u72484"],
+            ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72482"] = ["\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u72483", "\u5174\u4E1A\u4E2A\u4EBA\u7EB8\u8D28\u7248"],
             ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u72482"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u90AE\u653F\u5BF9\u516C\u7535\u5B50\u7248"] = ["\u90AE\u653F\u5BF9\u516C\u7EB8\u8D28\u7248"],
             ["\u519C\u884C\u5BF9\u516C\u7535\u5B50\u72484"] = ["\u519C\u884C\u5BF9\u516C\u7EB8\u8D28\u7248"],

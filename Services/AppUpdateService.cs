@@ -1,6 +1,7 @@
 using System.IO;
 using System.Threading;
 using System.Windows;
+using SpeedEmulator.Views;
 using Velopack;
 using Velopack.Sources;
 
@@ -28,6 +29,7 @@ public static class AppUpdateService
             return;
         }
 
+        UpdateProgressWindow? progressWindow = null;
         try
         {
             var timeoutMinutes = Math.Max(1.0, options.TimeoutSeconds / 60.0);
@@ -53,11 +55,21 @@ public static class AppUpdateService
                 return;
             }
 
-            await manager.DownloadUpdatesAsync(updateInfo, null, CancellationToken.None).ConfigureAwait(false);
+            progressWindow = await ShowProgressWindowAsync(
+                manager.CurrentVersion.ToString(),
+                updateInfo.TargetFullRelease.Version.ToString()).ConfigureAwait(false);
+
+            ReportDownloadProgress(progressWindow, 0);
+            await manager.DownloadUpdatesAsync(
+                updateInfo,
+                progress => ReportDownloadProgress(progressWindow, progress),
+                CancellationToken.None).ConfigureAwait(false);
+            await ShowInstallingAsync(progressWindow).ConfigureAwait(false);
             manager.ApplyUpdatesAndRestart(updateInfo.TargetFullRelease);
         }
         catch (Exception exception)
         {
+            await CloseProgressWindowAsync(progressWindow).ConfigureAwait(false);
             WriteLog(exception);
         }
     }
@@ -78,6 +90,80 @@ public static class AppUpdateService
             return owner is null
                 ? MessageBox.Show(message, "发现新版本", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes
                 : MessageBox.Show(owner, message, "发现新版本", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes;
+        });
+    }
+
+    private static async Task<UpdateProgressWindow?> ShowProgressWindowAsync(string currentVersion, string targetVersion)
+    {
+        var application = Application.Current;
+        if (application is null)
+        {
+            return null;
+        }
+
+        return await application.Dispatcher.InvokeAsync(() =>
+        {
+            var window = new UpdateProgressWindow(currentVersion, targetVersion);
+            var owner = application.MainWindow;
+            if (owner is { IsVisible: true })
+            {
+                window.Owner = owner;
+            }
+
+            window.Show();
+            return window;
+        });
+    }
+
+    private static void ReportDownloadProgress(UpdateProgressWindow? window, int progress)
+    {
+        var application = Application.Current;
+        if (application is null || window is null)
+        {
+            return;
+        }
+
+        var normalizedProgress = Math.Clamp(progress, 0, 100);
+        _ = application.Dispatcher.BeginInvoke(() =>
+        {
+            if (window.IsVisible)
+            {
+                window.SetProgress(normalizedProgress, $"正在下载更新... {normalizedProgress}%");
+            }
+        });
+    }
+
+    private static async Task ShowInstallingAsync(UpdateProgressWindow? window)
+    {
+        var application = Application.Current;
+        if (application is null || window is null)
+        {
+            return;
+        }
+
+        await application.Dispatcher.InvokeAsync(() =>
+        {
+            if (window.IsVisible)
+            {
+                window.SetInstalling();
+            }
+        });
+    }
+
+    private static async Task CloseProgressWindowAsync(UpdateProgressWindow? window)
+    {
+        var application = Application.Current;
+        if (application is null || window is null)
+        {
+            return;
+        }
+
+        await application.Dispatcher.InvokeAsync(() =>
+        {
+            if (window.IsVisible)
+            {
+                window.Close();
+            }
         });
     }
 
