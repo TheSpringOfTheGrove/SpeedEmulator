@@ -147,6 +147,11 @@ public sealed class PrintPreviewViewModel : ObservableObject
 
     public ICommand DeleteTemplateCommand { get; }
 
+    public Task GeneratePreviewForSelectedTemplateAsync()
+    {
+        return GeneratePreviewAsync();
+    }
+
     public async Task LoadAsync()
     {
         if (IsBusy)

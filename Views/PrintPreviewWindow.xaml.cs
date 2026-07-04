@@ -1,7 +1,9 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using SpeedEmulator.ViewModels;
 
@@ -120,7 +122,7 @@ public partial class PrintPreviewWindow : Window
         }
     }
 
-    private void TemplateGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    private async void TemplateGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject) is not { } row)
         {
@@ -141,7 +143,40 @@ public partial class PrintPreviewWindow : Window
 
         if (viewModel.GeneratePreviewCommand.CanExecute(null))
         {
-            viewModel.GeneratePreviewCommand.Execute(null);
+            await GeneratePreviewWithProgressAsync();
+        }
+    }
+
+    private async Task GeneratePreviewWithProgressAsync()
+    {
+        if (viewModel.IsBusy)
+        {
+            return;
+        }
+
+        var progressWindow = new PdfGenerationProgressWindow
+        {
+            Owner = this
+        };
+        var previousCursor = Mouse.OverrideCursor;
+
+        try
+        {
+            TemplateGrid.IsEnabled = false;
+            Mouse.OverrideCursor = Cursors.Wait;
+            progressWindow.Show();
+
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            await viewModel.GeneratePreviewForSelectedTemplateAsync();
+        }
+        finally
+        {
+            Mouse.OverrideCursor = previousCursor;
+            TemplateGrid.IsEnabled = true;
+            if (progressWindow.IsVisible)
+            {
+                progressWindow.CloseAfterComplete();
+            }
         }
     }
 
