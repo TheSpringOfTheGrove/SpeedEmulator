@@ -16,12 +16,12 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         base.OnStartup(e);
 
-        ShutdownMode = ShutdownMode.OnMainWindowClose;
-        AppUpdateService.StartBackgroundCheck();
-
         var loginWindow = new LoginWindow();
         MainWindow = loginWindow;
         loginWindow.Show();
+
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        AppUpdateService.StartBackgroundCheck();
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

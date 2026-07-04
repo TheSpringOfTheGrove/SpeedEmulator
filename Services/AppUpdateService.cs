@@ -1,5 +1,6 @@
 using System.IO;
 using System.Threading;
+using System.Windows;
 using Velopack;
 using Velopack.Sources;
 
@@ -39,7 +40,15 @@ public static class AppUpdateService
             }
 
             var updateInfo = await manager.CheckForUpdatesAsync().ConfigureAwait(false);
-            if (updateInfo is null)
+            if (updateInfo?.TargetFullRelease is null)
+            {
+                return;
+            }
+
+            var confirmed = await ConfirmUpdateAsync(
+                manager.CurrentVersion.ToString(),
+                updateInfo.TargetFullRelease.Version.ToString()).ConfigureAwait(false);
+            if (!confirmed)
             {
                 return;
             }
@@ -51,6 +60,25 @@ public static class AppUpdateService
         {
             WriteLog(exception);
         }
+    }
+
+    private static async Task<bool> ConfirmUpdateAsync(string currentVersion, string targetVersion)
+    {
+        var application = Application.Current;
+        if (application is null)
+        {
+            return false;
+        }
+
+        return await application.Dispatcher.InvokeAsync(() =>
+        {
+            var owner = application.MainWindow;
+            var message = $"检测到新版本 {targetVersion}，当前版本 {currentVersion}。\n\n是否立即更新？\n更新完成后程序会自动重启。";
+
+            return owner is null
+                ? MessageBox.Show(message, "发现新版本", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes
+                : MessageBox.Show(owner, message, "发现新版本", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes;
+        });
     }
 
     private static void WriteLog(Exception exception)
