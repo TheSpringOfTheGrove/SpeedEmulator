@@ -13,7 +13,7 @@ $projectPath = Join-Path $projectRoot 'SpeedEmulator.csproj'
 $artifactsRoot = Join-Path $projectRoot 'artifacts\hot-update'
 $releaseDir = Join-Path $artifactsRoot 'releases'
 $iconPath = Join-Path $projectRoot 'Assets\SpeedEmulatorIcon.ico'
-$packTitle = (-join ([char[]](0x5C0F, 0x592A, 0x9633))) + [char]::ConvertFromUtf32(0x1F31E)
+$packTitle = -join ([char[]](0x6781, 0x901F, 0x8D22, 0x52A1))
 
 function Get-VersionKey {
     param(
