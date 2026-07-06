@@ -136,6 +136,8 @@ public sealed class FormattedDatePicker : UserControl
         set => SetValue(DisplayFormatProperty, value);
     }
 
+    public bool IsDropDownOpen => popup.IsOpen;
+
     private static void OnSelectedDateChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs e)
     {
         if (dependencyObject is FormattedDatePicker picker)
@@ -364,6 +366,7 @@ public sealed class FormattedDatePicker : UserControl
 
         isApplying = true;
         CommitTimeBoxes();
+        BindingOperations.GetBindingExpression(this, SelectedDateProperty)?.UpdateSource();
         popup.IsOpen = false;
         Dispatcher.BeginInvoke(new Action(() => isApplying = false));
     }

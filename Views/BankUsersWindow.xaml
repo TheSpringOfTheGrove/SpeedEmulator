@@ -366,6 +366,8 @@
                       FontSize="14"
                       SnapsToDevicePixels="True"
                       PreviewMouseLeftButtonDown="UsersGrid_PreviewMouseLeftButtonDown"
+                      CellEditEnding="UsersGrid_CellEditEnding"
+                      RowEditEnding="UsersGrid_RowEditEnding"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto" />
 

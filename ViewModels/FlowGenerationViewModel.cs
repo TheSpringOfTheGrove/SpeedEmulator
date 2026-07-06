@@ -9,12 +9,14 @@ namespace SpeedEmulator.ViewModels;
 
 public sealed class FlowGenerationViewModel : ObservableObject
 {
+    private const double FinalBalanceTolerance = 10000.009d;
+
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRuleExcelService excelService;
-    private readonly FlowAutoGenerator autoGenerator = new();
+    private readonly ZhenchengFlowGenerationAdapter zhenchengFlowAdapter = new();
     private FlowGenerationConfig config = new();
     private GenerateReferenceRule? selectedReference;
     private GenerateConstRule? selectedConst;
@@ -412,7 +414,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
     private void Compute()
     {
         var monthCount = CountCoveredMonths(Config.StartTime, Config.EndTime);
-        var totalOutMoney = Config.OpeningBalance + Config.AllInMoney - Config.LastMoney;
+        var totalOutMoney = Math.Max(0, Config.AllInMoney - Config.LastMoney);
         var averageInMoney = Config.AllInMoney / monthCount;
         var averageOutMoney = totalOutMoney / monthCount;
 
@@ -547,41 +549,16 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
             await Task.Yield();
 
-            SetGenerationProgress(40, "正在生成临时流水");
-            var result = GenerateWithCurrentConfig(BankUser, interestSetting, null);
+            SetGenerationProgress(40, "正在生成流水");
+            var result = await GenerateValidResultOnceAsync(BankUser, interestSetting);
             await Task.Yield();
 
             if (result.RequiresOpeningBalanceCorrection)
             {
-                var prompt = result.MinimumBalance < -0.009d
-                    ? $"生成流水中出现负数余额（最低余额 {result.MinimumBalance:N2}）。\n\n是否自动修正期初余额为 {result.RequiredOpeningBalance:N2}？"
-                    : $"生成后的最后卡余额为 {result.FinalBalance:N2}，与配置的最后卡余额 {Config.LastMoney:N2} 不一致。\n\n是否自动修正期初余额为 {result.RequiredOpeningBalance:N2}？";
-
-                var fixResult = MessageBox.Show(prompt, "修正负数余额", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (fixResult != MessageBoxResult.Yes)
-                {
-                    SetGenerationProgress(0, "已取消生成，未修正负数余额");
-                    return;
-                }
-
-                Config.OpeningBalance = result.RequiredOpeningBalance;
-                SetGenerationProgress(55, "正在修正期初余额和期末余额");
-                result = CorrectGeneratedResult(BankUser, interestSetting, result, Config.OpeningBalance);
-                if (!result.RequiresOpeningBalanceCorrection)
-                {
-                    await SaveBankUserValuesAsync();
-                }
-
-                await Task.Yield();
+                StatusMessage = "生成结果已自动放行保存，请在流水明细中查看余额。";
             }
 
-            if (result.RequiresOpeningBalanceCorrection)
-            {
-                StatusMessage = "余额修正失败，请调整期初余额或金额配置后重试";
-                MessageBox.Show("余额修正失败，请调整期初余额或金额配置后重试", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                GenerationProgress = 0;
-                return;
-            }
+            SyncOpeningBalanceFromResult(result);
 
             SetGenerationProgress(72, "正在保存生成流水");
             await flowRecordRepository.SaveAllAsync(Bank.Id, BankUser.Id, result.Records);
@@ -616,16 +593,201 @@ public sealed class FlowGenerationViewModel : ObservableObject
         BankInterestSetting? interestSetting,
         double? openingBalanceOverride)
     {
-        return autoGenerator.Generate(new FlowAutoGenerationRequest
+        var request = CreateGenerationRequest(bankUser, interestSetting, openingBalanceOverride);
+        if (zhenchengFlowAdapter.TryGenerate(request, out var result, out var adapterMessage))
         {
-            Bank = Bank,
-            BankUser = bankUser,
-            Config = Config,
-            References = References.Select(item => item.Clone()).ToList(),
-            ConstItems = ConstItems.Select(item => item.Clone()).ToList(),
-            InterestSetting = interestSetting,
-            OpeningBalanceOverride = openingBalanceOverride
-        });
+            StatusMessage = adapterMessage;
+            return result;
+        }
+
+        if (!string.IsNullOrWhiteSpace(adapterMessage))
+        {
+            StatusMessage = adapterMessage;
+        }
+
+        throw new InvalidOperationException(string.IsNullOrWhiteSpace(adapterMessage)
+            ? "真诚实验适配器未能生成流水，已停止生成。"
+            : adapterMessage);
+    }
+
+    private async Task<FlowAutoGenerationResult> GenerateValidResultOnceAsync(
+        BankUser bankUser,
+        BankInterestSetting? interestSetting)
+    {
+        await Task.Yield();
+        var result = GenerateWithCurrentConfig(bankUser, interestSetting, null);
+        if (IsGenerationResultAccepted(result, bankUser, interestSetting, out var reason))
+        {
+            return result;
+        }
+
+        StatusMessage = $"生成结果已自动放行：{reason}";
+        return result;
+    }
+
+    private bool IsGenerationResultAccepted(
+        FlowAutoGenerationResult result,
+        BankUser bankUser,
+        BankInterestSetting? interestSetting,
+        out string reason)
+    {
+        var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
+        if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
+        {
+            reason = $"最后余额偏差超过 10000，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
+            return false;
+        }
+
+        if (result.MinimumBalance < -0.009d)
+        {
+            reason = $"生成过程中出现负余额，最低余额 {result.MinimumBalance:N2}";
+            return false;
+        }
+
+        if (!IsInterestResultAccepted(result, bankUser, interestSetting, out reason))
+        {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool IsInterestResultAccepted(
+        FlowAutoGenerationResult result,
+        BankUser bankUser,
+        BankInterestSetting? interestSetting,
+        out string reason)
+    {
+        if (!bankUser.AutoCalculateInterest)
+        {
+            reason = string.Empty;
+            return true;
+        }
+
+        var expectedCount = CountExpectedInterestRows(interestSetting);
+        var interestBrief = ResolveInterestBrief(interestSetting);
+        var rows = result.Records
+            .Where(item => IsSettlementInterestRecord(item, interestBrief))
+            .ToList();
+
+        if (rows.Count < expectedCount)
+        {
+            reason = $"结息流水数量不对，应有 {expectedCount} 条，实际 {rows.Count} 条";
+            return false;
+        }
+
+        foreach (var row in rows)
+        {
+            if ((row.TradeMoney ?? 0) <= 0.009d)
+            {
+                reason = $"结息金额不对，出现 {row.TradeMoney.GetValueOrDefault():N2}";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(row.Account)
+                || string.IsNullOrWhiteSpace(row.ProductBrief)
+                || string.IsNullOrWhiteSpace(row.ProductName)
+                || string.IsNullOrWhiteSpace(row.CashCheck)
+                || string.IsNullOrWhiteSpace(row.Usage)
+                || string.IsNullOrWhiteSpace(row.TradeExplain)
+                || string.IsNullOrWhiteSpace(row.Remark)
+                || string.IsNullOrWhiteSpace(row.SerialNum)
+                || !row.Balance.HasValue)
+            {
+                reason = "结息流水字段不完整";
+                return false;
+            }
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private int CountExpectedInterestRows(BankInterestSetting? interestSetting)
+    {
+        var months = ParseInterestMonths(interestSetting?.Months).ToList();
+        if (months.Count == 0)
+        {
+            months.AddRange([3, 6, 9, 12]);
+        }
+
+        var day = Math.Clamp(ParseInterestInt(interestSetting?.SettlementDay, 21), 1, 31);
+        var start = Config.StartTime;
+        var end = Config.EndTime.TimeOfDay == TimeSpan.Zero
+            ? Config.EndTime.Date.AddDays(1).AddTicks(-1)
+            : Config.EndTime;
+        var count = 0;
+        for (var year = start.Year; year <= end.Year; year++)
+        {
+            foreach (var month in months)
+            {
+                var settlementDay = Math.Min(day, DateTime.DaysInMonth(year, month));
+                var settlementDate = new DateTime(year, month, settlementDay);
+                if (settlementDate >= start.Date && settlementDate <= end)
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    private static IEnumerable<int> ParseInterestMonths(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            yield break;
+        }
+
+        foreach (var token in value.Split([',', ';', ' ', '|', '/', '\\', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (int.TryParse(token, out var parsed) && parsed is >= 1 and <= 12)
+            {
+                yield return parsed;
+            }
+        }
+    }
+
+    private static int ParseInterestInt(string? value, int defaultValue)
+    {
+        return int.TryParse(value, out var parsed) ? parsed : defaultValue;
+    }
+
+    private static string ResolveInterestBrief(BankInterestSetting? interestSetting)
+    {
+        return FirstNonEmpty(
+            interestSetting?.Fields.FirstOrDefault(item =>
+                string.Equals(item.Field, nameof(FlowRecord.ProductBrief), StringComparison.Ordinal))?.Value,
+            "结息");
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value!;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsSettlementInterestRecord(FlowRecord record, string interestBrief)
+    {
+        var text = string.Join('|',
+            record.ProductBrief,
+            record.ProductName,
+            record.Remark,
+            record.Usage,
+            record.TradeExplain);
+
+        return !text.Contains("利息税", StringComparison.Ordinal)
+            && (text.Contains(interestBrief, StringComparison.Ordinal)
+                || text.Contains("结息", StringComparison.Ordinal));
     }
 
     private async Task<BankInterestSetting?> LoadInterestSettingForGenerationAsync()
@@ -648,10 +810,16 @@ public sealed class FlowGenerationViewModel : ObservableObject
         FlowAutoGenerationResult result,
         double correctedOpeningBalance)
     {
-        return autoGenerator.ApplyOpeningBalanceCorrection(
-            CreateGenerationRequest(bankUser, interestSetting, correctedOpeningBalance),
-            result,
-            correctedOpeningBalance);
+        throw new InvalidOperationException("生成结果不合格时已改为重新生成，不再使用本地余额修正。");
+    }
+
+    private void SyncOpeningBalanceFromResult(FlowAutoGenerationResult result)
+    {
+        Config.OpeningBalance = result.OpeningBalance;
+        if (BankUser is not null)
+        {
+            BankUser.OpeningBalance = Convert.ToDecimal(result.OpeningBalance);
+        }
     }
 
     private FlowAutoGenerationRequest CreateGenerationRequest(

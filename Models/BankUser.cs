@@ -12,6 +12,7 @@ public sealed class BankUser : ObservableObject
     private string userCode = string.Empty;
     private string accountName = string.Empty;
     private string accountNo = string.Empty;
+    private string cardNo = string.Empty;
     private string idNumber = string.Empty;
     private string phoneNumber = string.Empty;
     private string openBranch = string.Empty;
@@ -74,6 +75,12 @@ public sealed class BankUser : ObservableObject
     {
         get => accountNo;
         set => SetProperty(ref accountNo, value);
+    }
+
+    public string CardNo
+    {
+        get => cardNo;
+        set => SetProperty(ref cardNo, value);
     }
 
     public string IdNumber
@@ -266,6 +273,7 @@ public sealed class BankUser : ObservableObject
             UserCode = UserCode,
             AccountName = AccountName,
             AccountNo = AccountNo,
+            CardNo = CardNo,
             IdNumber = IdNumber,
             PhoneNumber = PhoneNumber,
             OpenBranch = OpenBranch,

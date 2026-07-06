@@ -256,6 +256,11 @@ public partial class FlowDetailsWindow : Window
     private void FlowGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var source = (DependencyObject)e.OriginalSource;
+        if (FindVisualParent<FormattedDatePicker>(source) is not null)
+        {
+            return;
+        }
+
         var cell = FindVisualParent<DataGridCell>(source);
         if (cell is null)
         {
@@ -273,12 +278,29 @@ public partial class FlowDetailsWindow : Window
             FlowGrid.CurrentCell = new DataGridCellInfo(rowItem, cell.Column);
         }
 
-        if (FindVisualParent<FormattedDatePicker>(source) is not null || cell.IsEditing)
+        if (cell.IsEditing)
         {
             return;
         }
 
         FlowGrid.BeginEdit(e);
+        SelectEditingTextBoxAsync(cell);
+    }
+
+    private void FlowGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (FindVisualChild<FormattedDatePicker>(e.EditingElement)?.IsDropDownOpen == true)
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private void FlowGrid_RowEditEnding(object sender, DataGridRowEditEndingEventArgs e)
+    {
+        if (FindVisualChild<FormattedDatePicker>(e.Row)?.IsDropDownOpen == true)
+        {
+            e.Cancel = true;
+        }
     }
 
     private static DataGridTemplateColumn CreateDateColumn(ColumnDefinition column)
@@ -409,6 +431,46 @@ public partial class FlowDetailsWindow : Window
         }
 
         return null;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? parent)
+        where T : DependencyObject
+    {
+        if (parent is null)
+        {
+            return null;
+        }
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T typed)
+            {
+                return typed;
+            }
+
+            var nested = FindVisualChild<T>(child);
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static void SelectEditingTextBoxAsync(DataGridCell cell)
+    {
+        cell.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (FindVisualChild<TextBox>(cell) is not { } textBox)
+            {
+                return;
+            }
+
+            textBox.Focus();
+            textBox.SelectAll();
+        }));
     }
 
     private sealed class TradeMoneyForegroundConverter : IValueConverter

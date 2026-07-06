@@ -298,6 +298,17 @@ public sealed class MainViewModel : ObservableObject
 
     private static (string? Field, string Type) ResolveBankUserField(string columnName)
     {
+        var normalizedName = NormalizeColumnName(columnName);
+        if (IsCardNumberColumn(normalizedName))
+        {
+            return (nameof(BankUser.CardNo), "Text");
+        }
+
+        if (IsAccountNumberColumn(normalizedName))
+        {
+            return (nameof(BankUser.AccountNo), "Text");
+        }
+
         return columnName switch
         {
             "ID" => (nameof(BankUser.Id), "Text"),
@@ -319,6 +330,24 @@ public sealed class MainViewModel : ObservableObject
             "自动计算利息" => (nameof(BankUser.AutoCalculateInterest), "Boolean"),
             _ => (null, "Text")
         };
+    }
+
+    private static string NormalizeColumnName(string value)
+    {
+        return string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character)));
+    }
+
+    private static bool IsCardNumberColumn(string value)
+    {
+        return value is "\u5361\u53f7" or "\u501f\u8bb0\u5361\u53f7" or "\u6253\u5370\u5361\u53f7" or "\u4e3b\u5361\u5361\u53f7"
+            || (value.Contains("\u5361\u53f7", StringComparison.Ordinal) && !value.Contains("\u8d26\u53f7", StringComparison.Ordinal) && !value.Contains("\u5e10\u53f7", StringComparison.Ordinal));
+    }
+
+    private static bool IsAccountNumberColumn(string value)
+    {
+        return value is "\u652f\u4ed8\u5b9d\u8d26\u6237" or "\u5fae\u4fe1\u53f7" or "\u8d26\u53f7" or "\u5e10\u53f7" or "\u8d26\u53f7\u5361\u53f7"
+            or "\u5361\u53f7\u8d26\u6237" or "\u5ba2\u6237\u8d26\u53f7" or "\u6237\u53e3\u53f7" or "\u8d26\u6237\u8d26\u53f7" or "\u8d26\u6237\u53f7"
+            or "\u5ba2\u6237\u8d26\u53e3" or "\u5ba2\u6237\u6237\u53e3" or "\u5ea6\u53f7";
     }
 
     private static string InferExtraBankUserFieldType(string columnName)

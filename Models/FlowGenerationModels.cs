@@ -190,10 +190,15 @@ public sealed class MonthGenerateRule : ObservableObject
 public abstract class FlowRuleBase : ObservableObject
 {
     private Dictionary<string, string> extraFields = [];
+    private bool isCheck;
 
     public int Index { get; set; }
 
-    public bool IsCheck { get; set; }
+    public bool IsCheck
+    {
+        get => isCheck;
+        set => SetProperty(ref isCheck, value);
+    }
 
     public long Id { get; set; }
 

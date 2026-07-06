@@ -234,10 +234,17 @@ public partial class FlowGenerationWindow : Window
             cell.Focus();
         }
 
-        if (FindVisualParent<DataGridRow>(cell)?.Item is { } rowItem && cell.Column is not null)
+        var rowItem = FindVisualParent<DataGridRow>(cell)?.Item;
+        if (rowItem is not null && cell.Column is not null)
         {
-            grid.SelectedItem = rowItem;
-            grid.CurrentCell = new DataGridCellInfo(rowItem, cell.Column);
+            SelectGridCell(grid, rowItem, cell.Column);
+        }
+
+        if (FindVisualParent<CheckBox>(source) is { } checkBox)
+        {
+            ToggleCheckBox(checkBox);
+            e.Handled = true;
+            return;
         }
 
         if (cell.IsEditing || FindVisualParent<TextBox>(source) is not null)
@@ -246,6 +253,19 @@ public partial class FlowGenerationWindow : Window
         }
 
         grid.BeginEdit(e);
+        SelectEditingTextBoxAsync(cell);
+    }
+
+    private static void SelectGridCell(DataGrid grid, object rowItem, DataGridColumn column)
+    {
+        grid.SelectedItem = rowItem;
+        grid.CurrentCell = new DataGridCellInfo(rowItem, column);
+    }
+
+    private static void ToggleCheckBox(CheckBox checkBox)
+    {
+        checkBox.IsChecked = checkBox.IsChecked != true;
+        checkBox.GetBindingExpression(ToggleButton.IsCheckedProperty)?.UpdateSource();
     }
 
     private static Style CreateTextElementStyle(SpeedEmulator.Models.ColumnDefinition column)
@@ -367,6 +387,46 @@ public partial class FlowGenerationWindow : Window
         }
 
         return null;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? parent)
+        where T : DependencyObject
+    {
+        if (parent is null)
+        {
+            return null;
+        }
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T typed)
+            {
+                return typed;
+            }
+
+            var nested = FindVisualChild<T>(child);
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private static void SelectEditingTextBoxAsync(DataGridCell cell)
+    {
+        cell.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (FindVisualChild<TextBox>(cell) is not { } textBox)
+            {
+                return;
+            }
+
+            textBox.Focus();
+            textBox.SelectAll();
+        }));
     }
 
     private static string CreateBindingPath(string field)

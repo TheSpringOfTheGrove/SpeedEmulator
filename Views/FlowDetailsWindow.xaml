@@ -228,6 +228,8 @@
                       FontSize="14"
                       SnapsToDevicePixels="True"
                       PreviewMouseLeftButtonDown="FlowGrid_PreviewMouseLeftButtonDown"
+                      CellEditEnding="FlowGrid_CellEditEnding"
+                      RowEditEnding="FlowGrid_RowEditEnding"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto" />
 
