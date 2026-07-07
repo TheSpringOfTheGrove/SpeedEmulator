@@ -9,14 +9,14 @@ namespace SpeedEmulator.ViewModels;
 
 public sealed class FlowGenerationViewModel : ObservableObject
 {
-    private const double FinalBalanceTolerance = 10000.009d;
+    private const double FinalBalanceTolerance = 1000.009d;
 
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRuleExcelService excelService;
-    private readonly ZhenchengFlowGenerationAdapter zhenchengFlowAdapter = new();
+    private readonly FlowAutoGenerator flowAutoGenerator = new();
     private FlowGenerationConfig config = new();
     private GenerateReferenceRule? selectedReference;
     private GenerateConstRule? selectedConst;
@@ -553,7 +553,25 @@ public sealed class FlowGenerationViewModel : ObservableObject
             var result = await GenerateValidResultOnceAsync(BankUser, interestSetting);
             await Task.Yield();
 
-            if (result.RequiresOpeningBalanceCorrection)
+            if (result.MinimumBalance < -0.009d)
+            {
+                var correctionResult = MessageBox.Show(
+                    $"生成过程中出现负余额，最低余额 {result.MinimumBalance:N2}。\n\n是否执行负余额修正？\n系统会优先调整流水时间和可选支出，不修改期初余额。\n\n选择“否”才会保留负余额并继续保存。",
+                    "提示",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (correctionResult == MessageBoxResult.Yes)
+                {
+                    result = CorrectGeneratedResult(BankUser, interestSetting, result);
+                    StatusMessage = "已完成负余额修正。";
+                }
+                else
+                {
+                    StatusMessage = "用户选择保留负余额，已按原生成结果保存。";
+                }
+            }
+            else if (result.RequiresOpeningBalanceCorrection)
             {
                 StatusMessage = "生成结果已自动放行保存，请在流水明细中查看余额。";
             }
@@ -588,34 +606,31 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
     }
 
-    private FlowAutoGenerationResult GenerateWithCurrentConfig(
-        BankUser bankUser,
-        BankInterestSetting? interestSetting,
-        double? openingBalanceOverride)
+    private GenerationAttempt GenerateWithRequest(FlowAutoGenerationRequest request)
     {
-        var request = CreateGenerationRequest(bankUser, interestSetting, openingBalanceOverride);
-        if (zhenchengFlowAdapter.TryGenerate(request, out var result, out var adapterMessage))
-        {
-            StatusMessage = adapterMessage;
-            return result;
-        }
-
-        if (!string.IsNullOrWhiteSpace(adapterMessage))
-        {
-            StatusMessage = adapterMessage;
-        }
-
-        throw new InvalidOperationException(string.IsNullOrWhiteSpace(adapterMessage)
-            ? "真诚实验适配器未能生成流水，已停止生成。"
-            : adapterMessage);
+        return new GenerationAttempt(
+            flowAutoGenerator.Generate(request),
+            "已按本地复刻规则生成流水",
+            null);
     }
 
     private async Task<FlowAutoGenerationResult> GenerateValidResultOnceAsync(
         BankUser bankUser,
         BankInterestSetting? interestSetting)
     {
-        await Task.Yield();
-        var result = GenerateWithCurrentConfig(bankUser, interestSetting, null);
+        var request = CreateGenerationRequest(bankUser, interestSetting, null);
+        var attempt = await Task.Run(() => GenerateWithRequest(request));
+        if (!string.IsNullOrWhiteSpace(attempt.Message))
+        {
+            StatusMessage = attempt.Message;
+        }
+
+        if (attempt.Result is null)
+        {
+            throw new InvalidOperationException(attempt.ErrorMessage ?? "生成流水失败。");
+        }
+
+        var result = attempt.Result;
         if (IsGenerationResultAccepted(result, bankUser, interestSetting, out var reason))
         {
             return result;
@@ -624,6 +639,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
         StatusMessage = $"生成结果已自动放行：{reason}";
         return result;
     }
+
+    private sealed record GenerationAttempt(
+        FlowAutoGenerationResult? Result,
+        string? Message,
+        string? ErrorMessage);
 
     private bool IsGenerationResultAccepted(
         FlowAutoGenerationResult result,
@@ -634,7 +654,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
         if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
         {
-            reason = $"最后余额偏差超过 10000，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
+            reason = $"最后余额偏差超过 1000，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
             return false;
         }
 
@@ -807,10 +827,10 @@ public sealed class FlowGenerationViewModel : ObservableObject
     private FlowAutoGenerationResult CorrectGeneratedResult(
         BankUser bankUser,
         BankInterestSetting? interestSetting,
-        FlowAutoGenerationResult result,
-        double correctedOpeningBalance)
+        FlowAutoGenerationResult result)
     {
-        throw new InvalidOperationException("生成结果不合格时已改为重新生成，不再使用本地余额修正。");
+        var request = CreateGenerationRequest(bankUser, interestSetting, null);
+        return flowAutoGenerator.ApplyNegativeBalanceCorrection(request, result);
     }
 
     private void SyncOpeningBalanceFromResult(FlowAutoGenerationResult result)
@@ -831,7 +851,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         {
             Bank = Bank,
             BankUser = bankUser,
-            Config = Config,
+            Config = Config.Clone(),
             References = References.Select(item => item.Clone()).ToList(),
             ConstItems = ConstItems.Select(item => item.Clone()).ToList(),
             InterestSetting = interestSetting,

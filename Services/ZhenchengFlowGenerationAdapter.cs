@@ -468,22 +468,15 @@ public sealed class ZhenchengFlowGenerationAdapter
 
             planItems = NormalizePlanItemAmountsByRule(references, constItems, planItems);
             planItems = EnsureRequiredReferencePlanItems(budgetedRequest, references, planItems);
-            var fixedIncomeFinalBalanceAllowance = CalculateFixedIncomeFinalBalanceAllowance(
-                budgetedRequest,
-                references,
-                constItems,
-                planItems);
-            if (fixedIncomeFinalBalanceAllowance > 0.009d)
-            {
-                budgetedRequest = ApplyFixedIncomeFinalBalanceAllowance(budgetedRequest, fixedIncomeFinalBalanceAllowance);
-                effectiveRequest = budgetedRequest;
-            }
+            planItems = DropReferenceIncomeWhenFixedIncomeCoversTarget(budgetedRequest, references, constItems, planItems);
 
             planItems = ExpandSparseIncomePlanItems(budgetedRequest, references, planItems);
             planItems = PreferNonPaymentIncomePlanItems(budgetedRequest, references, planItems);
             planItems = NormalizePlanItemAmountsByRule(references, constItems, planItems);
             planItems = NormalizePlanItemTotals(budgetedRequest, references, constItems, planItems);
             planItems = PreferNonPaymentIncomePlanItems(budgetedRequest, references, planItems);
+            planItems = NormalizePlanItemAmountsByRule(references, constItems, planItems);
+            planItems = EnsureDailyPlanItemCoverage(budgetedRequest, references, constItems, planItems);
             planItems = NormalizePlanItemAmountsByRule(references, constItems, planItems);
             planItems = StabilizePlanItemBalances(budgetedRequest, references, constItems, planItems);
 
@@ -529,50 +522,38 @@ public sealed class ZhenchengFlowGenerationAdapter
             };
         }
 
-        private static double CalculateFixedIncomeFinalBalanceAllowance(
+        private static List<VendorPlanItem> DropReferenceIncomeWhenFixedIncomeCoversTarget(
             FlowAutoGenerationRequest request,
             IReadOnlyList<GenerateReferenceRule> references,
             IReadOnlyList<GenerateConstRule> constItems,
             IReadOnlyList<VendorPlanItem> planItems)
         {
-            var fixedIncomeTotal = RoundMoney(planItems
+            var targetIncome = RoundMoney(Math.Max(0, request.Config.AllInMoney));
+            var fixedIncomeTotal = CalculateFixedIncomeTotal(references, constItems, planItems);
+            if (fixedIncomeTotal < targetIncome - 0.009d)
+            {
+                return planItems.ToList();
+            }
+
+            return planItems
+                .Where(item => item.Amount <= 0.009d
+                    || item.SourceKind != 0
+                    || !TryResolveReferenceRuleIndex(item, references, out _, out var rule)
+                    || !IsIncomeReferenceRule(rule))
+                .ToList();
+        }
+
+        private static double CalculateFixedIncomeTotal(
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<GenerateConstRule> constItems,
+            IEnumerable<VendorPlanItem> planItems)
+        {
+            return RoundMoney(planItems
                 .Where(item => item.Amount > 0.009d
                     && TryGetPlanRule(item, references, constItems, out var rule)
                     && rule is GenerateConstRule
                     && IsRuleSigned(rule, isIncome: true))
                 .Sum(item => item.Amount));
-            if (fixedIncomeTotal <= 0.009d)
-            {
-                return 0;
-            }
-
-            return RoundMoney(Math.Max(0, fixedIncomeTotal - Math.Max(0, request.Config.AllInMoney)));
-        }
-
-        private static FlowAutoGenerationRequest ApplyFixedIncomeFinalBalanceAllowance(
-            FlowAutoGenerationRequest request,
-            double allowance)
-        {
-            allowance = RoundMoney(Math.Max(0, allowance));
-            if (allowance <= 0.009d)
-            {
-                return request;
-            }
-
-            var config = request.Config.Clone();
-            config.AllInMoney = RoundMoney(Math.Max(0, config.AllInMoney) + allowance);
-            config.LastMoney = RoundMoney(Math.Max(0, config.LastMoney) + allowance);
-            config.AllOutMoney = RoundMoney(Math.Max(0, config.AllInMoney - config.LastMoney));
-            return new FlowAutoGenerationRequest
-            {
-                Bank = request.Bank,
-                BankUser = request.BankUser,
-                Config = config,
-                References = request.References,
-                ConstItems = request.ConstItems,
-                InterestSetting = request.InterestSetting,
-                OpeningBalanceOverride = request.OpeningBalanceOverride
-            };
         }
 
         private sealed record MonthlyBudgetRange(DateTime Start, DateTime End, double InMoney, double OutMoney);
@@ -810,6 +791,15 @@ public sealed class ZhenchengFlowGenerationAdapter
             return Math.Clamp(GetCoveredDays(range) / (double)Math.Max(1, daysInMonth), 0.01d, 1d);
         }
 
+        private static double CalculateTargetIncome(
+            FlowAutoGenerationRequest request,
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<GenerateConstRule> constItems,
+            IEnumerable<VendorPlanItem> planItems)
+        {
+            return RoundMoney(Math.Max(0, request.Config.AllInMoney));
+        }
+
         private static List<VendorPlanItem> EnsureRequiredReferencePlanItems(
             FlowAutoGenerationRequest request,
             IReadOnlyList<GenerateReferenceRule> references,
@@ -915,7 +905,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                 return false;
             }
 
-            var accountTime = CreateRequiredReferenceAccountTime(allowedStart, allowedEnd, ruleIndex, sequence, requiredCount);
+            var accountTime = CreateRequiredReferenceAccountTime(request, rule, allowedStart, allowedEnd, ruleIndex, sequence, requiredCount);
             var amount = CreateRequiredReferenceAmount(rule, ruleIndex, month, sequence);
             if (amount <= 0.009d)
             {
@@ -932,6 +922,8 @@ public sealed class ZhenchengFlowGenerationAdapter
         }
 
         private static DateTime CreateRequiredReferenceAccountTime(
+            FlowAutoGenerationRequest request,
+            GenerateReferenceRule rule,
             DateTime allowedStart,
             DateTime allowedEnd,
             int ruleIndex,
@@ -953,14 +945,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                 end = allowedEnd;
             }
 
-            var seconds = Math.Max(0, (int)Math.Min(int.MaxValue, (end - start).TotalSeconds));
-            if (seconds == 0)
-            {
-                return start;
-            }
-
-            var offset = Math.Abs((sequence * 997 + ruleIndex * 389 + 113) % (seconds + 1));
-            return start.AddSeconds(offset);
+            return CreateRuleTimeInRange(request, rule, start, end, sequence * 997 + ruleIndex * 389 + 113);
         }
 
         private static double CreateRequiredReferenceAmount(
@@ -1505,36 +1490,17 @@ public sealed class ZhenchengFlowGenerationAdapter
             var end = NormalizeEndDate(request.Config.EndTime);
             var monthCount = Math.Max(1, ((end.Year - start.Year) * 12) + end.Month - start.Month + 1);
             var month = start.Date.AddMonths(sequence % monthCount);
-            var daysInMonth = DateTime.DaysInMonth(month.Year, month.Month);
-            var startDay = Math.Clamp(rule.StartDay ?? 1, 1, daysInMonth);
-            var endDay = Math.Clamp(rule.EndDay ?? daysInMonth, 1, daysInMonth);
-            if (endDay < startDay)
-            {
-                (startDay, endDay) = (endDay, startDay);
-            }
-
-            var day = startDay + sequence % (endDay - startDay + 1);
-            var date = new DateTime(month.Year, month.Month, day);
-            if (date < start.Date)
-            {
-                date = start.Date;
-            }
-
-            if (date > end.Date)
-            {
-                date = end.Date;
-            }
-
-            var candidate = date
-                .AddHours(9 + sequence % 9)
-                .AddMinutes(sequence * 13 % 60)
-                .AddSeconds(sequence * 17 % 60);
-            if (candidate < start)
-            {
-                candidate = start.AddMinutes(sequence + 1);
-            }
-
-            return candidate <= end ? candidate : end;
+            var monthStart = month < start.Date ? start.Date : month;
+            var monthEndRaw = month.AddMonths(1).AddDays(-1);
+            var monthEnd = monthEndRaw > end.Date ? end.Date : monthEndRaw;
+            var dayCount = Math.Max(1, (monthEnd - monthStart).Days + 1);
+            var date = monthStart.AddDays(sequence % dayCount);
+            return CreateRuleTimeInRange(
+                request,
+                rule,
+                MaxDateTime(start, date),
+                MinDateTime(end, date.AddDays(1).AddTicks(-1)),
+                sequence * 41 + 11);
         }
 
         private static DateTime CreateSparseIncomeAccountTime(
@@ -1546,21 +1512,12 @@ public sealed class ZhenchengFlowGenerationAdapter
             var date = SelectSparseIncomeDate(rule, bucket, sequence);
             var start = request.Config.StartTime;
             var end = NormalizeEndDate(request.Config.EndTime);
-            var candidate = date
-                .AddHours(9 + ((sequence * 2 + bucket.MonthIndex) % 9))
-                .AddMinutes((sequence * 17 + bucket.MonthIndex * 11) % 60)
-                .AddSeconds((sequence * 23 + bucket.MonthIndex * 7) % 60);
-            if (candidate < start)
-            {
-                candidate = start.AddHours(1);
-            }
-
-            if (candidate > end)
-            {
-                candidate = end.AddMinutes(-Math.Min(30, sequence + 1));
-            }
-
-            return candidate;
+            return CreateRuleTimeInRange(
+                request,
+                rule,
+                MaxDateTime(start, date),
+                MinDateTime(end, date.AddDays(1).AddTicks(-1)),
+                sequence * 43 + bucket.MonthIndex * 17);
         }
 
         private static DateTime SelectSparseIncomeDate(
@@ -1601,17 +1558,9 @@ public sealed class ZhenchengFlowGenerationAdapter
 
         private static IEnumerable<DateTime> CreateSparseIncomeDateCandidates(GenerateReferenceRule rule, IncomeMonthBucket bucket)
         {
-            var startDay = Math.Clamp(rule.StartDay ?? bucket.Start.Day, 1, DateTime.DaysInMonth(bucket.Start.Year, bucket.Start.Month));
-            var endDay = Math.Clamp(rule.EndDay ?? bucket.End.Day, 1, DateTime.DaysInMonth(bucket.Start.Year, bucket.Start.Month));
-            if (endDay < startDay)
+            for (var date = bucket.Start.Date; date <= bucket.End.Date; date = date.AddDays(1))
             {
-                (startDay, endDay) = (endDay, startDay);
-            }
-
-            for (var day = startDay; day <= endDay; day++)
-            {
-                var date = new DateTime(bucket.Start.Year, bucket.Start.Month, day);
-                if (date >= bucket.Start && date <= bucket.End && !bucket.UsedDays.Contains(day))
+                if (!bucket.UsedDays.Contains(date.Day))
                 {
                     yield return date;
                 }
@@ -1637,7 +1586,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                 constItems,
                 items,
                 isIncome: true,
-                targetTotal: RoundMoney(Math.Max(0, request.Config.AllInMoney)));
+                targetTotal: CalculateTargetIncome(request, references, constItems, items));
             var actualIncomeTotal = SumPlanTotal(items, isIncome: true);
             NormalizeSignedPlanTotal(
                 request,
@@ -1681,6 +1630,176 @@ public sealed class ZhenchengFlowGenerationAdapter
             return RoundMoney(sign * value);
         }
 
+        private static List<VendorPlanItem> EnsureDailyPlanItemCoverage(
+            FlowAutoGenerationRequest request,
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<GenerateConstRule> constItems,
+            IReadOnlyList<VendorPlanItem> source)
+        {
+            var items = source.ToList();
+            if (references.Count == 0)
+            {
+                return items;
+            }
+
+            var start = request.Config.StartTime.Date;
+            var end = NormalizeEndDate(request.Config.EndTime).Date;
+            if (end < start)
+            {
+                (start, end) = (end, start);
+            }
+
+            var dayCount = (end - start).Days + 1;
+            if (dayCount <= 1)
+            {
+                return items;
+            }
+
+            var occupiedDates = items
+                .Where(item => Math.Abs(item.Amount) > 0.009d)
+                .Select(item => item.AccountTime.Date)
+                .ToHashSet();
+            var sequence = 0;
+            for (var date = start; date <= end; date = date.AddDays(1))
+            {
+                if (occupiedDates.Contains(date))
+                {
+                    continue;
+                }
+
+                var desiredSign = ChooseDailyCoverageSign(request, items, date);
+                if (!TryCreateDailyCoveragePlanItem(
+                        request,
+                        references,
+                        items,
+                        date,
+                        desiredSign,
+                        sequence,
+                        out var item)
+                    && !TryCreateDailyCoveragePlanItem(
+                        request,
+                        references,
+                        items,
+                        date,
+                        -desiredSign,
+                        sequence,
+                        out item))
+                {
+                    continue;
+                }
+
+                items.Add(item);
+                occupiedDates.Add(date);
+                sequence++;
+            }
+
+            return items;
+        }
+
+        private static int ChooseDailyCoverageSign(
+            FlowAutoGenerationRequest request,
+            IReadOnlyList<VendorPlanItem> items,
+            DateTime date)
+        {
+            var projectedDiff = GetProjectedFinalBalanceDiff(request, items);
+            if (projectedDiff > 500d)
+            {
+                return -1;
+            }
+
+            if (projectedDiff < -500d)
+            {
+                return 1;
+            }
+
+            var previousSign = items
+                .Where(item => item.AccountTime.Date < date && GetAmountSign(item.Amount) != 0)
+                .OrderByDescending(item => item.AccountTime)
+                .Select(item => GetAmountSign(item.Amount))
+                .FirstOrDefault();
+            return previousSign > 0 ? -1 : 1;
+        }
+
+        private static bool TryCreateDailyCoveragePlanItem(
+            FlowAutoGenerationRequest request,
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<VendorPlanItem> items,
+            DateTime date,
+            int sign,
+            int sequence,
+            out VendorPlanItem item)
+        {
+            item = null!;
+            var isIncome = sign > 0;
+            var candidates = references
+                .Select((rule, index) => new { Rule = rule, Index = index })
+                .Where(candidate => IsRuleSigned(candidate.Rule, isIncome)
+                    && TryCreateDailyCoverageTime(request, candidate.Rule, items, date, sequence + candidate.Index, out _))
+                .OrderBy(candidate => IsRequiredPlanRule(candidate.Rule))
+                .ThenBy(candidate => isIncome && IsPaymentLikeIncomeRule(candidate.Rule))
+                .ThenBy(candidate => GetRuleAmountRange(candidate.Rule).Min)
+                .ThenBy(candidate => candidate.Index)
+                .ToList();
+            foreach (var candidate in candidates)
+            {
+                if (!TryCreateDailyCoverageTime(request, candidate.Rule, items, date, sequence + candidate.Index, out var accountTime))
+                {
+                    continue;
+                }
+
+                var (min, _) = GetRuleAmountRange(candidate.Rule);
+                var amount = NormalizeSignedAmountByRule(sign * min, candidate.Rule);
+                if (Math.Abs(amount) <= 0.009d)
+                {
+                    continue;
+                }
+
+                item = new VendorPlanItem(accountTime, amount, 0, candidate.Index, false);
+                if (sign < 0 && WouldPlanHaveNegativeBalance(request, items.Append(item)))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryCreateDailyCoverageTime(
+            FlowAutoGenerationRequest request,
+            GenerateReferenceRule rule,
+            IReadOnlyList<VendorPlanItem> items,
+            DateTime date,
+            int sequence,
+            out DateTime accountTime)
+        {
+            accountTime = default;
+            if (!TryGetAllowedReferenceRange(request, rule, date, out var allowedStart, out var allowedEnd))
+            {
+                return false;
+            }
+
+            var start = MaxDateTime(allowedStart, date.Date);
+            var end = MinDateTime(allowedEnd, date.Date.AddDays(1).AddTicks(-1));
+            if (start > end)
+            {
+                return false;
+            }
+
+            for (var attempt = 0; attempt < 16; attempt++)
+            {
+                var candidate = TruncateToSecond(CreateRuleTimeInRange(request, rule, start, end, sequence + attempt * 29));
+                if (!IsSecondOccupied(items, -1, candidate))
+                {
+                    accountTime = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static List<VendorPlanItem> StabilizePlanItemBalances(
             FlowAutoGenerationRequest request,
             IReadOnlyList<GenerateReferenceRule> references,
@@ -1688,10 +1807,17 @@ public sealed class ZhenchengFlowGenerationAdapter
             IReadOnlyList<VendorPlanItem> source)
         {
             var items = source.ToList();
+            var isWechat = IsWechatBank(request.Bank);
             MoveMonthStartReferenceExpensesAfterIncome(request, references, items);
             RunBalanceStabilizationPasses(request, references, constItems, items);
             SpreadSameDirectionPlanItems(request, references, constItems, items);
             SpreadDenseSameDayPlanItems(request, references, constItems, items);
+            if (isWechat)
+            {
+                DeduplicatePlanItemAccountTimes(request, references, constItems, items);
+                return items;
+            }
+
             RunBalanceStabilizationPasses(request, references, constItems, items);
             RestoreExpenseTotalSafely(request, references, constItems, items);
             RunBalanceStabilizationPasses(request, references, constItems, items);
@@ -1711,7 +1837,9 @@ public sealed class ZhenchengFlowGenerationAdapter
             IReadOnlyList<GenerateConstRule> constItems,
             List<VendorPlanItem> items)
         {
-            var maxPasses = Math.Max(24, items.Count * 2);
+            var maxPasses = IsWechatBank(request.Bank)
+                ? Math.Min(Math.Max(4, items.Count / 20), 24)
+                : Math.Min(Math.Max(24, items.Count * 2), 240);
             for (var pass = 0; pass < maxPasses; pass++)
             {
                 if (!TryFindFirstNegativeExpense(request, items, out var problemIndex, out var problemTime))
@@ -1762,7 +1890,9 @@ public sealed class ZhenchengFlowGenerationAdapter
             IReadOnlyList<GenerateConstRule> constItems,
             List<VendorPlanItem> items)
         {
-            var maxPasses = Math.Min(Math.Max(items.Count, 1), 120);
+            var maxPasses = IsWechatBank(request.Bank)
+                ? Math.Min(Math.Max(2, items.Count / 40), 12)
+                : Math.Min(Math.Max(items.Count, 1), 120);
             for (var pass = 0; pass < maxPasses; pass++)
             {
                 var ordered = GetOrderedPlanEntries(items);
@@ -1818,6 +1948,14 @@ public sealed class ZhenchengFlowGenerationAdapter
                             run.Start,
                             run.End,
                             pass));
+                    runChanged = runChanged || TryRemoveOptionalSameDirectionRunItems(
+                        references,
+                        constItems,
+                        items,
+                        ordered,
+                        run.Start,
+                        run.End,
+                        maxRunLength: 2);
 
                     if (runChanged)
                     {
@@ -1833,13 +1971,54 @@ public sealed class ZhenchengFlowGenerationAdapter
             }
         }
 
+        private static bool TryRemoveOptionalSameDirectionRunItems(
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<GenerateConstRule> constItems,
+            List<VendorPlanItem> items,
+            IReadOnlyList<PlanOrderEntry> ordered,
+            int runStart,
+            int runEnd,
+            int maxRunLength)
+        {
+            var runLength = runEnd - runStart + 1;
+            var excess = runLength - maxRunLength;
+            if (excess <= 0)
+            {
+                return false;
+            }
+
+            var removableIndexes = ordered
+                .Skip(runStart)
+                .Take(runLength)
+                .Where(entry => TryGetPlanRule(entry.Item, references, constItems, out var rule)
+                    && !IsRequiredPlanRule(rule))
+                .OrderBy(entry => Math.Abs(entry.Item.Amount))
+                .ThenByDescending(entry => entry.Item.AccountTime)
+                .Select(entry => entry.Index)
+                .Take(excess)
+                .OrderByDescending(index => index)
+                .ToList();
+            if (removableIndexes.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var index in removableIndexes)
+            {
+                items.RemoveAt(index);
+            }
+
+            return true;
+        }
+
         private static void SpreadDenseSameDayPlanItems(
             FlowAutoGenerationRequest request,
             IReadOnlyList<GenerateReferenceRule> references,
             IReadOnlyList<GenerateConstRule> constItems,
             List<VendorPlanItem> items)
         {
-            for (var pass = 0; pass < 3; pass++)
+            var passCount = IsWechatBank(request.Bank) ? 1 : 3;
+            for (var pass = 0; pass < passCount; pass++)
             {
                 var changed = false;
                 var ordered = items
@@ -1910,6 +2089,20 @@ public sealed class ZhenchengFlowGenerationAdapter
 
                             changed = true;
                         }
+
+                        if (sameSignDayCounts.GetValueOrDefault(denseDay.Key) > maxPerDay
+                            && TryRemoveOptionalDenseSameDayPlanItems(
+                                references,
+                                constItems,
+                                items,
+                                denseDay.Key,
+                                monthGroup.Key.Sign,
+                                maxPerDay,
+                                sameSignDayCounts,
+                                totalDayCounts))
+                        {
+                            changed = true;
+                        }
                     }
                 }
 
@@ -1931,7 +2124,50 @@ public sealed class ZhenchengFlowGenerationAdapter
             var monthEndRaw = month.AddMonths(1).AddDays(-1);
             var monthEnd = monthEndRaw > end ? end : monthEndRaw;
             var coveredDays = Math.Max(1, (monthEnd - monthStart).Days + 1);
-            return Math.Max(2, (int)Math.Ceiling(itemCount / Math.Max(1d, coveredDays * 0.55d)));
+            return Math.Clamp((int)Math.Ceiling(itemCount / Math.Max(1d, coveredDays)), 2, 3);
+        }
+
+        private static bool TryRemoveOptionalDenseSameDayPlanItems(
+            IReadOnlyList<GenerateReferenceRule> references,
+            IReadOnlyList<GenerateConstRule> constItems,
+            List<VendorPlanItem> items,
+            DateTime date,
+            int sign,
+            int maxPerDay,
+            Dictionary<DateTime, int> sameSignDayCounts,
+            Dictionary<DateTime, int> totalDayCounts)
+        {
+            var excess = sameSignDayCounts.GetValueOrDefault(date) - maxPerDay;
+            if (excess <= 0)
+            {
+                return false;
+            }
+
+            var removableIndexes = items
+                .Select((item, index) => new { Item = item, Index = index })
+                .Where(entry => entry.Item.AccountTime.Date == date
+                    && GetAmountSign(entry.Item.Amount) == sign
+                    && TryGetPlanRule(entry.Item, references, constItems, out var rule)
+                    && !IsRequiredPlanRule(rule))
+                .OrderBy(entry => Math.Abs(entry.Item.Amount))
+                .ThenByDescending(entry => entry.Item.AccountTime)
+                .Select(entry => entry.Index)
+                .Take(excess)
+                .OrderByDescending(index => index)
+                .ToList();
+            if (removableIndexes.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var index in removableIndexes)
+            {
+                items.RemoveAt(index);
+                sameSignDayCounts[date] = Math.Max(0, sameSignDayCounts.GetValueOrDefault(date) - 1);
+                totalDayCounts[date] = Math.Max(0, totalDayCounts.GetValueOrDefault(date) - 1);
+            }
+
+            return true;
         }
 
         private static bool TryMovePlanItemToSparseDay(
@@ -2037,7 +2273,7 @@ public sealed class ZhenchengFlowGenerationAdapter
 
             for (var attempt = 0; attempt < 16; attempt++)
             {
-                var candidate = TruncateToSecond(CreateTimeInWindow(start, end, sequence + attempt * 13));
+                var candidate = TruncateToSecond(CreateRuleTimeInRange(request, rule, start, end, sequence + attempt * 13));
                 if (candidate >= start
                     && candidate <= end
                     && !IsSecondOccupied(items, currentIndex, candidate))
@@ -2056,7 +2292,10 @@ public sealed class ZhenchengFlowGenerationAdapter
             IReadOnlyList<GenerateConstRule> constItems,
             List<VendorPlanItem> items)
         {
-            for (var pass = 0; pass < Math.Max(1, items.Count); pass++)
+            var maxPasses = IsWechatBank(request.Bank)
+                ? Math.Min(Math.Max(1, items.Count / 120), 8)
+                : Math.Min(Math.Max(1, items.Count), 180);
+            for (var pass = 0; pass < maxPasses; pass++)
             {
                 var duplicateGroups = items
                     .Select((item, index) => new PlanOrderEntry(index, item))
@@ -2116,6 +2355,7 @@ public sealed class ZhenchengFlowGenerationAdapter
             }
 
             var original = items[index];
+            var skipBalanceCheck = IsWechatBank(request.Bank);
             var date = original.AccountTime.Date;
             var start = MaxDateTime(allowedStart, date);
             var end = MinDateTime(allowedEnd, date.AddDays(1).AddTicks(-1));
@@ -2129,7 +2369,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                          .Take(24))
             {
                 items[index] = original with { AccountTime = candidate };
-                if (!WouldPlanHaveNegativeBalance(request, items))
+                if (skipBalanceCheck || !WouldPlanHaveNegativeBalance(request, items))
                 {
                     return true;
                 }
@@ -2137,14 +2377,14 @@ public sealed class ZhenchengFlowGenerationAdapter
 
             for (var attempt = 0; attempt < 16; attempt++)
             {
-                var candidate = TruncateToSecond(CreateTimeInWindow(start, end, sequence + attempt * 17));
+                var candidate = TruncateToSecond(CreateRuleTimeInRange(request, rule, start, end, sequence + attempt * 17));
                 if (IsSecondOccupied(items, index, candidate))
                 {
                     continue;
                 }
 
                 items[index] = original with { AccountTime = candidate };
-                if (!WouldPlanHaveNegativeBalance(request, items))
+                if (skipBalanceCheck || !WouldPlanHaveNegativeBalance(request, items))
                 {
                     return true;
                 }
@@ -2362,7 +2602,9 @@ public sealed class ZhenchengFlowGenerationAdapter
                             continue;
                         }
 
-                        accountTime = CreateTimeInWindow(
+                        accountTime = CreateRuleTimeInRange(
+                            request,
+                            candidate.Rule,
                             fallbackStart,
                             fallbackEnd,
                             pass + gap.InsertAfter + candidate.SourceIndex);
@@ -2461,7 +2703,9 @@ public sealed class ZhenchengFlowGenerationAdapter
                             continue;
                         }
 
-                        accountTime = CreateTimeInWindow(
+                        accountTime = CreateRuleTimeInRange(
+                            request,
+                            candidate.Rule,
                             fallbackStart,
                             fallbackEnd,
                             pass + gap.InsertAfter + candidate.SourceIndex);
@@ -2563,7 +2807,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                     continue;
                 }
 
-                accountTime = CreateTimeInWindow(start, end, sequence);
+                accountTime = CreateRuleTimeInRange(request, rule, start, end, sequence);
                 return true;
             }
 
@@ -2589,7 +2833,7 @@ public sealed class ZhenchengFlowGenerationAdapter
                 return false;
             }
 
-            accountTime = CreateTimeInWindow(start, allowedEnd, sequence);
+            accountTime = CreateRuleTimeInRange(request, rule, start, allowedEnd, sequence);
             return true;
         }
 
@@ -2603,6 +2847,54 @@ public sealed class ZhenchengFlowGenerationAdapter
 
             var offset = Math.Abs((sequence * 211 + 37) % (seconds + 1));
             return start.AddSeconds(offset);
+        }
+
+        private static DateTime CreateRuleTimeInRange(
+            FlowAutoGenerationRequest request,
+            FlowRuleBase rule,
+            DateTime start,
+            DateTime end,
+            int sequence)
+        {
+            if (end < start)
+            {
+                (start, end) = (end, start);
+            }
+
+            var firstDate = start.Date;
+            var lastDate = end.Date;
+            var dayCount = Math.Max(1, (lastDate - firstDate).Days + 1);
+            var (startHour, endHour) = GetRuleHourRange(rule);
+
+            for (var attempt = 0; attempt < Math.Min(dayCount + 6, 40); attempt++)
+            {
+                var offset = Math.Abs((sequence * 17 + attempt * 7 + 3) % dayCount);
+                var date = firstDate.AddDays(offset);
+                var dayStart = MaxDateTime(start, date.AddHours(startHour));
+                var dayEnd = MinDateTime(end, date.AddHours(endHour).AddMinutes(59).AddSeconds(59));
+                if (dayStart > dayEnd)
+                {
+                    continue;
+                }
+
+                return CreateTimeInWindow(dayStart, dayEnd, sequence + attempt * 31);
+            }
+
+            var fallbackStart = MaxDateTime(start, request.Config.StartTime);
+            var fallbackEnd = MinDateTime(end, NormalizeEndDate(request.Config.EndTime));
+            return fallbackStart <= fallbackEnd ? fallbackStart : start;
+        }
+
+        private static (int StartHour, int EndHour) GetRuleHourRange(FlowRuleBase rule)
+        {
+            var startHour = Math.Clamp(rule.StartDay ?? 9, 0, 23);
+            var endHour = Math.Clamp(rule.EndDay ?? 17, 0, 23);
+            if (endHour < startHour)
+            {
+                (startHour, endHour) = (endHour, startHour);
+            }
+
+            return (startHour, endHour);
         }
 
         private static bool WouldPlanHaveNegativeBalance(
@@ -3038,7 +3330,8 @@ public sealed class ZhenchengFlowGenerationAdapter
             List<VendorPlanItem> items)
         {
             var targetExpense = CalculateTargetExpenseFromIncome(request, SumPlanTotal(items, isIncome: true));
-            for (var pass = 0; pass < 12; pass++)
+            var maxPasses = IsWechatBank(request.Bank) ? 3 : 12;
+            for (var pass = 0; pass < maxPasses; pass++)
             {
                 var diff = RoundMoney(targetExpense - SumPlanTotal(items, isIncome: false));
                 if (diff <= 0.009d || diff <= 500d)
@@ -3352,8 +3645,9 @@ public sealed class ZhenchengFlowGenerationAdapter
                     return false;
                 }
 
-                allowedStart = candidates.First();
-                allowedEnd = candidates.Last().AddDays(1).AddTicks(-1);
+                var (startHour, endHour) = GetRuleHourRange(rule);
+                allowedStart = candidates.First().AddHours(startHour);
+                allowedEnd = candidates.Last().AddHours(endHour).AddMinutes(59).AddSeconds(59);
             }
             else if (!TryGetAllowedFlowRuleRange(request, rule, monthTime, out allowedStart, out allowedEnd))
             {
@@ -3397,16 +3691,12 @@ public sealed class ZhenchengFlowGenerationAdapter
             out DateTime allowedStart,
             out DateTime allowedEnd)
         {
-            var daysInMonth = DateTime.DaysInMonth(monthTime.Year, monthTime.Month);
-            var startDay = Math.Clamp(rule.StartDay ?? 1, 1, daysInMonth);
-            var endDay = Math.Clamp(rule.EndDay ?? daysInMonth, 1, daysInMonth);
-            if (endDay < startDay)
-            {
-                (startDay, endDay) = (endDay, startDay);
-            }
-
-            allowedStart = new DateTime(monthTime.Year, monthTime.Month, startDay);
-            allowedEnd = new DateTime(monthTime.Year, monthTime.Month, endDay).AddDays(1).AddTicks(-1);
+            var (startHour, endHour) = GetRuleHourRange(rule);
+            allowedStart = new DateTime(monthTime.Year, monthTime.Month, 1).AddHours(startHour);
+            allowedEnd = new DateTime(monthTime.Year, monthTime.Month, DateTime.DaysInMonth(monthTime.Year, monthTime.Month))
+                .AddHours(endHour)
+                .AddMinutes(59)
+                .AddSeconds(59);
             if (allowedStart < request.Config.StartTime)
             {
                 allowedStart = request.Config.StartTime;
@@ -3438,28 +3728,7 @@ public sealed class ZhenchengFlowGenerationAdapter
             out DateTime allowedStart,
             out DateTime allowedEnd)
         {
-            var daysInMonth = DateTime.DaysInMonth(monthTime.Year, monthTime.Month);
-            var startDay = Math.Clamp(rule.StartDay ?? 1, 1, daysInMonth);
-            var endDay = Math.Clamp(rule.EndDay ?? daysInMonth, 1, daysInMonth);
-            if (endDay < startDay)
-            {
-                (startDay, endDay) = (endDay, startDay);
-            }
-
-            allowedStart = new DateTime(monthTime.Year, monthTime.Month, startDay);
-            allowedEnd = new DateTime(monthTime.Year, monthTime.Month, endDay).AddDays(1).AddTicks(-1);
-            if (allowedStart < request.Config.StartTime)
-            {
-                allowedStart = request.Config.StartTime;
-            }
-
-            var requestEnd = NormalizeEndDate(request.Config.EndTime);
-            if (allowedEnd > requestEnd)
-            {
-                allowedEnd = requestEnd;
-            }
-
-            return allowedStart <= allowedEnd;
+            return TryGetAllowedFlowRuleRange(request, rule, monthTime, out allowedStart, out allowedEnd);
         }
 
         private static bool TryGetReferencePlanRule(
@@ -3841,14 +4110,13 @@ public sealed class ZhenchengFlowGenerationAdapter
                 return CreateSparseIncomeAccountTime(request, reference, bucket, sequence);
             }
 
-            var date = request.Config.StartTime.Date.AddMonths(sequence);
-            var endTime = NormalizeEndDate(request.Config.EndTime);
-            if (date > endTime.Date)
+            if (TryGetAllowedRuleRange(request, rule, request.Config.StartTime.AddMonths(sequence), out var allowedStart, out var allowedEnd))
             {
-                date = endTime.Date;
+                return CreateRuleTimeInRange(request, rule, allowedStart, allowedEnd, sequence * 47 + 19);
             }
 
-            return date.AddHours(9 + sequence % 9).AddMinutes(sequence * 17 % 60);
+            var date = request.Config.StartTime.Date;
+            return CreateRuleTimeInRange(request, rule, date, date.AddDays(1).AddTicks(-1), sequence * 47 + 19);
         }
 
         private static double SumPlanTotal(IEnumerable<VendorPlanItem> items, bool isIncome)
@@ -5113,6 +5381,11 @@ public sealed class ZhenchengFlowGenerationAdapter
                 || bank.Name.Contains(IcbcFullName, StringComparison.Ordinal);
         }
 
+        private static bool IsWechatBank(Bank bank)
+        {
+            return bank.Name.Contains("微信", StringComparison.Ordinal);
+        }
+
         private static string CommonValue(IEnumerable<FlowRecord> records, Func<FlowRecord, string?> selector)
         {
             var values = records
@@ -5278,8 +5551,8 @@ public sealed class ZhenchengFlowGenerationAdapter
             SetPropertyIfNull(target, "MinMoney", min);
             SetPropertyIfNull(target, "MaxMoney", max);
             SetPropertyIfNull(target, "FloutLength", source.FloutLength ?? 0);
-            SetPropertyIfNull(target, "StartDay", source.StartDay ?? 1);
-            SetPropertyIfNull(target, "EndDay", source.EndDay ?? 28);
+            SetPropertyIfNull(target, "StartDay", source.StartDay ?? 9);
+            SetPropertyIfNull(target, "EndDay", source.EndDay ?? 17);
             SetPropertyIfNull(target, "TradeHoliday", source.TradeHoliday ?? false);
             SetPropertyIfNull(target, "TradeWeekend", source.TradeWeekend ?? false);
 
