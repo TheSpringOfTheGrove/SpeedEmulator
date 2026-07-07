@@ -192,10 +192,36 @@ public sealed class FlowAutoGenerator
         ApplyBalances(records, openingBalance);
         SmoothNativeSchedule(records, request, start, end, random);
         ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
+        BalanceNativeIncomeExpenseRhythm(records, request, start, end, openingBalance, requireNonNegativeBalance: false);
+        if (!IsWechatBank(request.Bank))
+        {
+            EnsureLargeIncomeMonthlyPresence(records, request, start, end, openingBalance, random, requireNonNegativeBalance: false);
+        }
+
         ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
         ReducePositiveFinalBalanceSafely(records, request, openingBalance);
         AddSafeExpenseRecordsForPositiveFinalBalance(records, request, start, end, openingBalance, random);
         ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+        SplitNativeMaxAmountRecords(records, request, start, end, openingBalance, random, requireNonNegativeBalance: false);
+        ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+        ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+        EnsureNativeDailyCoverage(records, request, start, end, openingBalance);
+        if (!IsWechatBank(request.Bank))
+        {
+            EnsureLargeIncomeMonthlyPresence(records, request, start, end, openingBalance, random, requireNonNegativeBalance: false);
+        }
+
+        ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+        ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+        SplitNativeMaxAmountRecords(records, request, start, end, openingBalance, random, requireNonNegativeBalance: true);
+        BalanceNativeIncomeExpenseRhythm(records, request, start, end, openingBalance, requireNonNegativeBalance: true);
+        if (!IsWechatBank(request.Bank))
+        {
+            EnsureLargeIncomeMonthlyPresence(records, request, start, end, openingBalance, random, requireNonNegativeBalance: false);
+            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+            SplitNativeMaxAmountRecords(records, request, start, end, openingBalance, random, requireNonNegativeBalance: true);
+        }
         PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
 
@@ -1651,6 +1677,1006 @@ public sealed class FlowAutoGenerator
         DeduplicateNativeTimes(records, request, start, end, random);
     }
 
+    private static bool EnsureNativeDailyCoverage(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        double openingBalance)
+    {
+        if (records.Count == 0)
+        {
+            return false;
+        }
+
+        var normalizedStart = start.Date;
+        var normalizedEnd = NormalizeEndDate(end).Date;
+        if (normalizedEnd < normalizedStart)
+        {
+            return false;
+        }
+
+        var dayCounts = records
+            .Where(item => item.AccountTime.HasValue)
+            .Select(item => item.AccountTime!.Value.Date)
+            .Where(date => date >= normalizedStart && date <= normalizedEnd)
+            .GroupBy(date => date)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var missingDates = EnumerateDates(normalizedStart, normalizedEnd)
+            .Where(date => !dayCounts.ContainsKey(date))
+            .ToList();
+        if (missingDates.Count == 0)
+        {
+            return false;
+        }
+
+        var coverageRandom = new Random(HashCode.Combine(
+            request.Bank.Id,
+            request.BankUser.Id,
+            normalizedStart,
+            normalizedEnd,
+            records.Count,
+            0x741C9A2D));
+        var changed = false;
+        var scheduleState = NativeScheduleState.From(records);
+        foreach (var missingDate in missingDates)
+        {
+            var candidate = FindDailyCoverageMoveCandidate(records, request, dayCounts, missingDate);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            var sourceDate = candidate.Record.AccountTime!.Value.Date;
+            var originalTime = candidate.Record.AccountTime.Value;
+            candidate.Record.AccountTime = PickNativeTimeOnDate(
+                missingDate,
+                candidate.Rule,
+                coverageRandom,
+                scheduleState,
+                scheduleState.NextSequence());
+            scheduleState.Register(candidate.Record);
+            ApplyBalances(records, openingBalance);
+            if (GetMinimumBalance(records, openingBalance) < -0.009d)
+            {
+                candidate.Record.AccountTime = originalTime;
+                ApplyBalances(records, openingBalance);
+                continue;
+            }
+
+            dayCounts[sourceDate] = Math.Max(0, dayCounts.GetValueOrDefault(sourceDate) - 1);
+            dayCounts[missingDate] = dayCounts.GetValueOrDefault(missingDate) + 1;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private sealed record DailyCoverageMoveCandidate(FlowRecord Record, FlowRuleBase Rule);
+
+    private static DailyCoverageMoveCandidate? FindDailyCoverageMoveCandidate(
+        IEnumerable<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        IReadOnlyDictionary<DateTime, int> dayCounts,
+        DateTime missingDate)
+    {
+        return records
+            .Where(item => item.AccountTime.HasValue)
+            .Where(item => dayCounts.GetValueOrDefault(item.AccountTime!.Value.Date) > 1)
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => !IsRequiredGeneratedRecord(item))
+            .Where(IsGeneratedReferenceRecord)
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item),
+                SourceDate = item.AccountTime!.Value.Date,
+                Amount = Math.Abs(item.TradeMoney ?? 0)
+            })
+            .Where(item => item.Rule is not null && IsNativeDateAllowedForRule(missingDate, item.Rule))
+            .OrderByDescending(item => IsBalanceFriendlyDailyCoverageMove(item.Record, missingDate))
+            .ThenByDescending(item => IsSameMonth(item.SourceDate, missingDate))
+            .ThenByDescending(item => dayCounts.GetValueOrDefault(item.SourceDate))
+            .ThenBy(item => item.Amount)
+            .ThenBy(item => Math.Abs((item.SourceDate - missingDate.Date).TotalDays))
+            .Select(item => new DailyCoverageMoveCandidate(item.Record, item.Rule!))
+            .FirstOrDefault();
+    }
+
+    private static bool IsNativeDateAllowedForRule(DateTime date, FlowRuleBase? rule)
+    {
+        if (rule is null)
+        {
+            return false;
+        }
+
+        return rule.TradeWeekend != false
+            || date.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday;
+    }
+
+    private static bool IsBalanceFriendlyDailyCoverageMove(FlowRecord record, DateTime targetDate)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return false;
+        }
+
+        var sourceDate = record.AccountTime.Value.Date;
+        var amount = record.TradeMoney ?? 0;
+        return amount > 0.009d
+            ? targetDate.Date <= sourceDate
+            : amount < -0.009d
+                ? targetDate.Date >= sourceDate
+                : true;
+    }
+
+    private static bool IsSameMonth(DateTime left, DateTime right)
+    {
+        return left.Year == right.Year && left.Month == right.Month;
+    }
+
+    private sealed record ExpenseRun(IReadOnlyList<FlowRecord> Records);
+
+    private static bool BalanceNativeIncomeExpenseRhythm(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        double openingBalance,
+        bool requireNonNegativeBalance)
+    {
+        if (records.Count < 2)
+        {
+            return false;
+        }
+
+        const int maxConsecutiveExpenses = 6;
+        var isWechat = IsWechatBank(request.Bank);
+        var maxPasses = isWechat ? 4 : 10;
+        var maxSegmentsPerPass = isWechat ? 32 : 96;
+        var maxIncomeBreaksPerRun = isWechat ? 3 : 24;
+        var maxTotalMoves = isWechat ? 96 : 360;
+        var changed = false;
+        var moves = 0;
+        var rhythmRandom = new Random(HashCode.Combine(
+            request.Bank.Id,
+            request.BankUser.Id,
+            start.Date,
+            NormalizeEndDate(end).Date,
+            records.Count,
+            0x4D72B31A));
+
+        for (var pass = 0; pass < maxPasses && moves < maxTotalMoves; pass++)
+        {
+            ApplyBalances(records, openingBalance);
+            var ordered = records
+                .OrderBy(item => item.AccountTime ?? DateTime.MinValue)
+                .ThenBy(item => item.Index)
+                .ToList();
+            var expenseRuns = FindExpenseRuns(ordered, maxConsecutiveExpenses)
+                .OrderByDescending(run => run.Records.Count)
+                .Take(maxSegmentsPerPass)
+                .ToList();
+            if (expenseRuns.Count == 0)
+            {
+                break;
+            }
+
+            var dayCounts = BuildDayCounts(records, start, end);
+            var passChanged = false;
+            foreach (var run in expenseRuns)
+            {
+                if (moves >= maxTotalMoves)
+                {
+                    break;
+                }
+
+                var runChanged = false;
+                var targetDates = GetPreferredRunDates(run, maxConsecutiveExpenses)
+                    .Take(maxIncomeBreaksPerRun)
+                    .ToList();
+                foreach (var targetDate in targetDates)
+                {
+                    if (moves >= maxTotalMoves)
+                    {
+                        break;
+                    }
+
+                    if (TryMoveIncomeToDate(
+                            records,
+                            request,
+                            targetDate,
+                            dayCounts,
+                            openingBalance,
+                            rhythmRandom,
+                            requireNonNegativeBalance)
+                        || TrySplitIncomeToDate(
+                            records,
+                            request,
+                            targetDate,
+                            dayCounts,
+                            openingBalance,
+                            rhythmRandom,
+                            requireNonNegativeBalance))
+                    {
+                        changed = true;
+                        passChanged = true;
+                        runChanged = true;
+                        moves++;
+                    }
+                }
+
+                if (runChanged || moves >= maxTotalMoves)
+                {
+                    continue;
+                }
+
+                if (TryMoveExpenseOutOfRun(
+                        records,
+                        request,
+                        run,
+                        dayCounts,
+                        start,
+                        end,
+                        openingBalance,
+                        rhythmRandom,
+                        requireNonNegativeBalance))
+                {
+                    changed = true;
+                    passChanged = true;
+                    moves++;
+                }
+            }
+
+            if (!passChanged)
+            {
+                break;
+            }
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+        }
+
+        return changed;
+    }
+
+    private static List<ExpenseRun> FindExpenseRuns(IReadOnlyList<FlowRecord> orderedRecords, int maxConsecutiveExpenses)
+    {
+        var result = new List<ExpenseRun>();
+        var current = new List<FlowRecord>();
+        foreach (var record in orderedRecords)
+        {
+            if ((record.TradeMoney ?? 0) < -0.009d)
+            {
+                current.Add(record);
+                continue;
+            }
+
+            AddExpenseRunIfNeeded(result, current, maxConsecutiveExpenses);
+            current = [];
+        }
+
+        AddExpenseRunIfNeeded(result, current, maxConsecutiveExpenses);
+        return result;
+    }
+
+    private static void AddExpenseRunIfNeeded(
+        ICollection<ExpenseRun> runs,
+        List<FlowRecord> current,
+        int maxConsecutiveExpenses)
+    {
+        if (current.Count > maxConsecutiveExpenses)
+        {
+            runs.Add(new ExpenseRun(current.ToList()));
+        }
+    }
+
+    private static Dictionary<DateTime, int> BuildDayCounts(IEnumerable<FlowRecord> records, DateTime start, DateTime end)
+    {
+        var normalizedStart = start.Date;
+        var normalizedEnd = NormalizeEndDate(end).Date;
+        return records
+            .Where(item => item.AccountTime.HasValue)
+            .Select(item => item.AccountTime!.Value.Date)
+            .Where(date => date >= normalizedStart && date <= normalizedEnd)
+            .GroupBy(date => date)
+            .ToDictionary(group => group.Key, group => group.Count());
+    }
+
+    private static bool TryMoveIncomeToDate(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime targetDate,
+        Dictionary<DateTime, int> dayCounts,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        var candidates = records
+            .Where(item => (item.TradeMoney ?? 0) > 0.009d)
+            .Where(IsMovableGeneratedReferenceRecord)
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item),
+                SourceDate = item.AccountTime!.Value.Date,
+                Amount = Math.Abs(item.TradeMoney ?? 0)
+            })
+            .Where(item => item.Rule is not null)
+            .Where(item => item.SourceDate == targetDate || dayCounts.GetValueOrDefault(item.SourceDate) > 1)
+            .Where(item => IsNativeDateAllowedForRule(targetDate, item.Rule))
+            .Where(item => CanMoveIncomeRecordForRhythm(records, item.Record))
+            .OrderByDescending(item => targetDate <= item.SourceDate)
+            .ThenByDescending(item => IsSameMonth(item.SourceDate, targetDate))
+            .ThenByDescending(item => dayCounts.GetValueOrDefault(item.SourceDate))
+            .ThenBy(item => item.Amount)
+            .ThenBy(item => Math.Abs((item.SourceDate - targetDate).TotalDays))
+            .Take(10)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (TryMoveRecordToDate(
+                    records,
+                    candidate.Record,
+                    candidate.Rule!,
+                    targetDate,
+                    dayCounts,
+                    openingBalance,
+                    random,
+                    requireNonNegativeBalance))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TrySplitIncomeToDate(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime targetDate,
+        Dictionary<DateTime, int> dayCounts,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        var candidates = records
+            .Where(item => (item.TradeMoney ?? 0) > 0.009d)
+            .Where(IsSplittableGeneratedIncomeRecord)
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item),
+                SourceDate = item.AccountTime!.Value.Date,
+                Amount = Math.Abs(item.TradeMoney ?? 0),
+                Bounds = GetRecordAmountBounds(item)
+            })
+            .Where(item => item.Rule is not null)
+            .Where(item => IsNativeDateAllowedForRule(targetDate, item.Rule))
+            .Where(item => CanSplitAmount(item.Amount, item.Bounds))
+            .OrderByDescending(item => targetDate <= item.SourceDate)
+            .ThenByDescending(item => IsSameMonth(item.SourceDate, targetDate))
+            .ThenByDescending(item => item.Amount)
+            .ThenBy(item => Math.Abs((item.SourceDate - targetDate).TotalDays))
+            .Take(10)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (TrySplitRecordToDate(
+                    records,
+                    candidate.Record,
+                    candidate.Rule!,
+                    targetDate,
+                    dayCounts,
+                    openingBalance,
+                    random,
+                    requireNonNegativeBalance))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryMoveExpenseOutOfRun(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        ExpenseRun run,
+        Dictionary<DateTime, int> dayCounts,
+        DateTime start,
+        DateTime end,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        var runCandidates = run.Records
+            .Where(IsMovableGeneratedReferenceRecord)
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item),
+                SourceDate = item.AccountTime!.Value.Date,
+                Amount = Math.Abs(item.TradeMoney ?? 0)
+            })
+            .Where(item => item.Rule is not null)
+            .Where(item => dayCounts.GetValueOrDefault(item.SourceDate) > 1)
+            .OrderBy(item => item.Amount)
+            .Take(6)
+            .ToList();
+
+        foreach (var candidate in runCandidates)
+        {
+            var targetDates = EnumerateDates(candidate.SourceDate, NormalizeEndDate(end).Date)
+                .Where(date => date >= start.Date && date <= NormalizeEndDate(end).Date)
+                .Where(date => date != candidate.SourceDate)
+                .Where(date => IsNativeDateAllowedForRule(date, candidate.Rule))
+                .OrderBy(date => dayCounts.GetValueOrDefault(date))
+                .ThenBy(date => CountSameDirectionOnDate(records, date, isIncome: false))
+                .ThenByDescending(date => IsSameMonth(date, candidate.SourceDate))
+                .ThenBy(date => Math.Abs((date - candidate.SourceDate).TotalDays))
+                .Take(10)
+                .ToList();
+
+            foreach (var targetDate in targetDates)
+            {
+                if (TryMoveRecordToDate(
+                        records,
+                        candidate.Record,
+                        candidate.Rule!,
+                    targetDate,
+                    dayCounts,
+                    openingBalance,
+                    random,
+                    requireNonNegativeBalance))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool EnsureLargeIncomeMonthlyPresence(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        if (records.Count == 0)
+        {
+            return false;
+        }
+
+        var months = EnumerateMonths(start, end).ToList();
+        if (months.Count == 0)
+        {
+            return false;
+        }
+
+        const int minimumLargeIncomeRecordsPerMonth = 3;
+        var incomeCountsByMonth = records
+            .Where(item => (item.TradeMoney ?? 0) > 0.009d && item.AccountTime.HasValue)
+            .GroupBy(item => (item.AccountTime!.Value.Year, item.AccountTime.Value.Month))
+            .ToDictionary(group => group.Key, group => group.Count());
+        var underfilledMonths = months
+            .Select(month => new
+            {
+                Month = month,
+                Count = incomeCountsByMonth.GetValueOrDefault((month.Start.Year, month.Start.Month))
+            })
+            .Where(item => item.Count < minimumLargeIncomeRecordsPerMonth)
+            .ToList();
+        if (underfilledMonths.Count == 0)
+        {
+            return false;
+        }
+
+        var dayCounts = BuildDayCounts(records, start, end);
+        var changed = false;
+        foreach (var item in underfilledMonths)
+        {
+            var needed = minimumLargeIncomeRecordsPerMonth - item.Count;
+            for (var index = 0; index < needed; index++)
+            {
+                var candidates = records
+                    .Where(IsSplittableGeneratedIncomeRecord)
+                    .Select(record => new
+                    {
+                        Record = record,
+                        Rule = ResolveRecordSourceRule(request, record),
+                        Amount = Math.Abs(record.TradeMoney ?? 0),
+                        Bounds = GetRecordAmountBounds(record)
+                    })
+                    .Where(candidate => candidate.Rule is not null)
+                    .Where(candidate => candidate.Bounds.Min >= 1000d && candidate.Bounds.Max > candidate.Bounds.Min * 4d)
+                    .Where(candidate => CanSplitAmount(candidate.Amount, candidate.Bounds))
+                    .OrderByDescending(candidate => candidate.Amount)
+                    .Take(16)
+                    .ToList();
+
+                foreach (var candidate in candidates)
+                {
+                    var targetDate = PickMonthlyPresenceDate(
+                        item.Month.Start,
+                        item.Month.End,
+                        candidate.Rule!,
+                        dayCounts);
+                    if (!targetDate.HasValue)
+                    {
+                        continue;
+                    }
+
+                    if (TrySplitRecordToDate(
+                            records,
+                            candidate.Record,
+                            candidate.Rule!,
+                            targetDate.Value,
+                            dayCounts,
+                            openingBalance,
+                            random,
+                            requireNonNegativeBalance))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+        }
+
+        return changed;
+    }
+
+    private static DateTime? PickMonthlyPresenceDate(
+        DateTime monthStart,
+        DateTime monthEnd,
+        FlowRuleBase rule,
+        IReadOnlyDictionary<DateTime, int> dayCounts)
+    {
+        var normalizedStart = monthStart.Date;
+        var normalizedEnd = NormalizeEndDate(monthEnd).Date;
+        var center = normalizedStart.AddDays(Math.Max(0, (normalizedEnd - normalizedStart).Days) / 2d);
+        return EnumerateDates(normalizedStart, normalizedEnd)
+            .Where(date => IsNativeDateAllowedForRule(date, rule))
+            .OrderBy(date => dayCounts.GetValueOrDefault(date))
+            .ThenBy(date => Math.Abs((date - center).TotalDays))
+            .Select(date => (DateTime?)date)
+            .FirstOrDefault();
+    }
+
+    private static bool SplitNativeMaxAmountRecords(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        if (records.Count == 0)
+        {
+            return false;
+        }
+
+        var isWechat = IsWechatBank(request.Bank);
+        if (isWechat)
+        {
+            return false;
+        }
+
+        var incomeRecordCount = records.Count(item => (item.TradeMoney ?? 0) > 0.009d);
+        var expenseRecordCount = records.Count(item => (item.TradeMoney ?? 0) < -0.009d);
+        if (incomeRecordCount == expenseRecordCount)
+        {
+            return false;
+        }
+
+        var splitIncome = incomeRecordCount < expenseRecordCount;
+        var maxSplits = Math.Min(1400, Math.Abs(incomeRecordCount - expenseRecordCount));
+        if (maxSplits <= 0)
+        {
+            return false;
+        }
+
+        var dayCounts = BuildDayCounts(records, start, end);
+        var scheduleState = NativeScheduleState.From(records);
+        var changed = false;
+        var splitCount = 0;
+        var candidates = records
+            .Where(IsSplittableGeneratedReferenceRecord)
+            .Select(record => new
+            {
+                Record = record,
+                Rule = ResolveRecordSourceRule(request, record),
+                Amount = Math.Abs(record.TradeMoney ?? 0),
+                IsIncome = (record.TradeMoney ?? 0) > 0.009d,
+                Bounds = GetRecordAmountBounds(record)
+            })
+            .Where(item => item.Rule is not null)
+            .Where(item => item.IsIncome == splitIncome)
+            .Where(item => IsAtRecordMaxAmount(item.Amount, item.Bounds))
+            .Where(item => CanSplitAmount(item.Amount, item.Bounds))
+            .OrderByDescending(item => item.Amount)
+            .ThenByDescending(item => item.Record.AccountTime ?? DateTime.MinValue)
+            .Take(maxSplits)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (splitCount >= maxSplits || !records.Contains(candidate.Record))
+            {
+                break;
+            }
+
+            var currentAmount = Math.Abs(candidate.Record.TradeMoney ?? 0);
+            var bounds = GetRecordAmountBounds(candidate.Record);
+            if (!IsAtRecordMaxAmount(currentAmount, bounds) || !CanSplitAmount(currentAmount, bounds))
+            {
+                continue;
+            }
+
+            var splitAmount = CalculateBalancedSplitAmount(currentAmount, bounds);
+            foreach (var targetDate in GetPreferredMaxSplitDates(
+                         candidate.Record,
+                         candidate.Rule!,
+                         start,
+                         end,
+                         dayCounts,
+                         splitCount,
+                         candidate.IsIncome,
+                         preferBalanceFriendly: requireNonNegativeBalance))
+            {
+                if (TrySplitRecordToDate(
+                        records,
+                        candidate.Record,
+                        candidate.Rule!,
+                        targetDate,
+                        dayCounts,
+                        openingBalance,
+                        random,
+                        requireNonNegativeBalance: false,
+                        splitAmount,
+                        scheduleState))
+                {
+                    changed = true;
+                    splitCount++;
+                    break;
+                }
+            }
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+        }
+
+        return changed;
+    }
+
+    private static bool IsAtRecordMaxAmount(double amount, AmountBounds bounds)
+    {
+        return bounds.Max < double.MaxValue / 2
+            && bounds.Max > bounds.Min + 0.009d
+            && amount >= bounds.Max - Math.Max(0.009d, bounds.Unit / 2d);
+    }
+
+    private static double CalculateBalancedSplitAmount(double amount, AmountBounds bounds)
+    {
+        var half = RoundAmountToUnit(amount / 2d, bounds.Unit);
+        var minSplit = bounds.Min;
+        var maxSplit = Math.Min(bounds.Max, amount - bounds.Min);
+        if (maxSplit < minSplit - 0.009d)
+        {
+            return 0;
+        }
+
+        return ClampAmountToBounds(Math.Clamp(half, minSplit, maxSplit), bounds);
+    }
+
+    private static IReadOnlyList<DateTime> GetPreferredMaxSplitDates(
+        FlowRecord record,
+        FlowRuleBase rule,
+        DateTime start,
+        DateTime end,
+        IReadOnlyDictionary<DateTime, int> dayCounts,
+        int splitSequence,
+        bool isIncome,
+        bool preferBalanceFriendly)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return [];
+        }
+
+        var sourceDate = record.AccountTime.Value.Date;
+        var normalizedStart = start.Date;
+        var normalizedEnd = NormalizeEndDate(end).Date;
+        if (normalizedEnd < normalizedStart)
+        {
+            (normalizedStart, normalizedEnd) = (normalizedEnd, normalizedStart);
+        }
+
+        if (preferBalanceFriendly)
+        {
+            if (isIncome)
+            {
+                normalizedEnd = MinDateTime(normalizedEnd, sourceDate);
+            }
+            else
+            {
+                normalizedStart = MaxDateTime(normalizedStart, sourceDate);
+            }
+        }
+
+        var totalDays = Math.Max(0, (normalizedEnd - normalizedStart).Days);
+        var spreadRatio = ((splitSequence + 1) * 0.6180339887498948d) % 1d;
+        var desiredDate = normalizedStart.AddDays((int)Math.Round(totalDays * spreadRatio));
+
+        var candidates = new List<DateTime>(48);
+        var seen = new HashSet<DateTime>();
+        for (var offset = 0; offset <= totalDays && candidates.Count < 48; offset++)
+        {
+            TryAddMaxSplitCandidateDate(desiredDate.AddDays(-offset));
+            if (offset > 0)
+            {
+                TryAddMaxSplitCandidateDate(desiredDate.AddDays(offset));
+            }
+        }
+
+        var result = candidates
+            .OrderBy(date => dayCounts.GetValueOrDefault(date))
+            .ThenBy(date => Math.Abs((date - desiredDate).TotalDays))
+            .ThenBy(date => date == sourceDate ? 1 : 0)
+            .ThenByDescending(date => IsSameMonth(date, sourceDate))
+            .ThenBy(date => Math.Abs((date - sourceDate).TotalDays))
+            .Take(48)
+            .ToList();
+
+        if (result.Count == 0 && IsNativeDateAllowedForRule(sourceDate, rule))
+        {
+            result.Add(sourceDate);
+        }
+
+        return result;
+
+        void TryAddMaxSplitCandidateDate(DateTime date)
+        {
+            date = date.Date;
+            if (date < normalizedStart || date > normalizedEnd || !seen.Add(date))
+            {
+                return;
+            }
+
+            if (IsNativeDateAllowedForRule(date, rule))
+            {
+                candidates.Add(date);
+            }
+        }
+    }
+
+    private static bool CanSplitAmount(double amount, AmountBounds bounds)
+    {
+        var splitAmount = CalculateSplitAmount(amount, bounds);
+        return splitAmount >= bounds.Min - 0.009d
+            && amount - splitAmount >= bounds.Min - 0.009d;
+    }
+
+    private static double CalculateSplitAmount(double amount, AmountBounds bounds)
+    {
+        var maxSplit = Math.Min(bounds.Max, amount - bounds.Min);
+        if (maxSplit < bounds.Min - 0.009d)
+        {
+            return 0;
+        }
+
+        return ClampAmountToBounds(Math.Min(maxSplit, bounds.Min), bounds);
+    }
+
+    private static bool TrySplitRecordToDate(
+        List<FlowRecord> records,
+        FlowRecord record,
+        FlowRuleBase rule,
+        DateTime targetDate,
+        Dictionary<DateTime, int> dayCounts,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance,
+        double? requestedSplitAmount = null,
+        NativeScheduleState? scheduleState = null)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return false;
+        }
+
+        var originalAmount = Math.Abs(record.TradeMoney ?? 0);
+        var bounds = GetRecordAmountBounds(record);
+        var splitAmount = requestedSplitAmount.HasValue
+            ? ClampAmountToBounds(requestedSplitAmount.Value, new AmountBounds(bounds.Min, Math.Min(bounds.Max, originalAmount - bounds.Min), bounds.Unit))
+            : CalculateSplitAmount(originalAmount, bounds);
+        var remainingAmount = ClampAmountToBounds(originalAmount - splitAmount, bounds);
+        if (splitAmount < bounds.Min - 0.009d || remainingAmount < bounds.Min - 0.009d)
+        {
+            return false;
+        }
+
+        var newRecord = record.Clone();
+        newRecord.Id = 0;
+        newRecord.Index = 0;
+        var state = scheduleState ?? NativeScheduleState.From(records);
+        newRecord.AccountTime = PickNativeTimeOnDate(
+            targetDate,
+            rule,
+            random,
+            state,
+            records.Count + dayCounts.GetValueOrDefault(targetDate));
+        newRecord.ExtraFields[RequiredOccurrenceField] = "false";
+
+        var sign = (record.TradeMoney ?? 0) < -0.009d ? -1d : 1d;
+        ApplySignedAmount(record, sign, remainingAmount);
+        ApplySignedAmount(newRecord, sign, splitAmount);
+        records.Add(newRecord);
+        if (!requireNonNegativeBalance)
+        {
+            dayCounts[targetDate] = dayCounts.GetValueOrDefault(targetDate) + 1;
+            scheduleState?.Register(newRecord);
+            return true;
+        }
+
+        ApplyBalances(records, openingBalance);
+        if (GetMinimumBalance(records, openingBalance) >= -0.009d)
+        {
+            dayCounts[targetDate] = dayCounts.GetValueOrDefault(targetDate) + 1;
+            scheduleState?.Register(newRecord);
+            return true;
+        }
+
+        records.Remove(newRecord);
+        ApplySignedAmount(record, sign, originalAmount);
+        ApplyBalances(records, openingBalance);
+        return false;
+    }
+
+    private static IReadOnlyList<DateTime> GetPreferredRunDates(ExpenseRun run, int maxConsecutiveExpenses)
+    {
+        var result = new List<(DateTime Date, int Priority)>();
+        var priority = 0;
+        var firstDate = run.Records.FirstOrDefault()?.AccountTime?.Date ?? DateTime.MinValue;
+        if (firstDate != DateTime.MinValue)
+        {
+            result.Add((firstDate, priority++));
+        }
+
+        for (var index = maxConsecutiveExpenses; index < run.Records.Count; index += maxConsecutiveExpenses + 1)
+        {
+            var date = run.Records[index].AccountTime?.Date ?? DateTime.MinValue;
+            if (date != DateTime.MinValue)
+            {
+                result.Add((date, priority++));
+            }
+        }
+
+        var center = run.Records.Count / 2;
+        var centerDate = run.Records[center].AccountTime?.Date ?? DateTime.MinValue;
+        if (centerDate != DateTime.MinValue)
+        {
+            result.Add((centerDate, priority));
+        }
+
+        return result
+            .GroupBy(item => item.Date)
+            .Select(group => new
+            {
+                Date = group.Key,
+                Priority = group.Min(item => item.Priority)
+            })
+            .OrderBy(item => item.Priority)
+            .Select(item => item.Date)
+            .ToList();
+    }
+
+    private static bool TryMoveRecordToDate(
+        List<FlowRecord> records,
+        FlowRecord record,
+        FlowRuleBase rule,
+        DateTime targetDate,
+        Dictionary<DateTime, int> dayCounts,
+        double openingBalance,
+        Random random,
+        bool requireNonNegativeBalance)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return false;
+        }
+
+        var originalTime = record.AccountTime.Value;
+        var sourceDate = originalTime.Date;
+        var state = NativeScheduleState.From(records.Where(item => !ReferenceEquals(item, record)));
+        record.AccountTime = PickNativeTimeOnDate(targetDate, rule, random, state, state.NextSequence());
+        ApplyBalances(records, openingBalance);
+        if (requireNonNegativeBalance && GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            record.AccountTime = originalTime;
+            ApplyBalances(records, openingBalance);
+            return false;
+        }
+
+        if (sourceDate != targetDate)
+        {
+            dayCounts[sourceDate] = Math.Max(0, dayCounts.GetValueOrDefault(sourceDate) - 1);
+            dayCounts[targetDate] = dayCounts.GetValueOrDefault(targetDate) + 1;
+        }
+
+        return true;
+    }
+
+    private static bool IsMovableGeneratedReferenceRecord(FlowRecord record)
+    {
+        return record.AccountTime.HasValue
+            && !IsSystemInterestRecord(record)
+            && !IsRequiredGeneratedRecord(record)
+            && IsGeneratedReferenceRecord(record);
+    }
+
+    private static bool IsSplittableGeneratedIncomeRecord(FlowRecord record)
+    {
+        return IsSplittableGeneratedReferenceRecord(record)
+            && (record.TradeMoney ?? 0) > 0.009d
+            && IsGeneratedReferenceRecord(record);
+    }
+
+    private static bool CanMoveIncomeRecordForRhythm(IEnumerable<FlowRecord> records, FlowRecord record)
+    {
+        if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
+        {
+            return true;
+        }
+
+        var bounds = GetRecordAmountBounds(record);
+        if (bounds.Min < 1000d || bounds.Max <= bounds.Min * 4d)
+        {
+            return true;
+        }
+
+        var month = record.AccountTime.Value;
+        var sameMonthCount = records.Count(item =>
+            (item.TradeMoney ?? 0) > 0.009d
+            && item.AccountTime.HasValue
+            && item.AccountTime.Value.Year == month.Year
+            && item.AccountTime.Value.Month == month.Month);
+        return sameMonthCount > 3;
+    }
+
+    private static bool IsSplittableGeneratedReferenceRecord(FlowRecord record)
+    {
+        return record.AccountTime.HasValue
+            && !IsSystemInterestRecord(record)
+            && Math.Abs(record.TradeMoney ?? 0) > 0.009d
+            && IsGeneratedReferenceRecord(record);
+    }
+
+    private static int CountSameDirectionOnDate(IEnumerable<FlowRecord> records, DateTime date, bool isIncome)
+    {
+        return records.Count(item => item.AccountTime.HasValue
+            && item.AccountTime.Value.Date == date.Date
+            && (isIncome ? (item.TradeMoney ?? 0) > 0.009d : (item.TradeMoney ?? 0) < -0.009d));
+    }
+
     private static void DeduplicateNativeTimes(
         IEnumerable<FlowRecord> records,
         FlowAutoGenerationRequest request,
@@ -2475,7 +3501,7 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var targetCount = CalculateNativeOptionalCount(rules, monthStart, monthEnd, remaining);
+        var targetCount = CalculateNativeOptionalCount(rules, monthStart, monthEnd, remaining, isIncome);
         var created = 0;
         var cursor = 0;
         var guard = Math.Max(rules.Count * Math.Max(1, targetCount) * 3, 24);
@@ -2531,7 +3557,8 @@ public sealed class FlowAutoGenerator
         IReadOnlyList<GenerateReferenceRule> rules,
         DateTime monthStart,
         DateTime monthEnd,
-        double targetAmount)
+        double targetAmount,
+        bool isIncome)
     {
         if (targetAmount <= 0.009d || rules.Count == 0)
         {
@@ -2539,6 +3566,16 @@ public sealed class FlowAutoGenerator
         }
 
         var average = Math.Max(0.01d, EstimateAverageAmount(rules));
+        if (isIncome)
+        {
+            var smallest = rules.Select(item => GetRuleAmountBounds(item).Min).DefaultIfEmpty(average).Min();
+            var largestIncomeBound = rules.Select(item => GetRuleAmountBounds(item).Max).DefaultIfEmpty(average).Max();
+            if (smallest >= 1000d && largestIncomeBound > smallest * 4d)
+            {
+                average = Math.Min(average, Math.Max(smallest * 1.6d, average * 0.35d));
+            }
+        }
+
         var largest = rules.Select(item => GetRuleAmountBounds(item).Max).DefaultIfEmpty(average).Max();
         var dayCount = Math.Max(1, (NormalizeEndDate(monthEnd).Date - monthStart.Date).Days + 1);
         var byAverage = (int)Math.Ceiling(targetAmount / average);
@@ -2596,10 +3633,9 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var incomeRuleCount = rules.Count;
         var smallest = rules.Select(item => GetRuleAmountBounds(item).Min).DefaultIfEmpty(0).Min();
         var largest = rules.Select(item => GetRuleAmountBounds(item).Max).DefaultIfEmpty(0).Max();
-        return incomeRuleCount <= 2 && largest > smallest * 8d;
+        return smallest >= 1000d && largest > smallest * 4d;
     }
 
     private static int GetNativeRepeatCount(string? value, Random random)
@@ -3668,7 +4704,63 @@ public sealed class FlowAutoGenerator
             rawTargets = CreateDefaultVolatileRawTargets(months.Count, targetTotal, isIncome, random, rules);
         }
 
-        return NormalizeRawTargets(rawTargets, targetTotal);
+        var targets = NormalizeRawTargets(rawTargets, targetTotal);
+        return ApplyLargeIncomeMonthlyFloor(targets, targetTotal, isIncome, rules);
+    }
+
+    private static double[] ApplyLargeIncomeMonthlyFloor(
+        double[] targets,
+        double targetTotal,
+        bool isIncome,
+        IReadOnlyList<GenerateReferenceRule>? rules)
+    {
+        if (!isIncome || targets.Length == 0 || rules is null || rules.Count == 0)
+        {
+            return targets;
+        }
+
+        var smallest = rules.Select(item => GetRuleAmountBounds(item).Min).DefaultIfEmpty(0).Min();
+        var largest = rules.Select(item => GetRuleAmountBounds(item).Max).DefaultIfEmpty(0).Max();
+        if (smallest < 1000d || largest <= smallest * 4d || targetTotal < smallest * targets.Length)
+        {
+            return targets;
+        }
+
+        var result = targets.ToArray();
+        var deficit = 0d;
+        for (var index = 0; index < result.Length; index++)
+        {
+            if (result[index] >= smallest - 0.009d)
+            {
+                continue;
+            }
+
+            deficit = RoundMoney(deficit + smallest - result[index]);
+            result[index] = smallest;
+        }
+
+        if (deficit <= 0.009d)
+        {
+            return result;
+        }
+
+        foreach (var index in result
+                     .Select((value, itemIndex) => new { value, itemIndex })
+                     .Where(item => item.value > smallest + 0.009d)
+                     .OrderByDescending(item => item.value)
+                     .Select(item => item.itemIndex))
+        {
+            var room = RoundMoney(result[index] - smallest);
+            var reduction = Math.Min(room, deficit);
+            result[index] = RoundMoney(result[index] - reduction);
+            deficit = RoundMoney(deficit - reduction);
+            if (deficit <= 0.009d)
+            {
+                break;
+            }
+        }
+
+        return deficit <= 0.009d ? result : targets;
     }
 
     private static double[] CreateMonthDetailRawTargets(
@@ -4081,6 +5173,7 @@ public sealed class FlowAutoGenerator
         {
             var removableIndex = activeIndexes
                 .Where(index => !IsRequiredGeneratedRecord(signedRecords[index]))
+                .Where(index => CanRemoveOptionalRecordForTarget(signedRecords, activeIndexes, index))
                 .OrderByDescending(index => amounts[index])
                 .ThenByDescending(index => mins[index])
                 .FirstOrDefault(-1);
@@ -4104,6 +5197,7 @@ public sealed class FlowAutoGenerator
 
             var removableIndex = activeIndexes
                 .Where(index => !IsRequiredGeneratedRecord(signedRecords[index]))
+                .Where(index => CanRemoveOptionalRecordForTarget(signedRecords, activeIndexes, index))
                 .OrderByDescending(index => amounts[index])
                 .ThenByDescending(index => mins[index])
                 .Where(index =>
@@ -4138,6 +5232,36 @@ public sealed class FlowAutoGenerator
             amounts[removableIndex] = 0;
             activeIndexes.Remove(removableIndex);
         }
+    }
+
+    private static bool CanRemoveOptionalRecordForTarget(
+        IReadOnlyList<FlowRecord> signedRecords,
+        IReadOnlyList<int> activeIndexes,
+        int candidateIndex)
+    {
+        var record = signedRecords[candidateIndex];
+        if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
+        {
+            return true;
+        }
+
+        var bounds = GetRecordAmountBounds(record);
+        if (bounds.Min < 1000d || bounds.Max <= bounds.Min * 4d)
+        {
+            return true;
+        }
+
+        var monthKey = (Year: record.AccountTime.Value.Year, Month: record.AccountTime.Value.Month);
+        var sameMonthIncomeCount = activeIndexes.Count(index =>
+        {
+            var item = signedRecords[index];
+            return (item.TradeMoney ?? 0) > 0.009d
+                && item.AccountTime.HasValue
+                && item.AccountTime.Value.Year == monthKey.Year
+                && item.AccountTime.Value.Month == monthKey.Month;
+        });
+
+        return sameMonthIncomeCount > 3;
     }
 
     private static void MoveAmountsTowardTarget(
@@ -4713,6 +5837,7 @@ public sealed class FlowAutoGenerator
             var isRequired = IsRequiredGeneratedRecord(record);
             if (!isRequired && allowDropOptional)
             {
+                var canDropRecord = !isIncome || CanDropOptionalIncomeRecord(candidates, record);
                 var partialNext = RoundMoney(absolute - remaining);
                 if (partialNext >= bounds.Min - 0.009d)
                 {
@@ -4721,8 +5846,21 @@ public sealed class FlowAutoGenerator
                     break;
                 }
 
-                ApplySignedAmount(record, sign, 0);
-                remaining = RoundMoney(remaining - absolute);
+                if (canDropRecord)
+                {
+                    ApplySignedAmount(record, sign, 0);
+                    remaining = RoundMoney(remaining - absolute);
+                    continue;
+                }
+
+                var reducibleToMin = RoundMoney(absolute - bounds.Min);
+                if (reducibleToMin <= 0.009d)
+                {
+                    continue;
+                }
+
+                ApplySignedAmount(record, sign, bounds.Min);
+                remaining = RoundMoney(remaining - reducibleToMin);
                 continue;
             }
 
@@ -4738,6 +5876,28 @@ public sealed class FlowAutoGenerator
         }
 
         return remaining <= 0.009d;
+    }
+
+    private static bool CanDropOptionalIncomeRecord(IEnumerable<FlowRecord> records, FlowRecord candidate)
+    {
+        if (!candidate.AccountTime.HasValue)
+        {
+            return true;
+        }
+
+        var bounds = GetRecordAmountBounds(candidate);
+        if (bounds.Min < 1000d || bounds.Max <= bounds.Min * 4d)
+        {
+            return true;
+        }
+
+        var month = candidate.AccountTime.Value;
+        var sameMonthCount = records.Count(item =>
+            (item.TradeMoney ?? 0) > 0.009d
+            && item.AccountTime.HasValue
+            && item.AccountTime.Value.Year == month.Year
+            && item.AccountTime.Value.Month == month.Month);
+        return sameMonthCount > 3;
     }
 
     private static bool IncreaseSignedRecordsWithinBounds(IEnumerable<FlowRecord> records, bool isIncome, double amount)
