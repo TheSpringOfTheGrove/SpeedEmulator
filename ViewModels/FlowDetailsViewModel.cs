@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using System.Windows;
@@ -205,20 +206,50 @@ public sealed class FlowDetailsViewModel : ObservableObject
         StatusMessage = "已插入空行";
     }
 
-    private void DeleteRecord()
+    private void DeleteRecord(object? parameter)
     {
-        if (SelectedRecord is null)
+        var selectedRecords = GetSelectedRecords(parameter);
+        if (selectedRecords.Count == 0 && SelectedRecord is not null)
+        {
+            selectedRecords.Add(SelectedRecord);
+        }
+
+        if (selectedRecords.Count == 0)
         {
             StatusMessage = "请先选择要删除的流水。";
             return;
         }
 
-        var index = Records.IndexOf(SelectedRecord);
-        allRecords.Remove(SelectedRecord);
+        var index = selectedRecords
+            .Select(record => Records.IndexOf(record))
+            .Where(item => item >= 0)
+            .DefaultIfEmpty(0)
+            .Min();
+
+        foreach (var record in selectedRecords)
+        {
+            allRecords.Remove(record);
+        }
+
         RefreshDisplay();
         SelectedRecord = Records.Count == 0 ? null : Records[Math.Clamp(index, 0, Records.Count - 1)];
         RefreshTotals();
-        StatusMessage = "已删除选中流水";
+        StatusMessage = selectedRecords.Count == 1
+            ? "已删除选中流水"
+            : $"已删除选中流水 {selectedRecords.Count} 条";
+    }
+
+    private static List<FlowRecord> GetSelectedRecords(object? parameter)
+    {
+        if (parameter is not IList selectedItems)
+        {
+            return [];
+        }
+
+        return selectedItems
+            .OfType<FlowRecord>()
+            .Distinct()
+            .ToList();
     }
 
     private void MoveUpRecord()

@@ -9,6 +9,8 @@ using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using PdfSharpCore.Pdf;
+using PdfSharpCore.Pdf.IO;
 using SpeedEmulator.Models;
 
 namespace SpeedEmulator.Services;
@@ -1085,7 +1087,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 try
                 {
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
-                    if (!IsDefaultQuestPdfBridgeDisabled() && !IsAgriculturalBankPersonalPaperTemplate(context))
+                    if (!IsDefaultQuestPdfBridgeDisabled()
+                        && !IsAgriculturalBankPersonalPaperTemplate(context)
+                        && !ShouldUseIcbcFallbackStampCode(context))
                     {
                         try
                         {
@@ -1480,6 +1484,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 try
                 {
+                    if (ShouldUseIcbcFallbackStampCode(context)
+                        && EstimateRenderedPageCount(context, resolvedTemplate, records, pageRows) > 1)
+                    {
+                        ExportIcbcPerPageFallbackStampCodes(context, resolvedTemplate, records, path, pageRows);
+                        return true;
+                    }
+
                     var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
                     var document = renderFactory.Invoke(null, [bankUser, records, template]);
                     if (document is null)
@@ -1504,6 +1515,135 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             return false;
+        }
+
+        private void ExportIcbcPerPageFallbackStampCodes(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate,
+            object records,
+            string path,
+            int? pageRowsOverride)
+        {
+            var tempRoot = Path.Combine(
+                Path.GetDirectoryName(path) ?? Path.GetTempPath(),
+                $".icbc-stamp-pages-{Guid.NewGuid():N}");
+            var tempFiles = new List<string>();
+            var selectedPages = new List<(string FilePath, int PageIndex)>();
+            var usedCodes = new HashSet<string>(StringComparer.Ordinal);
+            Directory.CreateDirectory(tempRoot);
+
+            try
+            {
+                var pageCount = EstimateRenderedPageCount(context, resolvedTemplate, records, pageRowsOverride);
+                for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
+                {
+                    var tempPath = Path.Combine(tempRoot, $"page-source-{pageIndex + 1}.pdf");
+                    tempFiles.Add(tempPath);
+
+                    var pageBankUser = CreateVendorBankUser(context);
+                    var pageStampCode = CreateIcbcFallbackStampCode(usedCodes);
+                    if (IsPrintBridgeDebugEnabledGlobal())
+                    {
+                        Console.WriteLine($"[PrintBridge] ICBC fallback stamp code page {pageIndex + 1}: {pageStampCode}");
+                    }
+
+                    SetIcbcStampCodeAliases(pageBankUser, pageStampCode);
+
+                    var template = CreateVendorTemplate(context, resolvedTemplate, pageRowsOverride);
+                    var document = renderFactory.Invoke(null, [pageBankUser, records, template]);
+                    if (document is null)
+                    {
+                        throw new InvalidOperationException("Vendor QuestPDF document was not created.");
+                    }
+
+                    NormalizeVendorDynamicImageDocument(context, document);
+                    generatePdfMethod.Invoke(null, [document, tempPath]);
+
+                    var actualPageCount = GetPdfPageCount(tempPath);
+                    if (pageIndex == 0)
+                    {
+                        pageCount = actualPageCount;
+                    }
+
+                    if (pageIndex < actualPageCount)
+                    {
+                        selectedPages.Add((tempPath, pageIndex));
+                    }
+                }
+
+                MergeSelectedPdfPages(selectedPages, path);
+            }
+            finally
+            {
+                foreach (var tempFile in tempFiles)
+                {
+                    TryDeleteFile(tempFile);
+                }
+
+                try
+                {
+                    if (Directory.Exists(tempRoot))
+                    {
+                        Directory.Delete(tempRoot, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // Temporary page render artifacts are best-effort cleanup.
+                }
+            }
+        }
+
+        private static int EstimateRenderedPageCount(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate,
+            object records,
+            int? pageRowsOverride)
+        {
+            var pageRows = pageRowsOverride
+                ?? (resolvedTemplate.PageRows > 0 ? resolvedTemplate.PageRows : context.Template.PageRows);
+            if (pageRows <= 0)
+            {
+                return 1;
+            }
+
+            var recordCount = records is ICollection collection
+                ? collection.Count
+                : records is IEnumerable enumerable ? enumerable.Cast<object>().Count() : 0;
+            return Math.Max(1, (recordCount + pageRows - 1) / pageRows);
+        }
+
+        private static int GetPdfPageCount(string path)
+        {
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Import);
+            return document.PageCount;
+        }
+
+        private static void MergeSelectedPdfPages(IReadOnlyList<(string FilePath, int PageIndex)> pages, string path)
+        {
+            if (pages.Count == 0)
+            {
+                throw new InvalidOperationException("No PDF pages were generated for ICBC stamp-code merge.");
+            }
+
+            using var outputDocument = new PdfDocument();
+            foreach (var page in pages)
+            {
+                using var inputDocument = PdfReader.Open(page.FilePath, PdfDocumentOpenMode.Import);
+                if (page.PageIndex < 0 || page.PageIndex >= inputDocument.PageCount)
+                {
+                    continue;
+                }
+
+                outputDocument.AddPage(inputDocument.Pages[page.PageIndex]);
+            }
+
+            if (outputDocument.PageCount == 0)
+            {
+                throw new InvalidOperationException("No PDF pages were selected for ICBC stamp-code merge.");
+            }
+
+            outputDocument.Save(path);
         }
 
         private static IEnumerable<int?> GetVendorQuestPdfPageRowAttempts(
@@ -3021,11 +3161,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         BankUser bankUser,
         IReadOnlyDictionary<string, object?> values)
     {
-        var stampCode = FirstNotBlank(
-            bankUser.ChapterCode,
-            GetValue(values, "StampCode"),
-            GetValue(values, "ChapterCode"),
-            GetValue(values, "ZhangCode"));
+        var stampCode = ResolveBankUserStampCode(context, bankUser, values);
         var stampBranch = FirstNotBlank(
             bankUser.ChapterBranch,
             GetValue(values, "StampBranch"),
@@ -3054,6 +3190,135 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "PrintInstitution", resolvedPrintBranch);
         Set(target, "PrintNet", resolvedPrintBranch);
         Set(target, "PrintNetwork", resolvedPrintBranch);
+    }
+
+    private static void SetIcbcStampCodeAliases(object target, string stampCode)
+    {
+        Set(target, "StampCode", stampCode);
+        Set(target, "ChapterCode", stampCode);
+        Set(target, "ZhangCode", stampCode);
+        Set(target, "VerificationCode", stampCode);
+    }
+
+    private static string ResolveBankUserStampCode(
+        PrintRenderContext context,
+        BankUser bankUser,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var configured = ResolveConfiguredBankUserStampCode(context, bankUser, values);
+
+        if (!IsIcbcPrintContext(context))
+        {
+            return configured;
+        }
+
+        configured = NormalizeSingleLinePrintText(configured);
+        return IsIcbcStampCodePlaceholder(configured)
+            ? CreateIcbcFallbackStampCode()
+            : configured;
+    }
+
+    private static string ResolveConfiguredBankUserStampCode(
+        PrintRenderContext context,
+        BankUser bankUser,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        return FirstNotBlank(
+            GetBankUserColumnValue(
+                context,
+                values,
+                "\u7AE0\u5185\u7F16\u7801",
+                "\u7AE0\u5185\u7F16\u78012",
+                "\u5370\u7AE0\u7F16\u7801",
+                "\u7AE0\u5185\u4EE3\u7801"),
+            bankUser.ChapterCode,
+            GetValue(values, "StampCode"),
+            GetValue(values, "ChapterCode"),
+            GetValue(values, "ZhangCode"));
+    }
+
+    private static bool ShouldUseIcbcFallbackStampCode(PrintRenderContext context)
+    {
+        if (!IsIcbcPrintContext(context))
+        {
+            return false;
+        }
+
+        var values = CreateValueMap(context.BankUser);
+        return IsIcbcStampCodePlaceholder(ResolveConfiguredBankUserStampCode(context, context.BankUser, values));
+    }
+
+    private static bool IsIcbcStampCodePlaceholder(string? value)
+    {
+        var text = NormalizeSingleLinePrintText(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        return string.Equals(text, "ICBC", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "SSSS", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "SSSSS", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "\u7AE0\u5185\u7F16\u7801", StringComparison.Ordinal)
+            || string.Equals(text, "ChapterCode", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "StampCode", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(text, "ZhangCode", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CreateIcbcFallbackStampCode()
+    {
+        return CreateIcbcFallbackStampCode(existingCodes: null);
+    }
+
+    private static string CreateIcbcFallbackStampCode(ISet<string>? existingCodes)
+    {
+        string code;
+        do
+        {
+            code = CreateMixedIcbcStampCodePrefix() + "026";
+        }
+        while (existingCodes is not null && existingCodes.Contains(code));
+
+        existingCodes?.Add(code);
+        return code;
+    }
+
+    private static string CreateMixedIcbcStampCodePrefix()
+    {
+        var chars = new char[9];
+        var letterPositions = new HashSet<int>();
+        while (letterPositions.Count < 3)
+        {
+            var position = RandomNumberGenerator.GetInt32(0, chars.Length);
+            if (letterPositions.Contains(position)
+                || letterPositions.Contains(position - 1)
+                || letterPositions.Contains(position + 1))
+            {
+                continue;
+            }
+
+            letterPositions.Add(position);
+        }
+
+        for (var index = 0; index < chars.Length; index++)
+        {
+            chars[index] = letterPositions.Contains(index)
+                ? CreateRandomUpperLetter()
+                : CreateRandomDigit();
+        }
+
+        return new string(chars);
+    }
+
+    private static char CreateRandomUpperLetter()
+    {
+        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return letters[RandomNumberGenerator.GetInt32(0, letters.Length)];
+    }
+
+    private static char CreateRandomDigit()
+    {
+        return (char)('0' + RandomNumberGenerator.GetInt32(0, 10));
     }
 
     private static void ApplyTemplateSpecificBankUserFields(
@@ -3135,6 +3400,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (!string.IsNullOrWhiteSpace(verificationCode))
         {
             Set(target, "VerificationCode", verificationCode);
+        }
+
+        if (IsIcbcPrintContext(context))
+        {
+            var stampCode = FirstNotBlank(
+                Convert.ToString(GetPropertyValue(target, "StampCode"), CultureInfo.CurrentCulture),
+                Convert.ToString(GetPropertyValue(target, "ChapterCode"), CultureInfo.CurrentCulture),
+                Convert.ToString(GetPropertyValue(target, "ZhangCode"), CultureInfo.CurrentCulture),
+                ResolveBankUserStampCode(context, context.BankUser, values));
+            if (!string.IsNullOrWhiteSpace(stampCode))
+            {
+                Set(target, "VerificationCode", stampCode);
+            }
         }
     }
 

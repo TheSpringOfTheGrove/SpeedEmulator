@@ -210,7 +210,7 @@
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"
                       IsReadOnly="False"
-                      SelectionMode="Single"
+                      SelectionMode="Extended"
                       SelectionUnit="FullRow"
                       HeadersVisibility="Column"
                       RowHeaderWidth="0"
@@ -244,7 +244,10 @@
 
                 <Button Content="复制" Command="{Binding CopyRecordCommand}" Margin="0,12,0,10" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="插入空行" Command="{Binding InsertBlankRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
-                <Button Content="删除" Command="{Binding DeleteRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
+                <Button Content="删除"
+                        Command="{Binding DeleteRecordCommand}"
+                        CommandParameter="{Binding SelectedItems, ElementName=FlowGrid}"
+                        Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="上移" Command="{Binding MoveUpRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="下移" Command="{Binding MoveDownRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="时间排序" Command="{Binding ReSortByDateCommand}" Style="{StaticResource FlowSideButtonStyle}" />

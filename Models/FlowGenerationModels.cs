@@ -191,8 +191,13 @@ public abstract class FlowRuleBase : ObservableObject
 {
     private Dictionary<string, string> extraFields = [];
     private bool isCheck;
+    private int index;
 
-    public int Index { get; set; }
+    public int Index
+    {
+        get => index;
+        set => SetProperty(ref index, value);
+    }
 
     public bool IsCheck
     {

@@ -83,9 +83,7 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
             return false;
         }
 
-        if (!IsEmptySnapshot(snapshot)
-            && !IsLegacyDefaultSnapshot(snapshot)
-            && !ShouldRefreshFromPackagedSeed(snapshot, packagedSeed))
+        if (!IsEmptySnapshot(snapshot) && !IsLegacyDefaultSnapshot(snapshot))
         {
             return false;
         }
@@ -125,30 +123,6 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
             "9989895",
             "45121323"
         ]);
-    }
-
-    private static bool ShouldRefreshFromPackagedSeed(FlowGenerationSnapshot snapshot, FlowGenerationSnapshot packagedSeed)
-    {
-        var currentCount = snapshot.References.Count + snapshot.ConstItems.Count;
-        var packagedCount = packagedSeed.References.Count + packagedSeed.ConstItems.Count;
-        if (packagedCount > currentCount)
-        {
-            return true;
-        }
-
-        if (HasTextCoverage(packagedSeed.References, item => item.TradePlace)
-            && !HasTextCoverage(snapshot.References, item => item.TradePlace))
-        {
-            return true;
-        }
-
-        return HasTextCoverage(packagedSeed.ConstItems, item => item.TradePlace)
-            && !HasTextCoverage(snapshot.ConstItems, item => item.TradePlace);
-    }
-
-    private static bool HasTextCoverage<T>(IEnumerable<T> rows, Func<T, string?> selector)
-    {
-        return rows.Any(item => !string.IsNullOrWhiteSpace(selector(item)));
     }
 
     private static FlowGenerationSnapshot Clone(FlowGenerationSnapshot snapshot)

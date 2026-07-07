@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="PdfSharpCore">
+      <HintPath>VendorRuntime\Zhencheng\PdfSharpCore.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3405.78" />
     <PackageReference Include="QuestPDF" Version="2026.6.0" />
     <PackageReference Include="Velopack" Version="1.2.0" />

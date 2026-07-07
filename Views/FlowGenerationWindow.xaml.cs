@@ -162,10 +162,8 @@ public partial class FlowGenerationWindow : Window
                 {
                     Header = column.Name,
                     HeaderStyle = CreateCenteredHeaderStyle(),
-                    Binding = new Binding()
+                    Binding = new Binding(nameof(FlowRuleBase.Index))
                     {
-                        RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(DataGridRow), 1),
-                        Converter = new RowNumberConverter(),
                         Mode = BindingMode.OneWay
                     },
                     Width = new DataGridLength(Math.Max(column.Width, 40)),

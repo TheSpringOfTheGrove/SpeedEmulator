@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
@@ -23,6 +25,7 @@ public sealed class BankUsersViewModel : ObservableObject
     private string editorMode = "新增";
     private string statusMessage;
     private long draftId = -1;
+    private bool isApplyingAgriculturalChapterCode;
 
     public BankUsersViewModel(
         Bank bank,
@@ -314,6 +317,7 @@ public sealed class BankUsersViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            ApplyAgriculturalChapterCodeFromPrintInstitution();
             var originalId = target.Id;
             target.BankId = Bank.Id;
             target.BankName = Bank.Name;
@@ -408,9 +412,137 @@ public sealed class BankUsersViewModel : ObservableObject
 
     private void LoadEditor(BankUser source, bool isNew)
     {
+        EditableUser.PropertyChanged -= EditableUser_PropertyChanged;
         EditableUser = source;
+        EditableUser.PropertyChanged += EditableUser_PropertyChanged;
         IsNewRecord = isNew;
         EditorMode = isNew ? "新增" : "编辑";
+        ApplyAgriculturalChapterCodeFromPrintInstitution();
+    }
+
+    private void EditableUser_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (isApplyingAgriculturalChapterCode || sender is not BankUser)
+        {
+            return;
+        }
+
+        if (IsAgriculturalPrintInstitutionChange(e.PropertyName))
+        {
+            ApplyAgriculturalChapterCodeFromPrintInstitution(overwriteExisting: true);
+        }
+    }
+
+    private void ApplyAgriculturalChapterCodeFromPrintInstitution(bool overwriteExisting = false)
+    {
+        if (!IsAgriculturalBank(Bank) || GetAgriculturalPrintInstitutionField() is not { } field)
+        {
+            return;
+        }
+
+        if (!overwriteExisting && !string.IsNullOrWhiteSpace(EditableUser.ChapterCode))
+        {
+            return;
+        }
+
+        var printInstitution = FirstNotBlank(EditableUser[TrimIndexerField(field)], EditableUser[field]);
+        var normalizedInstitution = NormalizePrintInstitution(printInstitution);
+        if (normalizedInstitution.Length < 2)
+        {
+            return;
+        }
+
+        var code = normalizedInstitution[..2] + GenerateAgriculturalChapterCodeSuffix();
+        if (string.Equals(EditableUser.ChapterCode, code, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            isApplyingAgriculturalChapterCode = true;
+            EditableUser.ChapterCode = code;
+        }
+        finally
+        {
+            isApplyingAgriculturalChapterCode = false;
+        }
+    }
+
+    private bool IsAgriculturalPrintInstitutionChange(string? propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName) || GetAgriculturalPrintInstitutionField() is not { } field)
+        {
+            return false;
+        }
+
+        var trimmedField = TrimIndexerField(field);
+        return string.Equals(propertyName, $"Item[{trimmedField}]", StringComparison.Ordinal)
+            || string.Equals(propertyName, $"Item[{field}]", StringComparison.Ordinal);
+    }
+
+    private string? GetAgriculturalPrintInstitutionField()
+    {
+        return Bank.Columns.FirstOrDefault(column =>
+            string.Equals(column.Name, "打印机构", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(column.Field))?.Field;
+    }
+
+    private static string TrimIndexerField(string field)
+    {
+        return field.Length >= 2 && field.StartsWith('[') && field.EndsWith(']')
+            ? field[1..^1]
+            : field;
+    }
+
+    private static string NormalizePrintInstitution(string? value)
+    {
+        return string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character)));
+    }
+
+    private static string FirstNotBlank(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string GenerateAgriculturalChapterCodeSuffix()
+    {
+        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const string digits = "0123456789";
+
+        var tail = new List<char>(13);
+        var first = letters[RandomNumberGenerator.GetInt32(letters.Length)];
+        for (var index = 0; index < 9; index++)
+        {
+            tail.Add(letters[RandomNumberGenerator.GetInt32(letters.Length)]);
+        }
+
+        for (var index = 0; index < 4; index++)
+        {
+            tail.Add(digits[RandomNumberGenerator.GetInt32(digits.Length)]);
+        }
+
+        for (var index = tail.Count - 1; index > 0; index--)
+        {
+            var swapIndex = RandomNumberGenerator.GetInt32(index + 1);
+            (tail[index], tail[swapIndex]) = (tail[swapIndex], tail[index]);
+        }
+
+        return first + new string(tail.ToArray());
+    }
+
+    private static bool IsAgriculturalBank(Bank bank)
+    {
+        return string.Equals(bank.Name, "农行", StringComparison.Ordinal)
+            || bank.Name.Contains("农业", StringComparison.Ordinal);
     }
 
     private void ReplaceUserInList(BankUser previous, long previousId, BankUser next)

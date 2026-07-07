@@ -267,6 +267,11 @@ public partial class FlowDetailsWindow : Window
             return;
         }
 
+        if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
+        {
+            return;
+        }
+
         if (!cell.IsFocused)
         {
             cell.Focus();

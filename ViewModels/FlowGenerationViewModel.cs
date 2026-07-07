@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
@@ -26,6 +27,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
     private string statusMessage = "准备生成流水";
     private bool isBusy;
     private int generationProgress;
+    private bool isReorderingRules;
 
     public FlowGenerationViewModel(
         Bank bank,
@@ -185,17 +187,21 @@ public sealed class FlowGenerationViewModel : ObservableObject
             Config = snapshot.Config;
             ApplyBankUserValuesToConfig();
 
-            References.Clear();
+            ClearReferenceRules();
             foreach (var item in snapshot.References)
             {
-                References.Add(item);
+                AddReferenceRule(item);
             }
 
-            ConstItems.Clear();
+            ClearConstRules();
             foreach (var item in snapshot.ConstItems)
             {
-                ConstItems.Add(item);
+                AddConstRule(item);
             }
+
+            ApplyCheckedFirstOrder(References);
+            ApplyCheckedFirstOrder(ConstItems);
+            NormalizeRuleIndexes();
 
             SelectedReference = References.FirstOrDefault();
             SelectedConst = ConstItems.FirstOrDefault();
@@ -204,8 +210,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            References.Clear();
-            ConstItems.Clear();
+            ClearReferenceRules();
+            ClearConstRules();
             SelectedReference = null;
             SelectedConst = null;
             SelectedMonthDetail = null;
@@ -233,15 +239,17 @@ public sealed class FlowGenerationViewModel : ObservableObject
         if (SelectedTabIndex == 1)
         {
             var item = GenerateConstRule.CreateDefault(Bank.Id);
-            ConstItems.Add(item);
+            AddConstRule(item);
             SelectedConst = item;
+            NormalizeRuleIndexes();
             StatusMessage = "已新增固定日期增加项目";
             return;
         }
 
         var reference = GenerateReferenceRule.CreateDefault(Bank.Id);
-        References.Add(reference);
+        AddReferenceRule(reference);
         SelectedReference = reference;
+        NormalizeRuleIndexes();
         StatusMessage = "已新增参照明细";
     }
 
@@ -255,8 +263,9 @@ public sealed class FlowGenerationViewModel : ObservableObject
                 return;
             }
 
-            ConstItems.Remove(SelectedConst);
+            RemoveConstRule(SelectedConst);
             SelectedConst = ConstItems.FirstOrDefault();
+            NormalizeRuleIndexes();
             StatusMessage = "已删除固定日期增加项目";
             return;
         }
@@ -267,8 +276,9 @@ public sealed class FlowGenerationViewModel : ObservableObject
             return;
         }
 
-        References.Remove(SelectedReference);
+        RemoveReferenceRule(SelectedReference);
         SelectedReference = References.FirstOrDefault();
+        NormalizeRuleIndexes();
         StatusMessage = "已删除参照明细";
     }
 
@@ -369,14 +379,16 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var imported = excelService.ImportReferences(path, Bank.ReferenceColumns, Bank.Id);
         if (replaceCurrentRows)
         {
-            References.Clear();
+            ClearReferenceRules();
         }
 
         foreach (var item in imported)
         {
-            References.Add(item);
+            AddReferenceRule(item);
         }
 
+        ApplyCheckedFirstOrder(References);
+        NormalizeRuleIndexes();
         SelectedReference = imported.FirstOrDefault() ?? References.FirstOrDefault();
         return imported.Count;
     }
@@ -386,20 +398,23 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var imported = excelService.ImportConstItems(path, Bank.ConstColumns, Bank.Id);
         if (replaceCurrentRows)
         {
-            ConstItems.Clear();
+            ClearConstRules();
         }
 
         foreach (var item in imported)
         {
-            ConstItems.Add(item);
+            AddConstRule(item);
         }
 
+        ApplyCheckedFirstOrder(ConstItems);
+        NormalizeRuleIndexes();
         SelectedConst = imported.FirstOrDefault() ?? ConstItems.FirstOrDefault();
         return imported.Count;
     }
 
     private async Task SaveCurrentSnapshotAsync()
     {
+        NormalizeRuleIndexes();
         var snapshot = new FlowGenerationSnapshot
         {
             Config = Config.Clone(),
@@ -409,6 +424,144 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         await repository.SaveAsync(Bank.Id, BankUser?.Id, snapshot);
         await SaveBankUserValuesAsync();
+    }
+
+    private void AddReferenceRule(GenerateReferenceRule item)
+    {
+        item.PropertyChanged -= Rule_PropertyChanged;
+        item.PropertyChanged += Rule_PropertyChanged;
+        References.Add(item);
+    }
+
+    private void AddConstRule(GenerateConstRule item)
+    {
+        item.PropertyChanged -= Rule_PropertyChanged;
+        item.PropertyChanged += Rule_PropertyChanged;
+        ConstItems.Add(item);
+    }
+
+    private void RemoveReferenceRule(GenerateReferenceRule item)
+    {
+        item.PropertyChanged -= Rule_PropertyChanged;
+        References.Remove(item);
+    }
+
+    private void RemoveConstRule(GenerateConstRule item)
+    {
+        item.PropertyChanged -= Rule_PropertyChanged;
+        ConstItems.Remove(item);
+    }
+
+    private void ClearReferenceRules()
+    {
+        foreach (var item in References)
+        {
+            item.PropertyChanged -= Rule_PropertyChanged;
+        }
+
+        References.Clear();
+    }
+
+    private void ClearConstRules()
+    {
+        foreach (var item in ConstItems)
+        {
+            item.PropertyChanged -= Rule_PropertyChanged;
+        }
+
+        ConstItems.Clear();
+    }
+
+    private void Rule_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (isReorderingRules || e.PropertyName != nameof(FlowRuleBase.IsCheck))
+        {
+            return;
+        }
+
+        switch (sender)
+        {
+            case GenerateReferenceRule reference:
+                MoveRuleAfterCheckChange(References, reference);
+                SelectedReference = reference;
+                break;
+            case GenerateConstRule constRule:
+                MoveRuleAfterCheckChange(ConstItems, constRule);
+                SelectedConst = constRule;
+                break;
+        }
+    }
+
+    private void MoveRuleAfterCheckChange<T>(ObservableCollection<T> rules, T changedRule)
+        where T : FlowRuleBase
+    {
+        var oldIndex = rules.IndexOf(changedRule);
+        if (oldIndex < 0)
+        {
+            return;
+        }
+
+        var newIndex = changedRule.IsCheck
+            ? 0
+            : rules.Where(item => !ReferenceEquals(item, changedRule)).Count(item => item.IsCheck);
+
+        if (oldIndex == newIndex)
+        {
+            return;
+        }
+
+        try
+        {
+            isReorderingRules = true;
+            rules.Move(oldIndex, newIndex);
+        }
+        finally
+        {
+            isReorderingRules = false;
+        }
+
+        NormalizeRuleIndexes();
+    }
+
+    private void ApplyCheckedFirstOrder<T>(ObservableCollection<T> rules)
+        where T : FlowRuleBase
+    {
+        var orderedRules = rules
+            .Select((rule, index) => new { Rule = rule, Index = index })
+            .OrderByDescending(item => item.Rule.IsCheck)
+            .ThenBy(item => item.Index)
+            .Select(item => item.Rule)
+            .ToList();
+
+        try
+        {
+            isReorderingRules = true;
+            for (var targetIndex = 0; targetIndex < orderedRules.Count; targetIndex++)
+            {
+                var currentIndex = rules.IndexOf(orderedRules[targetIndex]);
+                if (currentIndex >= 0 && currentIndex != targetIndex)
+                {
+                    rules.Move(currentIndex, targetIndex);
+                }
+            }
+        }
+        finally
+        {
+            isReorderingRules = false;
+        }
+    }
+
+    private void NormalizeRuleIndexes()
+    {
+        for (var index = 0; index < References.Count; index++)
+        {
+            References[index].Index = index + 1;
+        }
+
+        for (var index = 0; index < ConstItems.Count; index++)
+        {
+            ConstItems[index].Index = index + 1;
+        }
     }
 
     private void Compute()
