@@ -8,7 +8,7 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true
+        WriteIndented = false
     };
 
     private readonly object syncRoot = new();
@@ -117,15 +117,12 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
             Directory.CreateDirectory(directory);
         }
 
-        var data = recordsByUser.ToDictionary(
-            item => item.Key,
-            item => item.Value.Select(record =>
-            {
-                var clone = record.Clone();
-                RemoveInternalFields(clone);
-                return clone;
-            }).ToList());
-        File.WriteAllText(storagePath, JsonSerializer.Serialize(data, JsonOptions));
+        foreach (var record in recordsByUser.Values.SelectMany(item => item))
+        {
+            RemoveInternalFields(record);
+        }
+
+        File.WriteAllText(storagePath, JsonSerializer.Serialize(recordsByUser, JsonOptions));
     }
 
     private static void RemoveInternalFields(FlowRecord record)
