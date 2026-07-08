@@ -3787,6 +3787,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         text = CompactAgriculturalPaperBranchName(text);
+        if (text.All(char.IsDigit))
+        {
+            return text;
+        }
+
         return LimitSingleLinePrintText(text, 4);
     }
 
