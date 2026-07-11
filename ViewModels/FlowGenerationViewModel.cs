@@ -11,6 +11,8 @@ namespace SpeedEmulator.ViewModels;
 public sealed class FlowGenerationViewModel : ObservableObject
 {
     private const double FinalBalanceTolerance = 1000.009d;
+    private const string SystemRowKindField = "__GeneratedSystemRowKind";
+    private const string InterestRowKind = "Interest";
 
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
@@ -572,10 +574,10 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var averageOutMoney = totalOutMoney / monthCount;
 
         Config.AllOutMoney = RoundMoney(totalOutMoney);
-        Config.MinInMoneyMonth1 = RoundMoney(averageInMoney * 0.45);
-        Config.MaxInMoneyMonth1 = RoundMoney(averageInMoney * 1.8);
-        Config.MinOutMoneyMonth1 = RoundMoney(averageOutMoney * 0.45);
-        Config.MaxOutMoneyMonth1 = RoundMoney(averageOutMoney * 1.8);
+        Config.MinInMoneyMonth1 = RoundMoney(averageInMoney);
+        Config.MaxInMoneyMonth1 = Config.MinInMoneyMonth1;
+        Config.MinOutMoneyMonth1 = RoundMoney(averageOutMoney);
+        Config.MaxOutMoneyMonth1 = Config.MinOutMoneyMonth1;
         Config.MinInMoneyMonth2 = Config.MinInMoneyMonth1;
         Config.MaxInMoneyMonth2 = Config.MaxInMoneyMonth1;
         Config.MinOutMoneyMonth2 = Config.MinOutMoneyMonth1;
@@ -852,20 +854,13 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         foreach (var row in rows)
         {
-            if ((row.TradeMoney ?? 0) <= 0.009d)
+            if ((row.TradeMoney ?? 0) < -0.009d)
             {
                 reason = $"结息金额不对，出现 {row.TradeMoney.GetValueOrDefault():N2}";
                 return false;
             }
 
             if (string.IsNullOrWhiteSpace(row.Account)
-                || string.IsNullOrWhiteSpace(row.ProductBrief)
-                || string.IsNullOrWhiteSpace(row.ProductName)
-                || string.IsNullOrWhiteSpace(row.CashCheck)
-                || string.IsNullOrWhiteSpace(row.Usage)
-                || string.IsNullOrWhiteSpace(row.TradeExplain)
-                || string.IsNullOrWhiteSpace(row.Remark)
-                || string.IsNullOrWhiteSpace(row.SerialNum)
                 || !row.Balance.HasValue)
             {
                 reason = "结息流水字段不完整";
@@ -951,6 +946,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     private static bool IsSettlementInterestRecord(FlowRecord record, string interestBrief)
     {
+        if (record.ExtraFields.TryGetValue(SystemRowKindField, out var rowKind))
+        {
+            return rowKind == InterestRowKind;
+        }
+
         var text = string.Join('|',
             record.ProductBrief,
             record.ProductName,
