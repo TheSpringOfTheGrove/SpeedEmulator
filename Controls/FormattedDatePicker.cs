@@ -57,18 +57,10 @@ public sealed class FormattedDatePicker : UserControl
         };
         textBox.LostKeyboardFocus += (_, _) => CommitText();
         textBox.KeyDown += TextBox_KeyDown;
+        textBox.PreviewMouseWheel += TextBox_PreviewMouseWheel;
 
-        var button = new Button
-        {
-            Content = CreateCalendarIcon(),
-            Width = 22,
-            Padding = new Thickness(0),
-            BorderThickness = new Thickness(1),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(160, 168, 172)),
-            Background = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
-            ToolTip = "选择日期"
-        };
-        button.Click += (_, _) => TogglePopup();
+        var spinner = CreateSpinButtons();
+        var dropDownButton = CreateDropDownButton();
 
         calendar = new System.Windows.Controls.Calendar();
         calendar.SelectedDatesChanged += Calendar_SelectedDatesChanged;
@@ -110,9 +102,12 @@ public sealed class FormattedDatePicker : UserControl
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition { Width = GridLength.Auto });
         grid.Children.Add(textBox);
-        Grid.SetColumn(button, 1);
-        grid.Children.Add(button);
+        Grid.SetColumn(spinner, 1);
+        grid.Children.Add(spinner);
+        Grid.SetColumn(dropDownButton, 2);
+        grid.Children.Add(dropDownButton);
 
         var host = new Grid();
         border.Child = grid;
@@ -120,7 +115,11 @@ public sealed class FormattedDatePicker : UserControl
         host.Children.Add(popup);
         Content = host;
 
-        Loaded += (_, _) => RefreshText();
+        Loaded += (_, _) =>
+        {
+            EnsureDefaultDateTime();
+            RefreshText();
+        };
         Height = 28;
     }
 
@@ -166,6 +165,22 @@ public sealed class FormattedDatePicker : UserControl
             TogglePopup();
             e.Handled = true;
         }
+        else if (e.Key == Key.Up)
+        {
+            StepSelectedPart(1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            StepSelectedPart(-1);
+            e.Handled = true;
+        }
+    }
+
+    private void TextBox_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        StepSelectedPart(e.Delta > 0 ? 1 : -1);
+        e.Handled = true;
     }
 
     private void Calendar_SelectedDatesChanged(object? sender, SelectionChangedEventArgs e)
@@ -175,7 +190,7 @@ public sealed class FormattedDatePicker : UserControl
             return;
         }
 
-        var time = SelectedDate?.TimeOfDay ?? TimeSpan.Zero;
+        var time = SelectedDate?.TimeOfDay ?? DateTime.Now.TimeOfDay;
         SelectedDate = selectedDate.Date + time;
         SyncTimeBoxes();
         RefreshText();
@@ -184,6 +199,7 @@ public sealed class FormattedDatePicker : UserControl
     private void TogglePopup()
     {
         CommitText();
+        EnsureDefaultDateTime();
 
         isSyncing = true;
         calendar.SelectedDate = SelectedDate?.Date;
@@ -198,13 +214,14 @@ public sealed class FormattedDatePicker : UserControl
     {
         if (string.IsNullOrWhiteSpace(textBox.Text))
         {
+            SelectedDate = TrimToSecond(DateTime.Now);
             RefreshText();
             return;
         }
 
         if (TryParseDateTime(textBox.Text, out var parsed))
         {
-            SelectedDate = parsed;
+            SelectedDate = TrimToSecond(parsed);
         }
 
         RefreshText();
@@ -214,6 +231,123 @@ public sealed class FormattedDatePicker : UserControl
     {
         textBox.Text = SelectedDate?.ToString(DisplayFormat, CultureInfo.GetCultureInfo("zh-CN")) ?? string.Empty;
         SyncTimeBoxes();
+    }
+
+    private void EnsureDefaultDateTime()
+    {
+        if (SelectedDate is not null)
+        {
+            return;
+        }
+
+        SelectedDate = TrimToSecond(DateTime.Now);
+        BindingOperations.GetBindingExpression(this, SelectedDateProperty)?.UpdateSource();
+    }
+
+    private Grid CreateSpinButtons()
+    {
+        var panel = new Grid
+        {
+            Width = 17,
+            Background = new SolidColorBrush(Color.FromRgb(238, 238, 238))
+        };
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        var upButton = CreateStepButton(true);
+        upButton.Click += (_, _) => StepSelectedPart(1);
+        panel.Children.Add(upButton);
+
+        var downButton = CreateStepButton(false);
+        downButton.Click += (_, _) => StepSelectedPart(-1);
+        Grid.SetRow(downButton, 1);
+        panel.Children.Add(downButton);
+
+        return panel;
+    }
+
+    private Button CreateDropDownButton()
+    {
+        var button = new Button
+        {
+            Content = CreateArrowIcon(false),
+            Width = 18,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(1, 0, 0, 0),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(160, 168, 172)),
+            Background = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+            ToolTip = "选择日期"
+        };
+        button.Click += (_, _) => TogglePopup();
+        return button;
+    }
+
+    private static RepeatButton CreateStepButton(bool isUp)
+    {
+        return new RepeatButton
+        {
+            Content = CreateArrowIcon(isUp),
+            Delay = 350,
+            Interval = 80,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(1, isUp ? 0 : 1, 0, isUp ? 0.5 : 0),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(160, 168, 172)),
+            Background = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+            Focusable = false,
+            IsTabStop = false
+        };
+    }
+
+    private void StepSelectedPart(int direction)
+    {
+        var caret = Math.Clamp(
+            textBox.SelectionLength > 0 ? textBox.SelectionStart : textBox.CaretIndex,
+            0,
+            (textBox.Text ?? string.Empty).Length);
+        CommitText();
+        var current = SelectedDate ?? TrimToSecond(DateTime.Now);
+        var next = GetStepPartFromCaret(caret) switch
+        {
+            0 => current.AddYears(direction),
+            1 => current.AddMonths(direction),
+            2 => current.AddDays(direction),
+            _ => current.AddDays(direction)
+        };
+
+        SelectedDate = TrimToSecond(next);
+        RefreshText();
+        BindingOperations.GetBindingExpression(this, SelectedDateProperty)?.UpdateSource();
+        textBox.Focus();
+    }
+
+    private int GetStepPartFromCaret(int caret)
+    {
+        var text = textBox.Text ?? string.Empty;
+        caret = Math.Clamp(caret, 0, text.Length);
+        var groupIndex = -1;
+
+        for (var index = 0; index < text.Length;)
+        {
+            if (!char.IsDigit(text[index]))
+            {
+                index++;
+                continue;
+            }
+
+            var start = index;
+            while (index < text.Length && char.IsDigit(text[index]))
+            {
+                index++;
+            }
+
+            groupIndex++;
+            if (caret >= start && caret <= index)
+            {
+                return groupIndex;
+            }
+        }
+
+        return 2;
     }
 
     private UIElement CreateTimeEditor()
@@ -340,7 +474,7 @@ public sealed class FormattedDatePicker : UserControl
             return;
         }
 
-        var value = SelectedDate ?? DateTime.Today;
+        var value = SelectedDate ?? DateTime.Now;
         hourBox.Text = value.Hour.ToString("00", CultureInfo.InvariantCulture);
         minuteBox.Text = value.Minute.ToString("00", CultureInfo.InvariantCulture);
         secondBox.Text = value.Second.ToString("00", CultureInfo.InvariantCulture);
@@ -348,12 +482,12 @@ public sealed class FormattedDatePicker : UserControl
 
     private void CommitTimeBoxes()
     {
-        var current = SelectedDate ?? DateTime.Today;
+        var current = SelectedDate ?? DateTime.Now;
         var hour = Clamp(ParsePart(hourBox.Text), 0, 23);
         var minute = Clamp(ParsePart(minuteBox.Text), 0, 59);
         var second = Clamp(ParsePart(secondBox.Text), 0, 59);
 
-        SelectedDate = current.Date.Add(new TimeSpan(hour, minute, second));
+        SelectedDate = TrimToSecond(current.Date.Add(new TimeSpan(hour, minute, second)));
         RefreshText();
     }
 
@@ -388,6 +522,36 @@ public sealed class FormattedDatePicker : UserControl
         var culture = CultureInfo.GetCultureInfo("zh-CN");
         return DateTime.TryParseExact(value, ParseFormats, culture, DateTimeStyles.None, out parsed)
             || DateTime.TryParse(value, culture, DateTimeStyles.None, out parsed);
+    }
+
+    private static DateTime TrimToSecond(DateTime value)
+    {
+        return new DateTime(
+            value.Year,
+            value.Month,
+            value.Day,
+            value.Hour,
+            value.Minute,
+            value.Second,
+            value.Kind);
+    }
+
+    private static UIElement CreateArrowIcon(bool isUp)
+    {
+        var points = isUp
+            ? new PointCollection([new Point(4, 2), new Point(8, 7), new Point(0, 7)])
+            : new PointCollection([new Point(0, 2), new Point(8, 2), new Point(4, 7)]);
+
+        return new Polygon
+        {
+            Points = points,
+            Fill = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
+            Width = 8,
+            Height = 9,
+            Stretch = Stretch.Fill,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
     }
 
     private static UIElement CreateCalendarIcon()

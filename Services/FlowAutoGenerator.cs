@@ -226,6 +226,7 @@ public sealed class FlowAutoGenerator
         }
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
+        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -298,6 +299,7 @@ public sealed class FlowAutoGenerator
 
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
+        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -347,6 +349,7 @@ public sealed class FlowAutoGenerator
         EnforceConfiguredTotals(records, request);
 
         PruneZeroAmountRecords(records);
+        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -415,6 +418,7 @@ public sealed class FlowAutoGenerator
         EnforceConfiguredTotals(records, request);
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
+        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -1471,6 +1475,66 @@ public sealed class FlowAutoGenerator
         }
 
         return Math.Abs(CalculateNetAmount(records) - beforeNet) > 0.009d;
+    }
+
+    private static void RestoreFinalBalanceAfterDistinctAmounts(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        double openingBalance)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var targetBalance = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            ApplyBalances(records, openingBalance);
+            var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
+            var diff = RoundMoney(finalBalance - targetBalance);
+            if (Math.Abs(diff) <= 0.009d)
+            {
+                if (!EnsureDistinctSignedAmounts(records))
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            var beforeNet = CalculateNetAmount(records);
+            if (diff > 0)
+            {
+                IncreaseSignedRecordsWithinBounds(records, isIncome: false, diff);
+                var moved = RoundMoney(beforeNet - CalculateNetAmount(records));
+                var remaining = RoundMoney(diff - moved);
+                if (remaining > 0.009d)
+                {
+                    DecreaseSignedRecordsWithinBounds(records, isIncome: true, remaining, allowDropOptional: true);
+                }
+            }
+            else
+            {
+                var need = Math.Abs(diff);
+                DecreaseSignedRecordsWithinBounds(records, isIncome: false, need, allowDropOptional: true);
+                var moved = RoundMoney(CalculateNetAmount(records) - beforeNet);
+                var remaining = RoundMoney(need - moved);
+                if (remaining > 0.009d)
+                {
+                    IncreaseSignedRecordsWithinBounds(
+                        records,
+                        isIncome: true,
+                        Math.Min(remaining, GetAvailableIncomeRoom(records, request)));
+                }
+            }
+
+            PruneZeroAmountRecords(records);
+            EnsureDistinctSignedAmounts(records);
+        }
+
+        PruneZeroAmountRecords(records);
+        ApplyBalances(records, openingBalance);
     }
 
     private static bool ReducePositiveFinalBalanceSafely(
@@ -3623,6 +3687,11 @@ public sealed class FlowAutoGenerator
         var ratio = CreateAmountBucketRatio(random);
         var raw = bounds.Min + ((max - bounds.Min) * ratio);
         amount = ClampAmountToBounds(raw, new AmountBounds(bounds.Min, max, bounds.Unit));
+        if (ShouldPreferFractionalAmount(bounds) && IsWholeAmount(amount))
+        {
+            amount = PreferNonWholeAmount(amount, new AmountBounds(bounds.Min, max, bounds.Unit), random);
+        }
+
         return amount >= bounds.Min - 0.009d && amount <= max + 0.009d;
     }
 
@@ -3679,6 +3748,31 @@ public sealed class FlowAutoGenerator
         return bounds.Min >= 1000d && bounds.Max >= bounds.Min * 4d;
     }
 
+    private static double PreferNonWholeAmount(double amount, AmountBounds bounds, Random random)
+    {
+        if (!ShouldPreferFractionalAmount(bounds) || !IsWholeAmount(amount))
+        {
+            return amount;
+        }
+
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var lower = ClampAmountToBounds(amount - unit, bounds);
+        var upper = ClampAmountToBounds(amount + unit, bounds);
+        var lowerValid = !IsWholeAmount(lower) && lower >= bounds.Min - 0.009d;
+        var upperValid = !IsWholeAmount(upper) && upper <= bounds.Max + 0.009d;
+        if (lowerValid && upperValid)
+        {
+            return random.Next(0, 2) == 0 ? lower : upper;
+        }
+
+        if (upperValid)
+        {
+            return upper;
+        }
+
+        return lowerValid ? lower : amount;
+    }
+
     private static double MakeAmountDistinctWithinBounds(
         double amount,
         AmountBounds bounds,
@@ -3698,38 +3792,21 @@ public sealed class FlowAutoGenerator
             .Where(item => isIncome ? item.TradeMoney > 0.009d : item.TradeMoney < -0.009d)
             .Select(item => RoundAmountToUnit(Math.Abs(item.TradeMoney ?? 0), unit))
             .ToHashSet();
-        if (!usedAmounts.Contains(amount) || usedAmounts.Count >= totalSteps)
+        var preferFractional = ShouldPreferFractionalAmount(bounds) && IsWholeAmount(amount);
+        if ((!usedAmounts.Contains(amount) && !preferFractional) || usedAmounts.Count >= totalSteps)
         {
             return amount;
         }
 
-        var maxRandomAttempts = (int)Math.Min(32d, totalSteps);
-        for (var attempt = 0; attempt < maxRandomAttempts; attempt++)
+        if (TryPickDistinctAmount(
+                amount,
+                bounds,
+                usedAmounts,
+                preferredDelta: 0,
+                preferFractional,
+                out var distinctAmount))
         {
-            var offset = totalSteps <= int.MaxValue
-                ? random.Next(0, (int)totalSteps)
-                : (int)Math.Floor(random.NextDouble() * totalSteps);
-            var candidate = ClampAmountToBounds(bounds.Min + (offset * unit), bounds);
-            if (!usedAmounts.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        var maxNearestSteps = (int)Math.Min(4096d, totalSteps);
-        for (var step = 1; step < maxNearestSteps; step++)
-        {
-            var lower = ClampAmountToBounds(amount - (step * unit), bounds);
-            if (!usedAmounts.Contains(lower))
-            {
-                return lower;
-            }
-
-            var upper = ClampAmountToBounds(amount + (step * unit), bounds);
-            if (!usedAmounts.Contains(upper))
-            {
-                return upper;
-            }
+            return distinctAmount;
         }
 
         return amount;
@@ -5255,11 +5332,11 @@ public sealed class FlowAutoGenerator
         var currentTotal = RoundMoney(activeIndexes.Sum(index => amounts[index]));
         if (currentTotal > boundedTarget + 0.009d)
         {
-            MoveAmountsTowardTarget(amounts, mins, maxs, units, activeIndexes, boundedTarget, decrease: true);
+            MoveAmountsTowardTarget(signedRecords, amounts, mins, maxs, units, activeIndexes, boundedTarget, decrease: true);
         }
         else if (currentTotal < boundedTarget - 0.009d)
         {
-            MoveAmountsTowardTarget(amounts, mins, maxs, units, activeIndexes, boundedTarget, decrease: false);
+            MoveAmountsTowardTarget(signedRecords, amounts, mins, maxs, units, activeIndexes, boundedTarget, decrease: false);
         }
 
         AdjustRoundedAmountsToTarget(signedRecords, amounts, boundedTarget, mins, maxs, activeIndexes);
@@ -5374,6 +5451,7 @@ public sealed class FlowAutoGenerator
     }
 
     private static void MoveAmountsTowardTarget(
+        IReadOnlyList<FlowRecord> records,
         double[] amounts,
         IReadOnlyList<double> mins,
         IReadOnlyList<double> maxs,
@@ -5397,7 +5475,8 @@ public sealed class FlowAutoGenerator
                 .Where(index => decrease
                     ? amounts[index] > mins[index] + 0.009d
                     : amounts[index] < maxs[index] - 0.009d)
-                .OrderByDescending(index => decrease
+                .OrderBy(index => IsRequiredGeneratedRecord(records[index]) ? 1 : 0)
+                .ThenByDescending(index => decrease
                     ? RoundMoney(amounts[index] - mins[index])
                     : RoundMoney(maxs[index] - amounts[index]))
                 .ToList();
@@ -5479,14 +5558,13 @@ public sealed class FlowAutoGenerator
 
     private static bool EnsureDistinctSignedAmounts(List<FlowRecord> records, Random? random = null)
     {
-        random ??= Random.Shared;
         var changed = false;
-        changed = EnsureDistinctSignedAmounts(records, isIncome: true, random) || changed;
-        changed = EnsureDistinctSignedAmounts(records, isIncome: false, random) || changed;
+        changed = EnsureDistinctSignedAmounts(records, isIncome: true) || changed;
+        changed = EnsureDistinctSignedAmounts(records, isIncome: false) || changed;
         return changed;
     }
 
-    private static bool EnsureDistinctSignedAmounts(List<FlowRecord> records, bool isIncome, Random random)
+    private static bool EnsureDistinctSignedAmounts(List<FlowRecord> records, bool isIncome)
     {
         var signedRecords = records
             .Where(item => isIncome ? item.TradeMoney > 0.009d : item.TradeMoney < -0.009d)
@@ -5500,6 +5578,7 @@ public sealed class FlowAutoGenerator
 
         var sign = isIncome ? 1d : -1d;
         var usedAmounts = new HashSet<double>();
+        var netDelta = 0d;
         var changed = false;
         foreach (var record in signedRecords)
         {
@@ -5509,8 +5588,11 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            if (usedAmounts.Add(amount))
+            var bounds = GetRecordAmountBounds(record);
+            var preferFractional = ShouldPreferFractionalAmount(bounds) && IsWholeAmount(amount);
+            if (!usedAmounts.Contains(amount) && !preferFractional)
             {
+                usedAmounts.Add(amount);
                 continue;
             }
 
@@ -5519,12 +5601,22 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            var bounds = GetRecordAmountBounds(record);
-            if (TryPickDistinctAmount(amount, bounds, usedAmounts, random, out var distinctAmount))
+            if (TryPickDistinctAmount(
+                    amount,
+                    bounds,
+                    usedAmounts,
+                    RoundMoney(-netDelta),
+                    preferFractional,
+                    out var distinctAmount))
             {
                 ApplySignedAmount(record, sign, distinctAmount);
                 usedAmounts.Add(distinctAmount);
+                netDelta = RoundMoney(netDelta + distinctAmount - amount);
                 changed = true;
+            }
+            else if (!usedAmounts.Contains(amount))
+            {
+                usedAmounts.Add(amount);
             }
         }
 
@@ -5535,7 +5627,8 @@ public sealed class FlowAutoGenerator
         double amount,
         AmountBounds bounds,
         ISet<double> usedAmounts,
-        Random random,
+        double preferredDelta,
+        bool preferFractional,
         out double distinctAmount)
     {
         distinctAmount = amount;
@@ -5546,53 +5639,99 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var maxRandomAttempts = (int)Math.Min(24d, totalSteps);
-        for (var attempt = 0; attempt < maxRandomAttempts; attempt++)
+        double? bestAmount = null;
+        var bestScore = double.MaxValue;
+        var bestDistance = double.MaxValue;
+
+        void Consider(double candidate, bool allowWholeAmount)
         {
-            var offset = totalSteps <= int.MaxValue
-                ? random.Next(0, (int)totalSteps)
-                : (int)Math.Floor(random.NextDouble() * totalSteps);
-            var candidate = ClampAmountToBounds(bounds.Min + (offset * unit), bounds);
-            if (!usedAmounts.Contains(candidate))
+            candidate = ClampAmountToBounds(candidate, bounds);
+            if (candidate <= 0.009d || usedAmounts.Contains(candidate))
             {
-                distinctAmount = candidate;
-                return true;
+                return;
+            }
+
+            if (!allowWholeAmount && IsWholeAmount(candidate))
+            {
+                return;
+            }
+
+            var delta = RoundMoney(candidate - amount);
+            var score = Math.Abs(RoundMoney(delta - preferredDelta));
+            var distance = Math.Abs(delta);
+            if (score < bestScore - 0.0000001d
+                || (Math.Abs(score - bestScore) <= 0.0000001d && distance < bestDistance - 0.0000001d))
+            {
+                bestAmount = candidate;
+                bestScore = score;
+                bestDistance = distance;
             }
         }
 
-        var maxNearestSteps = (int)Math.Min(4096d, totalSteps);
-        for (var step = 1; step < maxNearestSteps; step++)
+        var preferNonWhole = preferFractional && HasNonWholeAmountCandidate(bounds, usedAmounts);
+        for (var pass = 0; pass < (preferNonWhole ? 2 : 1) && !bestAmount.HasValue; pass++)
         {
-            var lower = ClampAmountToBounds(amount - (step * unit), bounds);
-            var upper = ClampAmountToBounds(amount + (step * unit), bounds);
-            var lowerFirst = random.Next(0, 2) == 0;
-            if (lowerFirst)
+            var allowWholeAmount = pass > 0 || !preferNonWhole;
+            var maxNearestSteps = (int)Math.Min(4096d, totalSteps);
+            for (var step = 1; step < maxNearestSteps; step++)
             {
-                if (!usedAmounts.Contains(lower))
+                Consider(amount - (step * unit), allowWholeAmount);
+                Consider(amount + (step * unit), allowWholeAmount);
+                if (bestAmount.HasValue && bestScore <= 0.009d)
                 {
-                    distinctAmount = lower;
-                    return true;
-                }
-
-                if (!usedAmounts.Contains(upper))
-                {
-                    distinctAmount = upper;
-                    return true;
+                    break;
                 }
             }
-            else
-            {
-                if (!usedAmounts.Contains(upper))
-                {
-                    distinctAmount = upper;
-                    return true;
-                }
 
-                if (!usedAmounts.Contains(lower))
+            if (!bestAmount.HasValue)
+            {
+                var maxScanSteps = (int)Math.Min(4096d, totalSteps);
+                for (var offset = 0; offset < maxScanSteps; offset++)
                 {
-                    distinctAmount = lower;
-                    return true;
+                    Consider(bounds.Min + (offset * unit), allowWholeAmount);
+                    if (bestAmount.HasValue && bestScore <= 0.009d)
+                    {
+                        break;
+                    }
                 }
+            }
+        }
+
+        if (bestAmount.HasValue)
+        {
+            distinctAmount = bestAmount.Value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ShouldPreferFractionalAmount(AmountBounds bounds)
+    {
+        return bounds.Unit < 1d - 0.0000001d
+            && bounds.Max >= bounds.Min + bounds.Unit - 0.0000001d;
+    }
+
+    private static bool IsWholeAmount(double amount)
+    {
+        return Math.Abs(RoundMoney(amount) - Math.Round(amount, 0, MidpointRounding.AwayFromZero)) <= 0.009d;
+    }
+
+    private static bool HasNonWholeAmountCandidate(AmountBounds bounds, ISet<double> usedAmounts)
+    {
+        if (!ShouldPreferFractionalAmount(bounds))
+        {
+            return false;
+        }
+
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var totalSteps = (int)Math.Min(4096d, Math.Floor((bounds.Max - bounds.Min + 0.0000001d) / unit) + 1d);
+        for (var offset = 0; offset < totalSteps; offset++)
+        {
+            var candidate = ClampAmountToBounds(bounds.Min + (offset * unit), bounds);
+            if (!IsWholeAmount(candidate) && !usedAmounts.Contains(candidate))
+            {
+                return true;
             }
         }
 
@@ -5614,7 +5753,8 @@ public sealed class FlowAutoGenerator
         }
 
         var orderedIndexes = activeIndexes
-            .OrderBy(index => GetRecordAmountUnit(records[index]))
+            .OrderBy(index => IsRequiredGeneratedRecord(records[index]) ? 1 : 0)
+            .ThenBy(index => GetRecordAmountUnit(records[index]))
             .ThenByDescending(index => amounts[index])
             .ToList();
 
@@ -6141,8 +6281,8 @@ public sealed class FlowAutoGenerator
         var remaining = RoundMoney(amount);
         var sign = isIncome ? 1d : -1d;
         foreach (var record in GetSignedRecords(records, isIncome)
-                     .OrderBy(item => GetRecordAmountUnit(item))
-                     .ThenByDescending(item => IsRequiredGeneratedRecord(item))
+                     .OrderBy(item => IsRequiredGeneratedRecord(item) ? 1 : 0)
+                     .ThenBy(item => GetRecordAmountUnit(item))
                      .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue))
         {
             if (remaining <= 0.009d)

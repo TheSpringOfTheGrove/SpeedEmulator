@@ -352,8 +352,8 @@ public partial class FlowDetailsWindow : Window
             HeaderStyle = CreateLeftAlignedHeaderStyle(),
             CellTemplate = new DataTemplate { VisualTree = CreateTextFactory(column.Field!) },
             CellEditingTemplate = new DataTemplate { VisualTree = CreatePickerFactory(column.Field!) },
-            Width = new DataGridLength(Math.Max(column.Width, 150)),
-            MinWidth = 140,
+            Width = new DataGridLength(Math.Max(column.Width, 180)),
+            MinWidth = 170,
             IsReadOnly = false
         };
     }

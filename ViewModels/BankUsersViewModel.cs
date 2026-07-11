@@ -308,9 +308,12 @@ public sealed class BankUsersViewModel : ObservableObject
         }
 
         var target = EditableUser;
-        if (string.IsNullOrWhiteSpace(target.AccountName) || string.IsNullOrWhiteSpace(target.AccountNo))
+        NormalizeEditableUserBeforeSave(target);
+        if (string.IsNullOrWhiteSpace(target.AccountName)
+            || (string.IsNullOrWhiteSpace(target.AccountNo) && string.IsNullOrWhiteSpace(target.CardNo)))
         {
-            StatusMessage = "请至少填写户名和账号/卡号。";
+            StatusMessage = "请至少填写户名/姓名和账号/卡号。";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -337,6 +340,153 @@ public sealed class BankUsersViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private void NormalizeEditableUserBeforeSave(BankUser user)
+    {
+        if (string.IsNullOrWhiteSpace(user.AccountName))
+        {
+            user.AccountName = FindUserColumnValue(user, IsAccountNameColumn);
+        }
+
+        if (string.IsNullOrWhiteSpace(user.CardNo))
+        {
+            user.CardNo = FindUserColumnValue(user, IsCardNumberColumn);
+        }
+
+        if (string.IsNullOrWhiteSpace(user.AccountNo))
+        {
+            user.AccountNo = FindUserColumnValue(user, IsAccountNumberColumn);
+        }
+
+        if (string.IsNullOrWhiteSpace(user.AccountNo)
+            && !HasDedicatedAccountNumberColumn()
+            && !string.IsNullOrWhiteSpace(user.CardNo))
+        {
+            user.AccountNo = user.CardNo.Trim();
+        }
+
+        if (IsAgriculturalBank(Bank)
+            && string.IsNullOrWhiteSpace(user.CardNo)
+            && !string.IsNullOrWhiteSpace(user.AccountNo)
+            && !HasDedicatedAccountNumberColumn())
+        {
+            user.CardNo = user.AccountNo.Trim();
+        }
+    }
+
+    private bool HasDedicatedAccountNumberColumn()
+    {
+        return Bank.Columns.Any(column =>
+            IsAccountNumberColumn(column.Name)
+            || IsAccountNumberColumn(TrimIndexerField(column.Field ?? string.Empty)));
+    }
+
+    private string FindUserColumnValue(BankUser user, Func<string?, bool> isMatch)
+    {
+        foreach (var column in Bank.Columns)
+        {
+            if (!isMatch(column.Name) && !isMatch(TrimIndexerField(column.Field ?? string.Empty)))
+            {
+                continue;
+            }
+
+            var value = GetUserColumnValue(user, column.Field);
+            if (string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(column.Name))
+            {
+                value = user[column.Name];
+            }
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        foreach (var item in user.ExtraFields)
+        {
+            if (isMatch(item.Key) && !string.IsNullOrWhiteSpace(item.Value))
+            {
+                return item.Value.Trim();
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string GetUserColumnValue(BankUser user, string? field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+        {
+            return string.Empty;
+        }
+
+        var trimmedField = TrimIndexerField(field);
+        return trimmedField switch
+        {
+            nameof(BankUser.AccountName) => user.AccountName,
+            nameof(BankUser.AccountNo) => user.AccountNo,
+            nameof(BankUser.CardNo) => user.CardNo,
+            _ => FirstNotBlank(user[trimmedField], user[field])
+        };
+    }
+
+    private static bool IsAccountNameColumn(string? value)
+    {
+        var normalized = NormalizeColumnName(value);
+        return normalized is nameof(BankUser.AccountName)
+            or "姓名"
+            or "户名"
+            or "客户姓名"
+            or "账户名称"
+            or "户口名称"
+            or "客户名称"
+            or "公司名称"
+            or "单位名称"
+            or "账户名"
+            or "客户户名"
+            or "存款人名称"
+            || normalized.EndsWith("户名", StringComparison.Ordinal);
+    }
+
+    private static bool IsCardNumberColumn(string? value)
+    {
+        var normalized = NormalizeColumnName(value);
+        return normalized is nameof(BankUser.CardNo)
+            or "卡号"
+            or "借记卡号"
+            or "打印卡号"
+            or "主卡卡号"
+            || (normalized.Contains("卡号", StringComparison.Ordinal)
+                && !normalized.Contains("账号", StringComparison.Ordinal)
+                && !normalized.Contains("帐号", StringComparison.Ordinal));
+    }
+
+    private static bool IsAccountNumberColumn(string? value)
+    {
+        var normalized = NormalizeColumnName(value);
+        return normalized is nameof(BankUser.AccountNo)
+            or "支付宝账户"
+            or "微信号"
+            or "账号"
+            or "帐号"
+            or "账号卡号"
+            or "卡号账户"
+            or "客户账号"
+            or "户口号"
+            or "账户账号"
+            or "账户号"
+            or "借记卡号"
+            or "客户账口"
+            or "客户户口"
+            || normalized.EndsWith("账号", StringComparison.Ordinal)
+            || normalized.EndsWith("帐号", StringComparison.Ordinal)
+            || normalized.EndsWith("账户号", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeColumnName(string? value)
+    {
+        return string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character)));
     }
 
     private async Task DeleteAsync()

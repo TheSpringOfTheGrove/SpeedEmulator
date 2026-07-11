@@ -155,11 +155,10 @@
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto">
                 <DataGrid.Columns>
-                    <DataGridTemplateColumn Header="开始月份" Width="130">
+                    <DataGridTemplateColumn Header="开始月份" Width="190">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <controls:FormattedDatePicker SelectedDate="{Binding StartTime, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                              DisplayFormat="yyyy年MM月dd日"
                                                               Height="30"
                                                               BorderThickness="0"
                                                               Background="Transparent" />
@@ -167,11 +166,10 @@
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
 
-                    <DataGridTemplateColumn Header="结束月份" Width="130">
+                    <DataGridTemplateColumn Header="结束月份" Width="190">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <controls:FormattedDatePicker SelectedDate="{Binding EndTime, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                              DisplayFormat="yyyy年MM月dd日"
                                                               Height="30"
                                                               BorderThickness="0"
                                                               Background="Transparent" />

@@ -450,8 +450,8 @@ public partial class BankUsersWindow : Window
             Header = column.Name,
             CellTemplate = new DataTemplate { VisualTree = CreateTextFactory(column.Field!) },
             CellEditingTemplate = new DataTemplate { VisualTree = CreatePickerFactory(column.Field!) },
-            Width = new DataGridLength(Math.Max(column.Width, 120)),
-            MinWidth = 120,
+            Width = new DataGridLength(Math.Max(column.Width, 180)),
+            MinWidth = 170,
             IsReadOnly = false
         };
     }

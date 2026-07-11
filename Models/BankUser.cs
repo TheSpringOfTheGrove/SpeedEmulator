@@ -21,8 +21,8 @@ public sealed class BankUser : ObservableObject
     private string paymentPassword = string.Empty;
     private string uShieldNo = string.Empty;
     private string remark = string.Empty;
-    private DateTime startDate = DateTime.Today;
-    private DateTime endDate = DateTime.Today.AddYears(1);
+    private DateTime startDate = DateTime.Now;
+    private DateTime endDate = DateTime.Now;
     private string transactionType = string.Empty;
     private string currency = "RMB";
     private string chapterCode = string.Empty;
@@ -254,8 +254,8 @@ public sealed class BankUser : ObservableObject
             BankId = bank.Id,
             BankName = bank.Name,
             UserCode = $"{bank.Name}-{DateTime.Now:HHmmss}",
-            StartDate = DateTime.Today,
-            EndDate = DateTime.Today.AddYears(1),
+            StartDate = DateTime.Now,
+            EndDate = DateTime.Now,
             Currency = "RMB",
             CreatedAt = DateTime.Now,
             UpdatedAt = DateTime.Now

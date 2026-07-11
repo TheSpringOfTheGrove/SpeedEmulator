@@ -7,8 +7,8 @@ namespace SpeedEmulator.Models;
 public sealed class FlowGenerationConfig : ObservableObject
 {
     private int selectIndex;
-    private DateTime startTime = new(2023, 4, 1);
-    private DateTime endTime = new(2026, 1, 1);
+    private DateTime startTime = DateTime.Now;
+    private DateTime endTime = DateTime.Now;
     private double openingBalance;
     private double allInMoney = 30000;
     private double allOutMoney;
@@ -146,8 +146,8 @@ public sealed class FlowGenerationConfig : ObservableObject
 
 public sealed class MonthGenerateRule : ObservableObject
 {
-    private DateTime startTime;
-    private DateTime endTime;
+    private DateTime startTime = DateTime.Now;
+    private DateTime endTime = DateTime.Now;
     private double inMoney;
     private double outMoney;
 
