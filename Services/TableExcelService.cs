@@ -37,6 +37,13 @@ public sealed class TableExcelService : ITableExcelService
     private const string ExportDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
     private static readonly string[] DateColumnMarkers = ["\u65e5\u671f", "\u65f6\u95f4", "date", "time"];
 
+    private enum FlowMoneyDirection
+    {
+        Unknown,
+        Income,
+        Expense
+    }
+
     public string? PickImportFile()
     {
         var dialog = new OpenFileDialog
@@ -531,19 +538,34 @@ public sealed class TableExcelService : ITableExcelService
 
     private static object? GetDerivedFlowValue(FlowRecord record, string field)
     {
+        if (field == nameof(FlowRecord.TradeMoney))
+        {
+            return record.TradeMoney.HasValue ? Math.Abs(record.TradeMoney.Value) : null;
+        }
+
         if (field == nameof(FlowRecord.CreditAmount))
         {
-            return record.CreditAmount ?? (record.TradeMoney > 0 ? record.TradeMoney : null);
+            var amount = record.CreditAmount ?? (record.TradeMoney > 0 ? record.TradeMoney : null);
+            return amount.HasValue ? Math.Abs(amount.Value) : null;
         }
 
         if (field == nameof(FlowRecord.DebitAmount))
         {
-            return record.DebitAmount ?? (record.TradeMoney < 0 ? Math.Abs(record.TradeMoney.Value) : null);
+            var amount = record.DebitAmount ?? (record.TradeMoney < 0 ? record.TradeMoney : null);
+            return amount.HasValue ? Math.Abs(amount.Value) : null;
         }
 
-        if (field == nameof(FlowRecord.IncomeAttribute) && string.IsNullOrWhiteSpace(record.IncomeAttribute) && record.TradeMoney.HasValue)
+        if (field == nameof(FlowRecord.IncomeAttribute) && record.TradeMoney.HasValue)
         {
-            return record.TradeMoney.Value >= 0 ? "收入" : "支出";
+            if (record.TradeMoney.Value > 0)
+            {
+                return "收入";
+            }
+
+            if (record.TradeMoney.Value < 0)
+            {
+                return "支出";
+            }
         }
 
         if (field == nameof(FlowRecord.Balance))
@@ -598,24 +620,30 @@ public sealed class TableExcelService : ITableExcelService
     {
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
+        var direction = ResolveFlowMoneyDirection(record.IncomeAttribute);
+
         if (!record.TradeMoney.HasValue)
         {
             if (record.CreditAmount.HasValue)
             {
                 record.TradeMoney = Math.Abs(record.CreditAmount.Value);
+                direction = direction == FlowMoneyDirection.Unknown ? FlowMoneyDirection.Income : direction;
             }
             else if (record.DebitAmount.HasValue)
             {
                 record.TradeMoney = 0 - Math.Abs(record.DebitAmount.Value);
+                direction = direction == FlowMoneyDirection.Unknown ? FlowMoneyDirection.Expense : direction;
             }
         }
 
         if (record.TradeMoney.HasValue)
         {
-            var amount = record.TradeMoney.Value;
+            var amount = ApplyFlowMoneyDirection(record.TradeMoney.Value, direction);
+            record.TradeMoney = amount;
+
             if (amount > 0 && !record.CreditAmount.HasValue)
             {
-                record.CreditAmount = amount;
+                record.CreditAmount = Math.Abs(amount);
             }
             else if (amount < 0 && !record.DebitAmount.HasValue)
             {
@@ -625,6 +653,10 @@ public sealed class TableExcelService : ITableExcelService
             if (string.IsNullOrWhiteSpace(record.IncomeAttribute))
             {
                 record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
+            }
+            else
+            {
+                record.IncomeAttribute = NormalizeFlowIncomeAttribute(record.IncomeAttribute);
             }
         }
 
@@ -636,6 +668,47 @@ public sealed class TableExcelService : ITableExcelService
         {
             record.BalanceAmount = record.Balance;
         }
+    }
+
+    private static FlowMoneyDirection ResolveFlowMoneyDirection(string? value)
+    {
+        var normalized = NormalizeHeader(value ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return FlowMoneyDirection.Unknown;
+        }
+
+        if (normalized == "支出")
+        {
+            return FlowMoneyDirection.Expense;
+        }
+
+        if (normalized == "收入")
+        {
+            return FlowMoneyDirection.Income;
+        }
+
+        return FlowMoneyDirection.Unknown;
+    }
+
+    private static double ApplyFlowMoneyDirection(double amount, FlowMoneyDirection direction)
+    {
+        return direction switch
+        {
+            FlowMoneyDirection.Income => Math.Abs(amount),
+            FlowMoneyDirection.Expense => 0 - Math.Abs(amount),
+            _ => amount
+        };
+    }
+
+    private static string NormalizeFlowIncomeAttribute(string value)
+    {
+        return ResolveFlowMoneyDirection(value) switch
+        {
+            FlowMoneyDirection.Income => "收入",
+            FlowMoneyDirection.Expense => "支出",
+            _ => value
+        };
     }
 
     private static PropertyInfo? GetEntityProperty(Type entityType, string field)

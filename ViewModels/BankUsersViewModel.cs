@@ -748,13 +748,6 @@ public sealed class BankUsersViewModel : ObservableObject
             return;
         }
 
-        if (SelectedUser is null)
-        {
-            StatusMessage = "请选择数据";
-            MessageBox.Show("请选择数据", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
         var path = tableExcelService.PickImportFile();
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -764,46 +757,44 @@ public sealed class BankUsersViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var imported = tableExcelService.ImportFlowRecords(path, Bank, SelectedUser);
+            var isNewUser = SelectedUser is null;
+            var targetUser = SelectedUser ?? BankUser.CreateDraft(Bank);
+            var originalUserId = targetUser.Id;
+            var imported = tableExcelService.ImportFlowRecords(path, Bank, targetUser);
             if (imported.Count == 0)
             {
                 MessageBox.Show("没有读取到可导入的流水数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
-            var overwriteResult = MessageBox.Show(
-                $"已读取 {imported.Count} 条流水数据。\n\n是否覆盖当前用户流水？\n是：覆盖；否：追加；取消：放弃导入。",
-                "导入xlsx",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question);
-
-            if (overwriteResult == MessageBoxResult.Cancel)
+            NormalizeEditableUserBeforeSave(targetUser);
+            if (string.IsNullOrWhiteSpace(targetUser.AccountName))
             {
-                return;
+                targetUser.AccountName = $"{Bank.Name}导入用户";
             }
+
+            targetUser.BankId = Bank.Id;
+            targetUser.BankName = Bank.Name;
+            var savedUser = await repository.SaveAsync(targetUser);
 
             var nextRecords = new List<FlowRecord>();
-            if (overwriteResult == MessageBoxResult.No)
-            {
-                var existing = await flowRecordRepository.ListByUserAsync(Bank.Id, SelectedUser.Id);
-                nextRecords.AddRange(existing.Select(item => item.Clone()));
-            }
-
             foreach (var record in imported)
             {
                 record.Id = 0;
                 record.BankId = Bank.Id;
-                record.BankUserId = SelectedUser.Id;
+                record.BankUserId = savedUser.Id;
                 nextRecords.Add(record);
             }
 
             ReindexFlowRecords(nextRecords);
-            await flowRecordRepository.SaveAllAsync(Bank.Id, SelectedUser.Id, nextRecords);
-            await repository.SaveAsync(SelectedUser);
-            LoadEditor(SelectedUser, false);
+            await flowRecordRepository.SaveAllAsync(Bank.Id, savedUser.Id, nextRecords);
+            ReplaceUserInList(targetUser, originalUserId, savedUser);
+            _ = SyncBackendUserAsync(savedUser);
 
-            StatusMessage = $"导入成功：{imported.Count} 条流水";
-            MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage = isNewUser
+                ? $"导入成功：新建用户并导入 {imported.Count} 条流水"
+                : $"导入成功：已覆盖 {savedUser.AccountName} 的 {imported.Count} 条流水";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
