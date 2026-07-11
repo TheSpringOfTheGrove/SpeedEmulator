@@ -1,0 +1,86 @@
+{
+  "11": {
+    "bankId": 11,
+    "bankName": "\u519C\u884C",
+    "bankType": "\u4E2A\u4EBA",
+    "settlementDay": "21",
+    "months": "3;6;9;12",
+    "startTime": "0",
+    "endTime": "1",
+    "ratePercent": "0.15",
+    "fields": [
+      {
+        "name": "\u65E5\u5FD7\u53F7",
+        "field": "LogNum",
+        "order": 40,
+        "value": "0000000001"
+      },
+      {
+        "name": "\u5730\u70B9",
+        "field": "TradePlace",
+        "order": 50,
+        "value": ""
+      },
+      {
+        "name": "\u6458\u8981",
+        "field": "ProductBrief",
+        "order": 60,
+        "value": ""
+      },
+      {
+        "name": "\u4EA4\u6613\u65B9\u5F0F",
+        "field": "CashCheck",
+        "order": 70,
+        "value": ""
+      },
+      {
+        "name": "\u4EA4\u6613\u6E20\u9053",
+        "field": "TradeChannel",
+        "order": 80,
+        "value": ""
+      },
+      {
+        "name": "\u4EA4\u6613\u8BF4\u660E",
+        "field": "TradeExplain",
+        "order": 90,
+        "value": ""
+      },
+      {
+        "name": "\u9644\u8A00",
+        "field": "Remark",
+        "order": 100,
+        "value": "\u4E2A\u4EBA\u6D3B\u671F\u7ED3\u606F"
+      },
+      {
+        "name": "\u5BF9\u65B9\u8D26\u53F7",
+        "field": "OppositeAccount",
+        "order": 110,
+        "value": ""
+      },
+      {
+        "name": "\u6237\u540D",
+        "field": "[FlowField_17E700AD5926]",
+        "order": 120,
+        "value": ""
+      },
+      {
+        "name": "\u5BF9\u65B9\u5F00\u6237\u884C",
+        "field": "OppositeBank",
+        "order": 130,
+        "value": ""
+      },
+      {
+        "name": "\u4EA4\u6613\u7528\u9014",
+        "field": "Usage",
+        "order": 140,
+        "value": ""
+      },
+      {
+        "name": "\u4EA4\u6613\u6E20\u9053\u82F1\u6587",
+        "field": "TradeChannelEn",
+        "order": 150,
+        "value": ""
+      }
+    ]
+  }
+}

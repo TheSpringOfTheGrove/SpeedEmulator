@@ -89,7 +89,45 @@ public sealed class JsonBankInterestSettingsRepository : IBankInterestSettingsRe
             }
         }
 
+        MergePackagedSeedSettings();
         loaded = true;
+    }
+
+    private void MergePackagedSeedSettings()
+    {
+        foreach (var (key, setting) in LoadPackagedSeedSettings())
+        {
+            settingsByBank.TryAdd(key, setting.Clone());
+        }
+    }
+
+    private static Dictionary<string, BankInterestSetting> LoadPackagedSeedSettings()
+    {
+        foreach (var path in GetPackagedSeedPaths())
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<Dictionary<string, BankInterestSetting>>(json, JsonOptions) ?? [];
+            }
+            catch (JsonException)
+            {
+                return [];
+            }
+        }
+
+        return [];
+    }
+
+    private static IEnumerable<string> GetPackagedSeedPaths()
+    {
+        yield return Path.Combine(AppContext.BaseDirectory, "Data", "bank-interest-settings-seed.json");
+        yield return Path.Combine(AppContext.BaseDirectory, "bank-interest-settings-seed.json");
     }
 
     private void Persist()

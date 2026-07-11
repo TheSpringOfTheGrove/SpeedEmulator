@@ -256,9 +256,40 @@ public sealed class BankUsersViewModel : ObservableObject
         var draft = BankUser.CreateDraft(Bank);
         draft.Id = draftId--;
         draft.UserCode = string.Empty;
+        ApplyAgriculturalNewUserDefaults(draft);
         Users.Add(draft);
         SelectedUser = draft;
         StatusMessage = $"正在新增 {Bank.Name} 用户";
+    }
+
+    private void ApplyAgriculturalNewUserDefaults(BankUser user)
+    {
+        if (!IsAgriculturalBank(Bank))
+        {
+            return;
+        }
+
+        SetBankUserColumnDefault(user, "账户序号", "000");
+        SetBankUserColumnDefault(user, "抬头", "中国农业银行");
+    }
+
+    private void SetBankUserColumnDefault(BankUser user, string columnName, string value)
+    {
+        var column = Bank.Columns.FirstOrDefault(item =>
+            string.Equals(item.Name, columnName, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(item.Field));
+        if (column?.Field is null)
+        {
+            return;
+        }
+
+        var field = TrimIndexerField(column.Field);
+        if (!string.IsNullOrWhiteSpace(user[field]))
+        {
+            return;
+        }
+
+        user[field] = value;
     }
 
     private void EditSelected()
