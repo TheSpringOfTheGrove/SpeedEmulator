@@ -9,6 +9,8 @@ using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using PdfSharpCore.Pdf.Content;
+using PdfSharpCore.Pdf.Content.Objects;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
 using SpeedEmulator.Models;
@@ -1500,6 +1502,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                     NormalizeVendorDynamicImageDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, path]);
+                    NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
                     return true;
                 }
                 catch (Exception ex) when (ShouldRetryVendorQuestPdfWithFewerRows(context, ex, pageRows))
@@ -1558,6 +1561,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                     NormalizeVendorDynamicImageDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, tempPath]);
+                    NormalizeEverbrightPersonalElectronicFooterPdf(context, tempPath);
 
                     var actualPageCount = GetPdfPageCount(tempPath);
                     if (pageIndex == 0)
@@ -2096,6 +2100,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             NormalizeVendorDynamicImageDocument(context, document);
             generatePdfMethod.Invoke(null, [document, path]);
+            NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
             return File.Exists(path);
         }
 
@@ -3330,6 +3335,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsIcbcPrintContext(context))
         {
+            ApplyIcbcBankUserFields(context, target, values);
+
             var operationArea = FirstNotBlank(
                 ResolveIcbcOperationAreaFromRecords(context),
                 GetBankUserColumnValue(context, values, "\u5730\u533A", "\u5730\u533A\u53F7", "\u64CD\u4F5C\u5730\u533A"),
@@ -3358,6 +3365,136 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (IsChinaMerchantsBank(context.Bank))
         {
             ApplyChinaMerchantsBankUserFields(context, target, values);
+        }
+    }
+
+    private static void ApplyIcbcBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var accountNumber = ResolveIcbcAccountNumber(context, values);
+        var cardNumber = ResolveIcbcCardNumber(context, values, accountNumber);
+
+        if (!string.IsNullOrWhiteSpace(cardNumber))
+        {
+            Set(target, "AccountNum", cardNumber);
+            Set(target, "CardNum", cardNumber);
+            Set(target, "CardNo", cardNumber);
+            Set(target, "Card", cardNumber);
+            Set(target, "BankCardNo", cardNumber);
+        }
+
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            Set(target, "Account", accountNumber);
+            Set(target, "AccountNo", accountNumber);
+            Set(target, "BankAccount", accountNumber);
+            Set(target, "BankAccountNo", accountNumber);
+        }
+
+        SetIcbcPrintTimeAliases(target, ResolveIcbcBankUserPrintTime(context, values));
+    }
+
+    private static void ApplyIcbcFlowRecordAccountFields(PrintRenderContext context, object target)
+    {
+        var values = CreateValueMap(context.BankUser);
+        var accountNumber = ResolveIcbcAccountNumber(context, values);
+        var cardNumber = ResolveIcbcCardNumber(context, values, accountNumber);
+
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            Set(target, nameof(FlowRecord.AccountNum), accountNumber);
+            Set(target, nameof(FlowRecord.Account), accountNumber);
+            Set(target, "AccountNo", accountNumber);
+            Set(target, "BankAccount", accountNumber);
+            Set(target, "BankAccountNo", accountNumber);
+        }
+
+        if (!string.IsNullOrWhiteSpace(cardNumber))
+        {
+            Set(target, "CardNum", cardNumber);
+            Set(target, "CardNo", cardNumber);
+            Set(target, "Card", cardNumber);
+            Set(target, "BankCardNo", cardNumber);
+        }
+    }
+
+    private static string ResolveIcbcAccountNumber(
+        PrintRenderContext context,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        return NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u8D26\u53F7", "\u5E10\u53F7", "\u8D26\u6237\u8D26\u53F7", "\u8D26\u6237\u53F7", "\u5BA2\u6237\u8D26\u53F7"),
+            context.BankUser.AccountNo,
+            GetValue(values, nameof(BankUser.AccountNo)),
+            GetValue(values, "AccountNo"),
+            GetValue(values, "Account"),
+            GetValue(values, "BankAccount"),
+            GetValue(values, "BankAccountNo")));
+    }
+
+    private static string ResolveIcbcCardNumber(
+        PrintRenderContext context,
+        IReadOnlyDictionary<string, object?> values,
+        string accountNumber)
+    {
+        return NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u5361\u53F7", "\u501F\u8BB0\u5361\u53F7", "\u6253\u5370\u5361\u53F7", "\u4E3B\u5361\u5361\u53F7"),
+            context.BankUser.CardNo,
+            GetValue(values, nameof(BankUser.CardNo)),
+            GetValue(values, "CardNo"),
+            GetValue(values, "CardNum"),
+            GetValue(values, "BankCardNo"),
+            accountNumber));
+    }
+
+    private static DateTime ResolveIcbcBankUserPrintTime(
+        PrintRenderContext context,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        return ResolveBankUserDateTime(
+                context,
+                values,
+                "\u6253\u5370\u65F6\u95F4",
+                "\u6253\u5370\u65E5\u671F",
+                "\u4EA4\u6613\u65E5\u671F",
+                "\u4E0B\u5355\u65F6\u95F4",
+                "\u5236\u8868\u65E5\u671F",
+                "\u67E5\u8BE2\u65F6\u95F4")
+            ?? DateTime.Now;
+    }
+
+    private static void SetIcbcPrintTimeAliases(object target, DateTime printTime)
+    {
+        var text = printTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        foreach (var propertyName in new[]
+        {
+            "PrintTime",
+            "StampTime",
+            "BillTime",
+            "PrintDate",
+            "PrintDateTime",
+            "OrderTime",
+            "OrderDate",
+            "DownloadTime",
+            "CreateTime"
+        })
+        {
+            Set(target, propertyName, printTime);
+        }
+
+        foreach (var propertyName in new[]
+        {
+            "PrintTimeText",
+            "StampTimeText",
+            "BillTimeText",
+            "PrintDateText",
+            "OrderTimeText",
+            "DownloadTimeText"
+        })
+        {
+            Set(target, propertyName, text);
         }
     }
 
@@ -4227,6 +4364,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         object target)
     {
+        if (IsIcbcPrintContext(context))
+        {
+            ApplyIcbcFlowRecordAccountFields(context, target);
+        }
+
         if (!IsAgriculturalBankPersonalPaperTemplate(context))
         {
             return;
@@ -5536,6 +5678,98 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             // If reflection cannot adjust it, let the normal renderer surface
             // the original template error.
         }
+    }
+
+    private static void NormalizeEverbrightPersonalElectronicFooterPdf(PrintRenderContext context, string path)
+    {
+        if (!IsEverbrightPersonalElectronicPrintContext(context) || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            if (document.PageCount <= 0)
+            {
+                return;
+            }
+
+            var lastPage = document.Pages[document.PageCount - 1];
+            var sequence = ContentReader.ReadContent(lastPage);
+            if (!TryNormalizeLastFontSizeOperator(sequence, 8, 10))
+            {
+                return;
+            }
+
+            lastPage.Contents.ReplaceContent(sequence);
+            var tempPath = path + ".everbright-footer.tmp";
+            try
+            {
+                document.Save(tempPath);
+                document.Close();
+                File.Copy(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteLocalFile(tempPath);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static void TryDeleteLocalFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool TryNormalizeLastFontSizeOperator(CSequence sequence, int fromFontSize, int toFontSize)
+    {
+        for (var index = sequence.Count - 1; index >= 0; index--)
+        {
+            if (sequence[index] is not COperator { Name: "Tf" } op || op.Operands.Count < 2)
+            {
+                continue;
+            }
+
+            var fontSizeOperand = op.Operands[1];
+            if (fontSizeOperand is CInteger integer && integer.Value == fromFontSize)
+            {
+                integer.Value = toFontSize;
+                return true;
+            }
+
+            if (fontSizeOperand is CReal real && Math.Abs(real.Value - fromFontSize) < 0.0001)
+            {
+                real.Value = toFontSize;
+                return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool IsEverbrightPersonalElectronicPrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Name.Contains("\u5149\u5927", StringComparison.Ordinal)
+            && context.Template.Name.Contains("\u5149\u5927\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal);
     }
 
     private static bool IsAlipayPrintContext(PrintRenderContext context)

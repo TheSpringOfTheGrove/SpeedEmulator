@@ -12,7 +12,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $projectRoot 'SpeedEmulator.csproj'
 $artifactsRoot = Join-Path $projectRoot 'artifacts\hot-update'
 $releaseDir = Join-Path $artifactsRoot 'releases'
-$iconPath = Join-Path $projectRoot 'Assets\SpeedEmulatorIcon.ico'
+$iconPath = Join-Path $projectRoot 'Assets\jisu-theme-app-icon-with-year.ico'
 $packTitle = -join ([char[]](0x6781, 0x901F, 0x8D22, 0x52A1))
 
 function Get-VersionKey {

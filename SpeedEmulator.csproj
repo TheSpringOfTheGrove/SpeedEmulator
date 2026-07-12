@@ -8,12 +8,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <StartupObject>SpeedEmulator.Program</StartupObject>
-    <ApplicationIcon>Assets\SpeedEmulatorIcon.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\jisu-theme-app-icon-with-year.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <Resource Include="Assets\SpeedEmulatorIcon.ico" />
     <Resource Include="Assets\SpeedEmulatorIcon.png" />
+    <Resource Include="Assets\jisu-theme-app-icon-with-year.ico" />
+    <Resource Include="Assets\jisu-theme-app-icon-with-year.png" />
+    <Resource Include="Assets\jisu-theme-home-header-banner-year-blank.png" />
+    <Resource Include="Assets\jisu-theme-home-header-year-blank.png" />
+    <Resource Include="Assets\jisu-theme-logo-vertical-with-year.png" />
+    <Resource Include="Assets\jisu-theme-logo-vertical-year-blank.png" />
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="db.db" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="db2.db" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

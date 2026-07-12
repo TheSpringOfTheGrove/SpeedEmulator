@@ -119,61 +119,105 @@
     <DockPanel LastChildFill="True">
         <Border DockPanel.Dock="Top"
                 Background="{StaticResource BrandTealBrush}"
-                Padding="10,10,10,8">
+                Height="194"
+                ClipToBounds="True">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="20" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+                <Image Source="/Assets/jisu-theme-home-header-banner-year-blank.png"
+                       Stretch="Fill"
+                       IsHitTestVisible="False" />
+                <Viewbox Stretch="Fill"
+                         IsHitTestVisible="False"
+                         ClipToBounds="True">
+                    <Canvas Width="1774"
+                            Height="388">
+                        <TextBlock Text="{Binding CurrentYear, Mode=OneWay}"
+                                   Canvas.Left="968"
+                                   Canvas.Top="146"
+                                   Foreground="Black"
+                                   FontFamily="Arial"
+                                   FontSize="72"
+                                   FontWeight="Bold" />
+                    </Canvas>
+                </Viewbox>
 
-                <Border Background="#F6FAFA"
-                        Padding="10"
-                        Height="176">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="152" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                <Grid Margin="10,10,10,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="20" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                        <controls:SpeedLogoMark Width="150"
-                                                Height="150"
-                                                HorizontalAlignment="Left"
-                                                VerticalAlignment="Center"
-                                                SnapsToDevicePixels="True" />
+                    <Border Background="Transparent"
+                            Padding="10"
+                            Height="176">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="152" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-                        <ScrollViewer Grid.Column="1"
-                                      Margin="18,8,0,8"
+                            <Grid Width="150"
+                                  Height="150"
+                                  HorizontalAlignment="Left"
+                                  VerticalAlignment="Center"
+                                  ClipToBounds="True"
+                                  SnapsToDevicePixels="True">
+                                <Viewbox Stretch="Uniform"
+                                         IsHitTestVisible="False">
+                                    <Canvas Width="1024"
+                                            Height="1536">
+                                        <Image Source="/Assets/jisu-theme-logo-vertical-year-blank.png"
+                                               Width="1024"
+                                               Height="1536"
+                                               Stretch="Fill" />
+                                        <TextBlock Text="{Binding CurrentYear, Mode=OneWay}"
+                                                   Canvas.Left="380"
+                                                   Canvas.Top="614"
+                                                   Foreground="Black"
+                                                   FontFamily="Arial"
+                                                   FontSize="56"
+                                                   FontWeight="Bold" />
+                                    </Canvas>
+                                </Viewbox>
+                            </Grid>
+
+                            <ScrollViewer Grid.Column="1"
+                                          Margin="18,8,0,8"
+                                          Background="Transparent"
+                                          Visibility="Collapsed"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock Text="联系方式"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               FontSize="18"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,10" />
+                                    <TextBlock Text="{Binding ContactText, Mode=OneWay}"
+                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                               FontSize="16"
+                                               LineHeight="24"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Column="2"
+                            Background="Transparent"
+                            Padding="24,18"
+                            Height="176"
+                            Visibility="Collapsed">
+                        <ScrollViewer Background="Transparent"
                                       VerticalScrollBarVisibility="Auto">
-                            <StackPanel>
-                                <TextBlock Text="联系方式"
-                                           Foreground="{StaticResource TextPrimaryBrush}"
-                                           FontSize="18"
-                                           FontWeight="SemiBold"
-                                           Margin="0,0,0,10" />
-                                <TextBlock Text="{Binding ContactText, Mode=OneWay}"
-                                           Foreground="{StaticResource TextPrimaryBrush}"
-                                           FontSize="16"
-                                           LineHeight="24"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
+                            <TextBlock Text="{Binding AnnouncementText, Mode=OneWay}"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       FontSize="16"
+                                       LineHeight="25"
+                                       TextWrapping="Wrap"
+                                       VerticalAlignment="Center" />
                         </ScrollViewer>
-                    </Grid>
-                </Border>
-
-                <Border Grid.Column="2"
-                        Background="#FFFFFF"
-                        Padding="24,18"
-                        Height="176">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <TextBlock Text="{Binding AnnouncementText, Mode=OneWay}"
-                                   Foreground="{StaticResource TextPrimaryBrush}"
-                                   FontSize="16"
-                                   LineHeight="25"
-                                   TextWrapping="Wrap"
-                                   VerticalAlignment="Center" />
-                    </ScrollViewer>
-                </Border>
+                    </Border>
+                </Grid>
             </Grid>
         </Border>
 

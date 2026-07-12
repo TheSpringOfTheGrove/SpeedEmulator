@@ -39,6 +39,8 @@ public sealed class MainViewModel : ObservableObject
 
     public string WindowTitle => $"极速财务软件-版本({AppVersion.DisplayVersion})";
 
+    public string CurrentYear => DateTime.Now.Year.ToString();
+
     public string AccountDisplay => string.IsNullOrWhiteSpace(session.DisplayName) ? session.Account : session.DisplayName;
 
     public ObservableCollection<Bank> GeRenBanks { get; } = [];
