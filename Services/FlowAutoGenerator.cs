@@ -60,6 +60,12 @@ public sealed class FlowAutoGenerator
     private const string InterestText = "\u7ed3\u606f";
     private const string InterestTaxText = "\u5229\u606f\u7a0e";
     private const string PersonalCurrentInterestRemark = "\u4e2a\u4eba\u6d3b\u671f\u7ed3\u606f";
+    private const int SmallDiscreteAmountStepLimit = 160;
+    private const int ReferenceAmountDistributionStepLimit = 600;
+    private const double SmallDiscreteAverageMinRatio = 0.35d;
+    private const double SmallDiscreteAverageMaxRatio = 0.62d;
+    private const double SmallDiscreteAdjustmentUpperRatio = 0.72d;
+    private const double ReferenceAmountEdgeUsageRatio = 0.025d;
     private const double FinalBalanceTolerance = 1000d;
     private const string ExternalSystemFlowColumnName = "\u5916\u90e8\u7cfb\u7edf\u6d41\u6c34";
     private static readonly HashSet<string> InterestSettingProtectedFields = new(StringComparer.Ordinal)
@@ -259,19 +265,27 @@ public sealed class FlowAutoGenerator
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
         NormalizeSmallDiscreteAmountDistribution(records, request, random);
+        NormalizeReferenceAmountDistribution(records, random);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         NormalizeSmallDiscreteAmountDistribution(records, request, random);
+        NormalizeReferenceAmountDistribution(records, random);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+        NormalizeReferenceAmountDistribution(records, random);
         if (request.BankUser.AutoCalculateInterest)
         {
             RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            NormalizeReferenceAmountDistribution(records, random);
             RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+            NormalizeReferenceAmountDistribution(records, random);
         }
 
         if (UseHighVolumeNativePostProcessing(request.Bank, records.Count)
             && IsFinalBalanceOutsideTolerance(records.LastOrDefault()?.Balance ?? openingBalance, openingBalance, request.Config.LastMoney))
         {
             ForceHighVolumeFinalBalanceWithinTolerance(records, request, start, end, openingBalance, random);
+            NormalizeReferenceAmountDistribution(records, random);
+            RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+            NormalizeReferenceAmountDistribution(records, random);
         }
 
         PruneZeroAmountRecords(records);
@@ -330,7 +344,7 @@ public sealed class FlowAutoGenerator
             })
             .ToList();
 
-        for (var attempt = 0; attempt < 3; attempt++)
+        for (var attempt = 0; attempt < 6; attempt++)
         {
             ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
             ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
@@ -347,10 +361,24 @@ public sealed class FlowAutoGenerator
 
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
-        NormalizeSmallDiscreteAmountDistribution(records, request, random);
-        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
-        NormalizeSmallDiscreteAmountDistribution(records, request, random);
-        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+        RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
+        for (var attempt = 0; attempt < 6 && GetMinimumBalance(records, openingBalance) < -0.009d; attempt++)
+        {
+            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+            AddSafeExpenseRecordsForPositiveFinalBalance(records, request, start, end, openingBalance, random);
+            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+            PruneZeroAmountRecords(records);
+            RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
+            ApplyBalances(records, openingBalance);
+        }
+
+        if (GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+            PruneZeroAmountRecords(records);
+        }
+
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -1587,6 +1615,43 @@ public sealed class FlowAutoGenerator
         }
 
         PruneZeroAmountRecords(records);
+        ApplyBalances(records, openingBalance);
+    }
+
+    private static void RestoreFinalBalancePreservingNonNegative(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        double openingBalance)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        ApplyBalances(records, openingBalance);
+        if (GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            return;
+        }
+
+        var backup = records
+            .Select(item =>
+            {
+                var copy = item.Clone();
+                copy.Id = item.Id;
+                return copy;
+            })
+            .ToList();
+
+        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+        ApplyBalances(records, openingBalance);
+        if (GetMinimumBalance(records, openingBalance) >= -0.009d)
+        {
+            return;
+        }
+
+        records.Clear();
+        records.AddRange(backup);
         ApplyBalances(records, openingBalance);
     }
 
@@ -4299,7 +4364,6 @@ public sealed class FlowAutoGenerator
     private static bool IsSmallDiscreteAmountRule(Bank bank, FlowRuleBase rule, AmountBounds bounds)
     {
         return IsWechatBank(bank)
-            && IsIncomeRuleSafe(rule)
             && IsSmallDiscreteAmountBounds(bounds);
     }
 
@@ -4318,8 +4382,8 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var stepCount = CountDiscreteAmountSteps(bounds, 80);
-        return stepCount is >= 3 and <= 80;
+        var stepCount = CountDiscreteAmountSteps(bounds, SmallDiscreteAmountStepLimit);
+        return stepCount is >= 3 and <= SmallDiscreteAmountStepLimit;
     }
 
     private static int CountDiscreteAmountSteps(AmountBounds bounds, int limit)
@@ -4393,6 +4457,628 @@ public sealed class FlowAutoGenerator
         return changed;
     }
 
+    private static bool NormalizeReferenceAmountDistribution(
+        List<FlowRecord> records,
+        Random random)
+    {
+        var changed = false;
+        var groups = records
+            .Where(IsReferenceGeneratedRecord)
+            .Where(item => Math.Abs(item.TradeMoney ?? 0) > 0.009d)
+            .Where(item => !IsSystemInterestRecord(item))
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                return (
+                    Sign: GetAmountSign(item.TradeMoney ?? 0),
+                    bounds.Min,
+                    bounds.Max,
+                    bounds.Unit);
+            })
+            .Where(group => group.Key.Sign != 0)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            changed = NormalizeReferenceAmountGroup(group.ToList(), group.Key.Sign, random) || changed;
+        }
+
+        return changed;
+    }
+
+    private static bool IsReferenceGeneratedRecord(FlowRecord record)
+    {
+        return record.ExtraFields.TryGetValue(SourceKindField, out var sourceKind)
+            && string.Equals(sourceKind, ReferenceSourceKind, StringComparison.Ordinal);
+    }
+
+    private static bool NormalizeReferenceAmountGroup(
+        IReadOnlyList<FlowRecord> sourceRecords,
+        int sign,
+        Random random)
+    {
+        var records = sourceRecords
+            .OrderBy(item => item.AccountTime ?? DateTime.MinValue)
+            .ThenBy(item => item.Index)
+            .ToList();
+        if (records.Count < 2)
+        {
+            return false;
+        }
+
+        var bounds = GetRecordAmountBounds(records[0]);
+        var unit = Math.Max(0.01d, bounds.Unit);
+        if (bounds.Max <= bounds.Min + unit - 0.0000001d)
+        {
+            return false;
+        }
+
+        var currentTotal = RoundMoney(records.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var amounts = CreateBalancedReferenceAmounts(bounds, records.Count, currentTotal, random);
+        if (amounts.Length != records.Count)
+        {
+            return false;
+        }
+
+        amounts = amounts
+            .OrderBy(_ => random.Next())
+            .ToArray();
+
+        var changed = false;
+        for (var index = 0; index < records.Count; index++)
+        {
+            var nextAmount = ClampAmountToBounds(amounts[index], bounds);
+            var currentAmount = RoundMoney(Math.Abs(records[index].TradeMoney ?? 0));
+            if (Math.Abs(nextAmount - currentAmount) <= 0.009d)
+            {
+                continue;
+            }
+
+            ApplySignedAmount(records[index], sign, nextAmount);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static double[] CreateBalancedReferenceAmounts(
+        AmountBounds bounds,
+        int count,
+        double targetTotal,
+        Random random)
+    {
+        if (count <= 0)
+        {
+            return [];
+        }
+
+        var values = EnumerateDiscreteAmounts(bounds, ReferenceAmountDistributionStepLimit)
+            .OrderBy(item => item)
+            .ToArray();
+        if (values.Length >= 2)
+        {
+            return CreateBalancedDiscreteReferenceAmounts(values, bounds, count, targetTotal, random);
+        }
+
+        return CreateBalancedContinuousReferenceAmounts(bounds, count, targetTotal, random);
+    }
+
+    private static double[] CreateBalancedDiscreteReferenceAmounts(
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        int count,
+        double targetTotal,
+        Random random)
+    {
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var min = values[0];
+        var max = values[^1];
+        var target = RoundAmountToUnit(Math.Clamp(targetTotal, min * count, max * count), unit);
+        var result = new List<double>(count);
+        var usage = values.ToDictionary(item => item, _ => 0);
+
+        if (count >= values.Count)
+        {
+            foreach (var value in values)
+            {
+                AddBalancedReferenceAmount(result, usage, value);
+            }
+        }
+        else
+        {
+            for (var index = 0; index < count; index++)
+            {
+                var valueIndex = count == 1
+                    ? values.Count / 2
+                    : (int)Math.Round(index * (values.Count - 1d) / (count - 1d), MidpointRounding.AwayFromZero);
+                AddBalancedReferenceAmount(result, usage, values[Math.Clamp(valueIndex, 0, values.Count - 1)]);
+            }
+        }
+
+        var range = Math.Max(unit, max - min);
+        var edgeLimit = GetReferenceEdgeUsageLimit(count);
+        while (result.Count < count)
+        {
+            var remainingCount = count - result.Count;
+            var slotsAfterThis = remainingCount - 1;
+            var remainingTotal = RoundMoney(target - result.Sum());
+            var minAfter = min * slotsAfterThis;
+            var maxAfter = max * slotsAfterThis;
+            var averageNeeded = remainingTotal / remainingCount;
+            var candidate = values
+                .Where(value => value <= remainingTotal - minAfter + 0.009d)
+                .Where(value => value >= remainingTotal - maxAfter - 0.009d)
+                .OrderBy(value => GetReferenceCandidateScore(value, averageNeeded, usage[value], min, max, range, edgeLimit, random))
+                .FirstOrDefault(double.NaN);
+            if (double.IsNaN(candidate))
+            {
+                candidate = values
+                    .OrderBy(value => usage[value])
+                    .ThenBy(value => Math.Abs(value - averageNeeded))
+                    .First();
+            }
+
+            AddBalancedReferenceAmount(result, usage, candidate);
+        }
+
+        AdjustBalancedReferenceAmounts(result, bounds, target, random);
+        return result.ToArray();
+    }
+
+    private static double[] CreateBalancedContinuousReferenceAmounts(
+        AmountBounds bounds,
+        int count,
+        double targetTotal,
+        Random random)
+    {
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var min = bounds.Min;
+        var max = bounds.Max;
+        var range = Math.Max(unit, max - min);
+        var target = RoundAmountToUnit(Math.Clamp(targetTotal, min * count, max * count), unit);
+        var bucketCount = Math.Clamp((int)Math.Round(Math.Sqrt(count) * 1.8d, MidpointRounding.AwayFromZero), 6, 18);
+        var result = new List<double>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var bucket = index % bucketCount;
+            var ratio = (bucket + 0.18d + (random.NextDouble() * 0.64d)) / bucketCount;
+            var amount = RoundAmountToUnit(min + (range * ratio), unit);
+            result.Add(ClampAmountToBounds(amount, bounds));
+        }
+
+        AdjustBalancedReferenceAmounts(result, bounds, target, random);
+        return result.ToArray();
+    }
+
+    private static void AddBalancedReferenceAmount(
+        ICollection<double> result,
+        IDictionary<double, int> usage,
+        double value)
+    {
+        result.Add(value);
+        usage[value] = usage.TryGetValue(value, out var count) ? count + 1 : 1;
+    }
+
+    private static double GetReferenceCandidateScore(
+        double value,
+        double averageNeeded,
+        int usage,
+        double min,
+        double max,
+        double range,
+        int edgeLimit,
+        Random random)
+    {
+        var edgePenalty = IsReferenceEdgeValue(value, min, max)
+            ? usage >= edgeLimit ? range * 18d : range * 1.5d
+            : 0d;
+        var usagePenalty = usage * Math.Max(0.01d, range * 0.22d);
+        return Math.Abs(value - averageNeeded)
+            + usagePenalty
+            + edgePenalty
+            + (random.NextDouble() * Math.Max(0.01d, range * 0.015d));
+    }
+
+    private static void AdjustBalancedReferenceAmounts(
+        List<double> amounts,
+        AmountBounds bounds,
+        double targetTotal,
+        Random random)
+    {
+        if (amounts.Count == 0)
+        {
+            return;
+        }
+
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var min = bounds.Min;
+        var max = bounds.Max;
+        var edgeLimit = GetReferenceEdgeUsageLimit(amounts.Count);
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            var diff = RoundMoney(targetTotal - amounts.Sum());
+            if (Math.Abs(diff) < unit - 0.009d)
+            {
+                FinishReferenceAmountBalancing(amounts, bounds, random);
+                return;
+            }
+
+            var increase = diff > 0;
+            var allowEdges = attempt >= 8;
+            var minUsage = amounts.Count(item => Math.Abs(item - min) <= 0.009d);
+            var maxUsage = amounts.Count(item => Math.Abs(item - max) <= 0.009d);
+            var candidates = Enumerable.Range(0, amounts.Count)
+                .Where(index => increase ? amounts[index] < max - 0.009d : amounts[index] > min + 0.009d)
+                .Where(index => allowEdges || CanMoveReferenceAmountWithoutEdgePileup(
+                    amounts[index],
+                    increase,
+                    unit,
+                    min,
+                    max,
+                    minUsage,
+                    maxUsage,
+                    edgeLimit))
+                .OrderBy(index => increase ? amounts[index] : -amounts[index])
+                .ThenBy(_ => random.Next())
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                continue;
+            }
+
+            var capacity = RoundMoney(candidates.Sum(index => increase ? max - amounts[index] : amounts[index] - min));
+            if (capacity <= 0.009d)
+            {
+                FinishReferenceAmountBalancing(amounts, bounds, random);
+                return;
+            }
+
+            var progressed = false;
+            foreach (var index in candidates)
+            {
+                diff = RoundMoney(targetTotal - amounts.Sum());
+                var remaining = Math.Abs(diff);
+                if (remaining < unit - 0.009d)
+                {
+                    return;
+                }
+
+                var room = RoundMoney(increase ? max - amounts[index] : amounts[index] - min);
+                if (room <= 0.009d)
+                {
+                    continue;
+                }
+
+                var share = remaining * (room / capacity);
+                var adjustment = RoundAmountToUnit(Math.Min(room, Math.Max(unit, share)), unit);
+                if (adjustment > remaining + 0.009d)
+                {
+                    adjustment = FloorAmountToUnit(remaining, unit);
+                }
+
+                if (adjustment <= 0.009d)
+                {
+                    continue;
+                }
+
+                var next = increase
+                    ? ClampAmountToBounds(amounts[index] + adjustment, bounds)
+                    : ClampAmountToBounds(amounts[index] - adjustment, bounds);
+                if (Math.Abs(next - amounts[index]) <= 0.009d)
+                {
+                    continue;
+                }
+
+                amounts[index] = next;
+                progressed = true;
+            }
+
+            if (!progressed && allowEdges)
+            {
+                FinishReferenceAmountBalancing(amounts, bounds, random);
+                return;
+            }
+        }
+
+        FinishReferenceAmountBalancing(amounts, bounds, random);
+    }
+
+    private static void FinishReferenceAmountBalancing(
+        List<double> amounts,
+        AmountBounds bounds,
+        Random random)
+    {
+        BalanceReferenceEdgeUsage(amounts, bounds, random);
+        BalanceReferenceValueUsage(amounts, bounds, random);
+        BalanceReferenceEdgeUsage(amounts, bounds, random);
+        EnsureReferenceEdgePresence(amounts, bounds, random);
+    }
+
+    private static void BalanceReferenceEdgeUsage(
+        List<double> amounts,
+        AmountBounds bounds,
+        Random random)
+    {
+        if (amounts.Count < 3)
+        {
+            return;
+        }
+
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var min = bounds.Min;
+        var max = bounds.Max;
+        if (max <= min + unit - 0.0000001d)
+        {
+            return;
+        }
+
+        var edgeLimit = GetReferenceEdgeUsageLimit(amounts.Count);
+        var maxAttempts = Math.Max(16, amounts.Count * 4);
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var maxIndexes = Enumerable.Range(0, amounts.Count)
+                .Where(index => Math.Abs(amounts[index] - max) <= 0.009d)
+                .OrderBy(_ => random.Next())
+                .ToList();
+            if (maxIndexes.Count > edgeLimit)
+            {
+                var targetIndex = maxIndexes[0];
+                var compensateIndex = Enumerable.Range(0, amounts.Count)
+                    .Where(index => index != targetIndex)
+                    .Where(index => amounts[index] <= max - (unit * 2d) + 0.009d)
+                    .OrderBy(index => amounts[index])
+                    .ThenBy(_ => random.Next())
+                    .FirstOrDefault(-1);
+                if (compensateIndex >= 0)
+                {
+                    amounts[targetIndex] = ClampAmountToBounds(amounts[targetIndex] - unit, bounds);
+                    amounts[compensateIndex] = ClampAmountToBounds(amounts[compensateIndex] + unit, bounds);
+                    continue;
+                }
+            }
+
+            var minIndexes = Enumerable.Range(0, amounts.Count)
+                .Where(index => Math.Abs(amounts[index] - min) <= 0.009d)
+                .OrderBy(_ => random.Next())
+                .ToList();
+            if (minIndexes.Count > edgeLimit)
+            {
+                var targetIndex = minIndexes[0];
+                var compensateIndex = Enumerable.Range(0, amounts.Count)
+                    .Where(index => index != targetIndex)
+                    .Where(index => amounts[index] >= min + (unit * 2d) - 0.009d)
+                    .OrderByDescending(index => amounts[index])
+                    .ThenBy(_ => random.Next())
+                    .FirstOrDefault(-1);
+                if (compensateIndex >= 0)
+                {
+                    amounts[targetIndex] = ClampAmountToBounds(amounts[targetIndex] + unit, bounds);
+                    amounts[compensateIndex] = ClampAmountToBounds(amounts[compensateIndex] - unit, bounds);
+                    continue;
+                }
+            }
+
+            return;
+        }
+    }
+
+    private static void BalanceReferenceValueUsage(
+        List<double> amounts,
+        AmountBounds bounds,
+        Random random)
+    {
+        if (amounts.Count < 4)
+        {
+            return;
+        }
+
+        var values = EnumerateDiscreteAmounts(bounds, ReferenceAmountDistributionStepLimit)
+            .OrderBy(item => item)
+            .ToArray();
+        if (values.Length < 4 || amounts.Count < values.Length)
+        {
+            return;
+        }
+
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var min = values[0];
+        var max = values[^1];
+        var averagePerValue = amounts.Count / (double)values.Length;
+        var usageLimit = Math.Max(
+            GetReferenceEdgeUsageLimit(amounts.Count),
+            (int)Math.Ceiling(averagePerValue * 1.6d));
+        var valueSet = values.ToHashSet();
+        var maxAttempts = Math.Max(32, amounts.Count * 10);
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var usage = amounts
+                .Select(item => RoundAmountToUnit(item, unit))
+                .GroupBy(item => item)
+                .ToDictionary(group => group.Key, group => group.Count());
+            var overused = usage
+                .Where(item => item.Value > usageLimit)
+                .OrderByDescending(item => item.Value - usageLimit)
+                .ThenByDescending(item => Math.Abs(item.Key - ((min + max) / 2d)))
+                .FirstOrDefault();
+            if (overused.Value <= usageLimit)
+            {
+                return;
+            }
+
+            var overValue = overused.Key;
+            var decreaseOverValue = overValue >= (min + max) / 2d;
+            var nextOverValue = decreaseOverValue
+                ? values
+                    .Where(value => value < overValue - 0.009d)
+                    .Where(value => usage.GetValueOrDefault(value) < usageLimit)
+                    .OrderByDescending(value => value)
+                    .FirstOrDefault(double.NaN)
+                : values
+                    .Where(value => value > overValue + 0.009d)
+                    .Where(value => usage.GetValueOrDefault(value) < usageLimit)
+                    .OrderBy(value => value)
+                    .FirstOrDefault(double.NaN);
+            if (double.IsNaN(nextOverValue) || !valueSet.Contains(nextOverValue))
+            {
+                usage[overValue] = usageLimit;
+                continue;
+            }
+
+            var delta = RoundMoney(Math.Abs(overValue - nextOverValue));
+            if (delta <= 0.009d)
+            {
+                usage[overValue] = usageLimit;
+                continue;
+            }
+
+            var overIndex = Enumerable.Range(0, amounts.Count)
+                .Where(index => Math.Abs(RoundAmountToUnit(amounts[index], unit) - overValue) <= 0.009d)
+                .OrderBy(_ => random.Next())
+                .FirstOrDefault(-1);
+            if (overIndex < 0)
+            {
+                return;
+            }
+
+            var compensateIndex = Enumerable.Range(0, amounts.Count)
+                .Where(index => index != overIndex)
+                .Where(index =>
+                {
+                    var current = RoundAmountToUnit(amounts[index], unit);
+                    if (decreaseOverValue
+                        && Math.Abs(current - min) <= 0.009d
+                        && usage.GetValueOrDefault(min) <= GetReferenceEdgeUsageLimit(amounts.Count))
+                    {
+                        return false;
+                    }
+
+                    if (!decreaseOverValue
+                        && Math.Abs(current - max) <= 0.009d
+                        && usage.GetValueOrDefault(max) <= GetReferenceEdgeUsageLimit(amounts.Count))
+                    {
+                        return false;
+                    }
+
+                    var next = RoundAmountToUnit(decreaseOverValue ? current + delta : current - delta, unit);
+                    return valueSet.Contains(next)
+                        && usage.GetValueOrDefault(next) < usageLimit
+                        && (decreaseOverValue ? current <= max - delta + 0.009d : current >= min + delta - 0.009d);
+                })
+                .OrderBy(index => decreaseOverValue ? amounts[index] : -amounts[index])
+                .ThenBy(_ => random.Next())
+                .FirstOrDefault(-1);
+            if (compensateIndex < 0)
+            {
+                return;
+            }
+
+            amounts[overIndex] = ClampAmountToBounds(nextOverValue, bounds);
+            amounts[compensateIndex] = ClampAmountToBounds(
+                amounts[compensateIndex] + (decreaseOverValue ? delta : -delta),
+                bounds);
+        }
+    }
+
+    private static void EnsureReferenceEdgePresence(
+        List<double> amounts,
+        AmountBounds bounds,
+        Random random)
+    {
+        var values = EnumerateDiscreteAmounts(bounds, ReferenceAmountDistributionStepLimit)
+            .OrderBy(item => item)
+            .ToArray();
+        if (values.Length < 4 || amounts.Count < values.Length)
+        {
+            return;
+        }
+
+        EnsureReferenceSingleEdgePresence(amounts, bounds, values[0], values[^1], ensureMax: false, random);
+        EnsureReferenceSingleEdgePresence(amounts, bounds, values[0], values[^1], ensureMax: true, random);
+    }
+
+    private static void EnsureReferenceSingleEdgePresence(
+        List<double> amounts,
+        AmountBounds bounds,
+        double min,
+        double max,
+        bool ensureMax,
+        Random random)
+    {
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var edge = ensureMax ? max : min;
+        if (amounts.Any(item => Math.Abs(item - edge) <= 0.009d))
+        {
+            return;
+        }
+
+        var edgeIndex = Enumerable.Range(0, amounts.Count)
+            .Where(index => ensureMax ? amounts[index] <= max - unit + 0.009d : amounts[index] >= min + unit - 0.009d)
+            .OrderBy(index => ensureMax ? Math.Abs(amounts[index] - (max - unit)) : Math.Abs(amounts[index] - (min + unit)))
+            .ThenBy(_ => random.Next())
+            .FirstOrDefault(-1);
+        if (edgeIndex < 0)
+        {
+            return;
+        }
+
+        var delta = RoundMoney(Math.Abs(edge - amounts[edgeIndex]));
+        if (delta <= 0.009d)
+        {
+            return;
+        }
+
+        var compensateIndex = Enumerable.Range(0, amounts.Count)
+            .Where(index => index != edgeIndex)
+            .Where(index => ensureMax ? amounts[index] >= min + delta - 0.009d : amounts[index] <= max - delta + 0.009d)
+            .OrderBy(index => ensureMax ? -amounts[index] : amounts[index])
+            .ThenBy(_ => random.Next())
+            .FirstOrDefault(-1);
+        if (compensateIndex < 0)
+        {
+            return;
+        }
+
+        amounts[edgeIndex] = edge;
+        amounts[compensateIndex] = ClampAmountToBounds(
+            amounts[compensateIndex] + (ensureMax ? -delta : delta),
+            bounds);
+    }
+
+    private static int GetReferenceEdgeUsageLimit(int count)
+    {
+        return Math.Max(1, (int)Math.Ceiling(count * ReferenceAmountEdgeUsageRatio));
+    }
+
+    private static bool IsReferenceEdgeValue(double value, double min, double max)
+    {
+        return Math.Abs(value - min) <= 0.009d || Math.Abs(value - max) <= 0.009d;
+    }
+
+    private static bool CanMoveReferenceAmountWithoutEdgePileup(
+        double amount,
+        bool increase,
+        double unit,
+        double min,
+        double max,
+        int minUsage,
+        int maxUsage,
+        int edgeUsageLimit)
+    {
+        var next = increase ? amount + unit : amount - unit;
+        if (increase && next >= max - 0.009d && maxUsage >= edgeUsageLimit)
+        {
+            return false;
+        }
+
+        if (!increase && next <= min + 0.009d && minUsage >= edgeUsageLimit)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool EnsureSmallDiscreteAmountGroupCoverage(
         List<FlowRecord> records,
         FlowAutoGenerationRequest request,
@@ -4406,7 +5092,7 @@ public sealed class FlowAutoGenerator
         }
 
         var bounds = GetRecordAmountBounds(groupRecords[0]);
-        var values = EnumerateDiscreteAmounts(bounds, 80)
+        var values = EnumerateDiscreteAmounts(bounds, SmallDiscreteAmountStepLimit)
             .OrderByDescending(item => item)
             .ToList();
         if (values.Count == 0 || groupRecords.Count >= values.Count)
@@ -4471,10 +5157,15 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var values = EnumerateDiscreteAmounts(bounds, 80);
+        var values = EnumerateDiscreteAmounts(bounds, SmallDiscreteAmountStepLimit);
         if (values.Count < 2)
         {
             return false;
+        }
+
+        if (sign < 0)
+        {
+            return NormalizeSmallDiscreteExpenseAmountGroup(records, sign, values, bounds, random);
         }
 
         var amounts = new double[records.Count];
@@ -4517,6 +5208,235 @@ public sealed class FlowAutoGenerator
         }
 
         return changed;
+    }
+
+    private static bool NormalizeSmallDiscreteExpenseAmountGroup(
+        IReadOnlyList<FlowRecord> records,
+        int sign,
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        Random random)
+    {
+        if (records.Count < 2 || values.Count < 2)
+        {
+            return false;
+        }
+
+        var currentTotal = RoundMoney(records.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var amounts = CreateBalancedSmallDiscreteExpenseAmounts(values, bounds, records.Count, currentTotal, random);
+        if (amounts.Length != records.Count)
+        {
+            return false;
+        }
+
+        var changed = false;
+        for (var index = 0; index < records.Count; index++)
+        {
+            var nextAmount = ClampAmountToBounds(amounts[index], bounds);
+            var currentAmount = RoundMoney(Math.Abs(records[index].TradeMoney ?? 0));
+            if (Math.Abs(nextAmount - currentAmount) <= 0.009d)
+            {
+                continue;
+            }
+
+            ApplySignedAmount(records[index], sign, nextAmount);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static double[] CreateBalancedSmallDiscreteExpenseAmounts(
+        IReadOnlyList<double> sourceValues,
+        AmountBounds bounds,
+        int count,
+        double currentTotal,
+        Random random)
+    {
+        if (count <= 0)
+        {
+            return [];
+        }
+
+        var values = sourceValues
+            .OrderBy(item => item)
+            .ToArray();
+        if (values.Length == 0)
+        {
+            return [];
+        }
+
+        if (values.Length == 1)
+        {
+            return Enumerable.Repeat(values[0], count).ToArray();
+        }
+
+        var min = values[0];
+        var max = values[^1];
+        var range = Math.Max(bounds.Unit, max - min);
+        var currentAverage = count > 0 ? currentTotal / count : min;
+        var balancedAverageMin = min + (range * SmallDiscreteAverageMinRatio);
+        var balancedAverageMax = min + (range * SmallDiscreteAverageMaxRatio);
+        var targetAverage = Math.Clamp(currentAverage, balancedAverageMin, balancedAverageMax);
+        var targetTotal = RoundAmountToUnit(targetAverage * count, Math.Max(1d, bounds.Unit));
+
+        var result = new List<double>(count);
+        var usage = values.ToDictionary(item => item, _ => 0);
+        if (count >= values.Length)
+        {
+            foreach (var value in values)
+            {
+                result.Add(value);
+                usage[value]++;
+            }
+        }
+        else
+        {
+            for (var index = 0; index < count; index++)
+            {
+                var valueIndex = count == 1
+                    ? values.Length / 2
+                    : (int)Math.Round(index * (values.Length - 1d) / (count - 1d), MidpointRounding.AwayFromZero);
+                var value = values[Math.Clamp(valueIndex, 0, values.Length - 1)];
+                result.Add(value);
+                usage[value]++;
+            }
+        }
+
+        var remainingCount = count - result.Count;
+        var remainingTotal = RoundMoney(targetTotal - result.Sum());
+        var edgeUsageLimit = GetSmallDiscreteEdgeUsageLimit(count);
+        while (remainingCount > 0)
+        {
+            var slotsAfterThis = remainingCount - 1;
+            var minAfter = min * slotsAfterThis;
+            var maxAfter = max * slotsAfterThis;
+            var averageNeeded = remainingTotal / remainingCount;
+            var usagePenalty = Math.Max(1d, range * 0.18d);
+            var candidate = values
+                .Where(value => value <= remainingTotal - minAfter + 0.009d)
+                .Where(value => value >= remainingTotal - maxAfter - 0.009d)
+                .Where(value => !IsSmallDiscreteEdgeValue(value, min, max) || usage[value] < edgeUsageLimit)
+                .OrderBy(value => Math.Abs(value - averageNeeded) + (usage[value] * usagePenalty) + (random.NextDouble() * 0.05d))
+                .FirstOrDefault(double.NaN);
+            if (double.IsNaN(candidate))
+            {
+                candidate = values
+                    .Where(value => !IsSmallDiscreteEdgeValue(value, min, max) || usage[value] < edgeUsageLimit)
+                    .OrderBy(value => usage[value])
+                    .ThenBy(value => Math.Abs(value - averageNeeded))
+                    .FirstOrDefault(double.NaN);
+            }
+
+            if (double.IsNaN(candidate))
+            {
+                candidate = values
+                    .OrderBy(value => usage[value])
+                    .ThenBy(value => Math.Abs(value - averageNeeded))
+                    .First();
+            }
+
+            result.Add(candidate);
+            usage[candidate]++;
+            remainingTotal = RoundMoney(remainingTotal - candidate);
+            remainingCount--;
+        }
+
+        AdjustBalancedSmallDiscreteExpenseAmounts(result, values, bounds, targetTotal, random);
+
+        return result
+            .OrderBy(_ => random.Next())
+            .ToArray();
+    }
+
+    private static void AdjustBalancedSmallDiscreteExpenseAmounts(
+        List<double> amounts,
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        double targetTotal,
+        Random random)
+    {
+        var unit = Math.Max(1d, bounds.Unit);
+        var min = values[0];
+        var max = values[^1];
+        var edgeUsageLimit = GetSmallDiscreteEdgeUsageLimit(amounts.Count);
+        var attempts = Math.Min(12000, Math.Max(100, amounts.Count * 8));
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var diff = RoundMoney(targetTotal - amounts.Sum());
+            if (Math.Abs(diff) < unit - 0.009d)
+            {
+                return;
+            }
+
+            var increase = diff > 0;
+            var minUsage = amounts.Count(item => Math.Abs(item - min) <= 0.009d);
+            var maxUsage = amounts.Count(item => Math.Abs(item - max) <= 0.009d);
+            var indexes = Enumerable.Range(0, amounts.Count)
+                .Where(index => increase ? amounts[index] < max - 0.009d : amounts[index] > min + 0.009d)
+                .Where(index => CanMoveSmallDiscreteAmountWithoutEdgePileup(
+                    amounts[index],
+                    increase,
+                    unit,
+                    min,
+                    max,
+                    minUsage,
+                    maxUsage,
+                    edgeUsageLimit))
+                .OrderBy(_ => random.Next())
+                .ToList();
+            if (indexes.Count == 0)
+            {
+                return;
+            }
+
+            var indexToMove = indexes
+                .OrderBy(index => increase ? amounts[index] : -amounts[index])
+                .First();
+            var next = increase
+                ? ClampAmountToBounds(amounts[indexToMove] + unit, bounds)
+                : ClampAmountToBounds(amounts[indexToMove] - unit, bounds);
+            if (Math.Abs(next - amounts[indexToMove]) <= 0.009d)
+            {
+                return;
+            }
+
+            amounts[indexToMove] = next;
+        }
+    }
+
+    private static int GetSmallDiscreteEdgeUsageLimit(int count)
+    {
+        return Math.Max(1, (int)Math.Ceiling(count * 0.02d));
+    }
+
+    private static bool IsSmallDiscreteEdgeValue(double value, double min, double max)
+    {
+        return Math.Abs(value - min) <= 0.009d || Math.Abs(value - max) <= 0.009d;
+    }
+
+    private static bool CanMoveSmallDiscreteAmountWithoutEdgePileup(
+        double amount,
+        bool increase,
+        double unit,
+        double min,
+        double max,
+        int minUsage,
+        int maxUsage,
+        int edgeUsageLimit)
+    {
+        var next = increase ? amount + unit : amount - unit;
+        if (increase && next >= max - 0.009d && maxUsage >= edgeUsageLimit)
+        {
+            return false;
+        }
+
+        if (!increase && next <= min + 0.009d && minUsage >= edgeUsageLimit)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static List<double> EnumerateDiscreteAmounts(AmountBounds bounds, int limit)
@@ -7677,9 +8597,11 @@ public sealed class FlowAutoGenerator
 
                 var absolute = Math.Abs(record.TradeMoney ?? 0);
                 var bounds = GetRecordAmountBounds(record);
-                var upper = pass == 0
-                    ? GetPreferredAmountUpperBound(record, bounds)
-                    : bounds.Max;
+                var upper = IsSmallDiscreteAmountRecord(record)
+                    ? GetSmallDiscreteAdjustmentUpperBound(bounds)
+                    : pass == 0
+                        ? GetPreferredAmountUpperBound(record, bounds)
+                        : bounds.Max;
                 var room = RoundMoney(upper - absolute);
                 if (room <= 0.009d)
                 {
@@ -8045,8 +8967,12 @@ public sealed class FlowAutoGenerator
 
     private static double GetPreferredAmountUpperBound(FlowRecord record, AmountBounds bounds)
     {
-        if (IsSmallDiscreteAmountRecord(record)
-            || double.IsInfinity(bounds.Max)
+        if (IsSmallDiscreteAmountRecord(record))
+        {
+            return GetSmallDiscreteAdjustmentUpperBound(bounds);
+        }
+
+        if (double.IsInfinity(bounds.Max)
             || bounds.Max >= double.MaxValue / 2)
         {
             return bounds.Max;
@@ -8062,6 +8988,24 @@ public sealed class FlowAutoGenerator
         var ratio = IsWideAmountRange(bounds) ? 0.84d : 0.90d;
         var preferred = ClampAmountToBounds(bounds.Min + (range * ratio), bounds);
         return preferred >= bounds.Max - unit - 0.009d ? bounds.Max : preferred;
+    }
+
+    private static double GetSmallDiscreteAdjustmentUpperBound(AmountBounds bounds)
+    {
+        if (!IsSmallDiscreteAmountBounds(bounds))
+        {
+            return bounds.Max;
+        }
+
+        var unit = Math.Max(1d, bounds.Unit);
+        var range = bounds.Max - bounds.Min;
+        if (range <= unit * 2d)
+        {
+            return bounds.Max;
+        }
+
+        var preferred = FloorAmountToUnit(bounds.Min + (range * SmallDiscreteAdjustmentUpperRatio), unit);
+        return Math.Clamp(preferred, bounds.Min, bounds.Max);
     }
 
     private static int GetRequiredMonthlyCount(GenerateReferenceRule rule)
