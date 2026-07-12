@@ -64,7 +64,6 @@ public sealed class FlowAutoGenerator
     private const int ReferenceAmountDistributionStepLimit = 600;
     private const double SmallDiscreteAverageMinRatio = 0.35d;
     private const double SmallDiscreteAverageMaxRatio = 0.62d;
-    private const double SmallDiscreteAdjustmentUpperRatio = 0.72d;
     private const double ReferenceAmountEdgeUsageRatio = 0.025d;
     private const double FinalBalanceTolerance = 1000d;
     private const string ExternalSystemFlowColumnName = "\u5916\u90e8\u7cfb\u7edf\u6d41\u6c34";
@@ -283,11 +282,15 @@ public sealed class FlowAutoGenerator
             && IsFinalBalanceOutsideTolerance(records.LastOrDefault()?.Balance ?? openingBalance, openingBalance, request.Config.LastMoney))
         {
             ForceHighVolumeFinalBalanceWithinTolerance(records, request, start, end, openingBalance, random);
+            NormalizeSmallDiscreteAmountDistribution(records, request, random);
             NormalizeReferenceAmountDistribution(records, random);
             RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+            NormalizeSmallDiscreteAmountDistribution(records, request, random);
             NormalizeReferenceAmountDistribution(records, random);
         }
 
+        NormalizeSmallDiscreteAmountDistribution(records, request, random);
+        NormalizeReferenceAmountDistribution(records, random);
         PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
 
@@ -4464,6 +4467,7 @@ public sealed class FlowAutoGenerator
         var changed = false;
         var groups = records
             .Where(IsReferenceGeneratedRecord)
+            .Where(item => !IsSmallDiscreteAmountRecord(item))
             .Where(item => Math.Abs(item.TradeMoney ?? 0) > 0.009d)
             .Where(item => !IsSystemInterestRecord(item))
             .GroupBy(item =>
@@ -5163,35 +5167,14 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        if (sign < 0)
+        var currentTotal = RoundMoney(records.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var amounts = CreateBalancedSmallDiscreteAmounts(values, bounds, records.Count, currentTotal, random);
+        if (amounts.Length != records.Count)
         {
-            return NormalizeSmallDiscreteExpenseAmountGroup(records, sign, values, bounds, random);
+            return false;
         }
 
-        var amounts = new double[records.Count];
-        var coverageValues = values
-            .OrderByDescending(item => item)
-            .ToList();
-
-        if (records.Count >= values.Count)
-        {
-            for (var index = 0; index < values.Count; index++)
-            {
-                amounts[index] = coverageValues[index];
-            }
-
-            for (var index = values.Count; index < records.Count; index++)
-            {
-                amounts[index] = PickDiscreteProfileAmount(values, random);
-            }
-        }
-        else
-        {
-            for (var index = 0; index < records.Count; index++)
-            {
-                amounts[index] = coverageValues[index % coverageValues.Count];
-            }
-        }
+        amounts = OrderSmallDiscreteAmountsForTimeline(amounts, sign, random);
 
         var changed = false;
         for (var index = 0; index < records.Count; index++)
@@ -5208,6 +5191,265 @@ public sealed class FlowAutoGenerator
         }
 
         return changed;
+    }
+
+    private static double[] CreateBalancedSmallDiscreteAmounts(
+        IReadOnlyList<double> sourceValues,
+        AmountBounds bounds,
+        int count,
+        double currentTotal,
+        Random random)
+    {
+        if (count <= 0)
+        {
+            return [];
+        }
+
+        var values = sourceValues
+            .OrderBy(item => item)
+            .ToArray();
+        if (values.Length == 0)
+        {
+            return [];
+        }
+
+        if (values.Length == 1)
+        {
+            return Enumerable.Repeat(values[0], count).ToArray();
+        }
+
+        var min = values[0];
+        var max = values[^1];
+        var unit = Math.Max(1d, bounds.Unit);
+        var target = RoundAmountToUnit(Math.Clamp(currentTotal, min * count, max * count), unit);
+        var result = new List<double>(count);
+        var seedSum = values.Sum();
+        var remainingCount = count - values.Length;
+        var canSeedCoverage = remainingCount >= 0
+            && target >= seedSum + (min * remainingCount) - 0.009d
+            && target <= seedSum + (max * remainingCount) + 0.009d;
+        if (canSeedCoverage)
+        {
+            result.AddRange(values);
+        }
+
+        var fillCount = count - result.Count;
+        var fillTotal = RoundMoney(target - result.Sum());
+        if (fillCount > 0)
+        {
+            result.AddRange(CreateSmallDiscreteQuantileAmounts(values, bounds, fillCount, fillTotal, random));
+        }
+
+        AdjustSmallDiscreteAmountsToTarget(result, values, bounds, target, random);
+        BalanceSmallDiscreteValueUsage(result, values, bounds, target, random);
+        AdjustSmallDiscreteAmountsToTarget(result, values, bounds, target, random);
+
+        return result.ToArray();
+    }
+
+    private static IEnumerable<double> CreateSmallDiscreteQuantileAmounts(
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        int count,
+        double targetTotal,
+        Random random)
+    {
+        if (count <= 0)
+        {
+            yield break;
+        }
+
+        var min = values[0];
+        var max = values[^1];
+        var unit = Math.Max(1d, bounds.Unit);
+        var range = Math.Max(unit, max - min);
+        var targetAverage = Math.Clamp(targetTotal / count, min, max);
+        var targetRatio = Math.Clamp((targetAverage - min) / range, 0.02d, 0.98d);
+        var exponent = targetRatio >= 0.5d
+            ? Math.Max(0.08d, (1d / targetRatio) - 1d)
+            : Math.Max(0.08d, targetRatio / (1d - targetRatio));
+        var offset = random.NextDouble();
+
+        for (var index = 0; index < count; index++)
+        {
+            var u = ((index + 0.5d + offset) % count) / count;
+            u = Math.Clamp(u, 0.000001d, 0.999999d);
+            var ratio = targetRatio >= 0.5d
+                ? Math.Pow(u, exponent)
+                : 1d - Math.Pow(1d - u, exponent);
+            var amount = ClampAmountToBounds(min + (range * ratio), bounds);
+            yield return SnapToNearestDiscreteValue(amount, values, unit);
+        }
+    }
+
+    private static double SnapToNearestDiscreteValue(double amount, IReadOnlyList<double> values, double unit)
+    {
+        if (values.Count == 0)
+        {
+            return amount;
+        }
+
+        var min = values[0];
+        var index = (int)Math.Round((amount - min) / Math.Max(0.01d, unit), MidpointRounding.AwayFromZero);
+        index = Math.Clamp(index, 0, values.Count - 1);
+        return values[index];
+    }
+
+    private static void AdjustSmallDiscreteAmountsToTarget(
+        List<double> amounts,
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        double targetTotal,
+        Random random)
+    {
+        if (amounts.Count == 0)
+        {
+            return;
+        }
+
+        var unit = Math.Max(1d, bounds.Unit);
+        var valueSet = values.ToHashSet();
+        var attempts = Math.Min(60000, Math.Max(200, amounts.Count * 12));
+        var currentTotal = RoundMoney(amounts.Sum());
+        var usage = amounts
+            .GroupBy(item => item)
+            .ToDictionary(group => group.Key, group => group.Count());
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var diff = RoundMoney(targetTotal - currentTotal);
+            if (Math.Abs(diff) < unit - 0.009d)
+            {
+                return;
+            }
+
+            var increase = diff > 0;
+            var index = Enumerable.Range(0, amounts.Count)
+                .Select(item =>
+                {
+                    var current = amounts[item];
+                    var next = RoundAmountToUnit(current + (increase ? unit : -unit), unit);
+                    return new
+                    {
+                        Index = item,
+                        Current = current,
+                        Next = next,
+                        CanMove = valueSet.Contains(next)
+                    };
+                })
+                .Where(item => item.CanMove)
+                .OrderBy(item => usage.GetValueOrDefault(item.Next))
+                .ThenByDescending(item => usage.GetValueOrDefault(item.Current))
+                .ThenBy(item => IsSmallDiscreteEdgeValue(item.Next, values[0], values[^1]) ? 1 : 0)
+                .ThenBy(_ => random.Next())
+                .Select(item => item.Index)
+                .FirstOrDefault(-1);
+            if (index < 0)
+            {
+                return;
+            }
+
+            var before = amounts[index];
+            var after = RoundAmountToUnit(before + (increase ? unit : -unit), unit);
+            amounts[index] = after;
+            usage[before] = Math.Max(0, usage.GetValueOrDefault(before) - 1);
+            usage[after] = usage.GetValueOrDefault(after) + 1;
+            currentTotal = RoundMoney(currentTotal + (increase ? unit : -unit));
+        }
+    }
+
+    private static void BalanceSmallDiscreteValueUsage(
+        List<double> amounts,
+        IReadOnlyList<double> values,
+        AmountBounds bounds,
+        double targetTotal,
+        Random random)
+    {
+        if (amounts.Count < 4 || values.Count < 4)
+        {
+            return;
+        }
+
+        var unit = Math.Max(1d, bounds.Unit);
+        var min = values[0];
+        var max = values[^1];
+        var averageRatio = Math.Clamp(((targetTotal / amounts.Count) - min) / Math.Max(unit, max - min), 0d, 1d);
+        var skewAllowance = Math.Abs(averageRatio - 0.5d) * 0.42d;
+        var usageLimit = Math.Max(
+            GetSmallDiscreteEdgeUsageLimit(amounts.Count),
+            (int)Math.Ceiling(amounts.Count * (0.08d + skewAllowance)));
+        var valueSet = values.ToHashSet();
+        var attempts = Math.Min(60000, Math.Max(200, amounts.Count * 10));
+
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var usage = amounts
+                .GroupBy(item => item)
+                .ToDictionary(group => group.Key, group => group.Count());
+            var overused = usage
+                .Where(item => item.Value > usageLimit)
+                .OrderByDescending(item => item.Value - usageLimit)
+                .FirstOrDefault();
+            if (overused.Value <= usageLimit)
+            {
+                return;
+            }
+
+            var overValue = overused.Key;
+            var moveDown = overValue >= (min + max) / 2d;
+            var nextOverValue = RoundAmountToUnit(overValue + (moveDown ? -unit : unit), unit);
+            if (!valueSet.Contains(nextOverValue))
+            {
+                usage[overValue] = usageLimit;
+                continue;
+            }
+
+            var compensateValue = RoundAmountToUnit(overValue + (moveDown ? unit : -unit), unit);
+            var compensateIndex = Enumerable.Range(0, amounts.Count)
+                .Where(index => Math.Abs(amounts[index] - overValue) > 0.009d)
+                .Where(index => valueSet.Contains(RoundAmountToUnit(amounts[index] + (moveDown ? unit : -unit), unit)))
+                .OrderBy(index => usage.GetValueOrDefault(RoundAmountToUnit(amounts[index] + (moveDown ? unit : -unit), unit)))
+                .ThenBy(_ => random.Next())
+                .FirstOrDefault(-1);
+            var overIndex = Enumerable.Range(0, amounts.Count)
+                .Where(index => Math.Abs(amounts[index] - overValue) <= 0.009d)
+                .OrderBy(_ => random.Next())
+                .FirstOrDefault(-1);
+            if (overIndex < 0 || compensateIndex < 0)
+            {
+                return;
+            }
+
+            amounts[overIndex] = nextOverValue;
+            amounts[compensateIndex] = RoundAmountToUnit(amounts[compensateIndex] + (moveDown ? unit : -unit), unit);
+        }
+    }
+
+    private static double[] OrderSmallDiscreteAmountsForTimeline(
+        IEnumerable<double> amounts,
+        int sign,
+        Random random)
+    {
+        var ordered = sign < 0
+            ? amounts.OrderBy(item => item).ToArray()
+            : amounts.OrderByDescending(item => item).ToArray();
+        if (ordered.Length < 8)
+        {
+            return ordered;
+        }
+
+        var blockSize = Math.Clamp((int)Math.Round(Math.Sqrt(ordered.Length), MidpointRounding.AwayFromZero), 4, 16);
+        for (var start = 0; start < ordered.Length; start += blockSize)
+        {
+            var length = Math.Min(blockSize, ordered.Length - start);
+            var block = ordered
+                .Skip(start)
+                .Take(length)
+                .OrderBy(_ => random.Next())
+                .ToArray();
+            Array.Copy(block, 0, ordered, start, length);
+        }
+
+        return ordered;
     }
 
     private static bool NormalizeSmallDiscreteExpenseAmountGroup(
@@ -8597,11 +8839,9 @@ public sealed class FlowAutoGenerator
 
                 var absolute = Math.Abs(record.TradeMoney ?? 0);
                 var bounds = GetRecordAmountBounds(record);
-                var upper = IsSmallDiscreteAmountRecord(record)
-                    ? GetSmallDiscreteAdjustmentUpperBound(bounds)
-                    : pass == 0
-                        ? GetPreferredAmountUpperBound(record, bounds)
-                        : bounds.Max;
+                var upper = pass == 0
+                    ? GetPreferredAmountUpperBound(record, bounds)
+                    : bounds.Max;
                 var room = RoundMoney(upper - absolute);
                 if (room <= 0.009d)
                 {
@@ -8967,11 +9207,6 @@ public sealed class FlowAutoGenerator
 
     private static double GetPreferredAmountUpperBound(FlowRecord record, AmountBounds bounds)
     {
-        if (IsSmallDiscreteAmountRecord(record))
-        {
-            return GetSmallDiscreteAdjustmentUpperBound(bounds);
-        }
-
         if (double.IsInfinity(bounds.Max)
             || bounds.Max >= double.MaxValue / 2)
         {
@@ -8988,24 +9223,6 @@ public sealed class FlowAutoGenerator
         var ratio = IsWideAmountRange(bounds) ? 0.84d : 0.90d;
         var preferred = ClampAmountToBounds(bounds.Min + (range * ratio), bounds);
         return preferred >= bounds.Max - unit - 0.009d ? bounds.Max : preferred;
-    }
-
-    private static double GetSmallDiscreteAdjustmentUpperBound(AmountBounds bounds)
-    {
-        if (!IsSmallDiscreteAmountBounds(bounds))
-        {
-            return bounds.Max;
-        }
-
-        var unit = Math.Max(1d, bounds.Unit);
-        var range = bounds.Max - bounds.Min;
-        if (range <= unit * 2d)
-        {
-            return bounds.Max;
-        }
-
-        var preferred = FloorAmountToUnit(bounds.Min + (range * SmallDiscreteAdjustmentUpperRatio), unit);
-        return Math.Clamp(preferred, bounds.Min, bounds.Max);
     }
 
     private static int GetRequiredMonthlyCount(GenerateReferenceRule rule)
