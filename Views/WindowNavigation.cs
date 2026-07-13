@@ -4,23 +4,16 @@ namespace SpeedEmulator.Views;
 
 internal static class WindowNavigation
 {
-    public static bool? ShowDialogAsCurrent(Window owner, Window child)
+    public static void ShowAsCurrent(Window owner, Window child)
     {
         child.Owner ??= owner;
         child.ShowInTaskbar = true;
 
         var shouldRestoreOwner = owner.IsVisible;
-        try
+        EventHandler? closedHandler = null;
+        closedHandler = (_, _) =>
         {
-            if (shouldRestoreOwner)
-            {
-                owner.Hide();
-            }
-
-            return child.ShowDialog();
-        }
-        finally
-        {
+            child.Closed -= closedHandler;
             if (shouldRestoreOwner
                 && owner.IsLoaded
                 && Application.Current is { Dispatcher.HasShutdownStarted: false })
@@ -28,6 +21,31 @@ internal static class WindowNavigation
                 owner.Show();
                 owner.Activate();
             }
+        };
+
+        child.Closed += closedHandler;
+        try
+        {
+            if (shouldRestoreOwner)
+            {
+                owner.Hide();
+            }
+
+            child.Show();
+            child.Activate();
+        }
+        catch
+        {
+            child.Closed -= closedHandler;
+            if (shouldRestoreOwner
+                && owner.IsLoaded
+                && Application.Current is { Dispatcher.HasShutdownStarted: false })
+            {
+                owner.Show();
+                owner.Activate();
+            }
+
+            throw;
         }
     }
 }

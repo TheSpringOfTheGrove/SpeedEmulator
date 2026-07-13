@@ -97,7 +97,7 @@ public partial class BankUsersWindow : Window
                 Owner = this
             };
 
-            WindowNavigation.ShowDialogAsCurrent(this, window);
+            WindowNavigation.ShowAsCurrent(this, window);
         }
         catch (Exception ex)
         {
@@ -118,7 +118,7 @@ public partial class BankUsersWindow : Window
             Owner = this
         };
 
-        WindowNavigation.ShowDialogAsCurrent(this, window);
+        WindowNavigation.ShowAsCurrent(this, window);
     }
 
     private async void ViewModel_RequestOpenPrintPreview(object? sender, EventArgs e)
@@ -142,7 +142,7 @@ public partial class BankUsersWindow : Window
                 Owner = this
             };
 
-            WindowNavigation.ShowDialogAsCurrent(this, window);
+            WindowNavigation.ShowAsCurrent(this, window);
         }
         catch (Exception ex)
         {

@@ -8,6 +8,7 @@
         MinWidth="560"
         MinHeight="360"
         WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
         ResizeMode="CanResize"
         Background="#FFFFFF">
     <Window.Resources>

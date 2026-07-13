@@ -139,7 +139,7 @@ public partial class FlowDetailsWindow : Window
                 Owner = this
             };
 
-            WindowNavigation.ShowDialogAsCurrent(this, window);
+            WindowNavigation.ShowAsCurrent(this, window);
         }
         catch (Exception ex)
         {

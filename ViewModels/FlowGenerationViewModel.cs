@@ -678,18 +678,19 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
             SetGenerationProgress(12, "正在检查已有流水");
             var existingRecords = await flowRecordRepository.ListByUserAsync(Bank.Id, BankUser.Id);
+            var appendToExistingRecords = false;
             if (existingRecords.Count > 0)
             {
                 var overwriteResult = MessageBox.Show(
-                    $"当前用户已有 {existingRecords.Count} 条流水，是否覆盖并重新生成？",
+                    $"当前用户已有 {existingRecords.Count} 条流水，是否覆盖并重新生成？\n\n是：覆盖并重新生成\n否：追加生成，不覆盖原流水",
                     "开始生成流水",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
 
                 if (overwriteResult != MessageBoxResult.Yes)
                 {
-                    SetGenerationProgress(0, "已取消生成");
-                    return;
+                    appendToExistingRecords = true;
+                    SetGenerationProgress(18, "将追加生成流水");
                 }
             }
 
@@ -733,15 +734,22 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
             SyncOpeningBalanceFromResult(result);
 
-            SetGenerationProgress(72, "正在保存生成流水");
-            await flowRecordRepository.SaveAllAsync(Bank.Id, BankUser.Id, result.Records);
+            SetGenerationProgress(72, appendToExistingRecords ? "正在追加保存生成流水" : "正在保存生成流水");
+            var recordsToSave = appendToExistingRecords
+                ? MergeGeneratedRecordsForAppend(existingRecords, result.Records)
+                : result.Records;
+            await flowRecordRepository.SaveAllAsync(Bank.Id, BankUser.Id, recordsToSave);
             await SaveBankUserValuesAsync();
             await Task.Yield();
 
             SetGenerationProgress(92, "正在准备流水明细页面");
-            StatusMessage = $"生成完成：{result.Records.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}";
+            StatusMessage = appendToExistingRecords
+                ? $"追加生成完成：新增 {result.Records.Count} 条，当前共 {recordsToSave.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}"
+                : $"生成完成：{result.Records.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}";
             MessageBox.Show(
-                $"生成成功\n\n流水条数：{result.Records.Count}",
+                appendToExistingRecords
+                    ? $"生成成功\n\n新增流水条数：{result.Records.Count}\n当前流水总数：{recordsToSave.Count}"
+                    : $"生成成功\n\n流水条数：{result.Records.Count}",
                 "提示",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -759,6 +767,26 @@ public sealed class FlowGenerationViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private static List<FlowRecord> MergeGeneratedRecordsForAppend(
+        IEnumerable<FlowRecord> existingRecords,
+        IEnumerable<FlowRecord> generatedRecords)
+    {
+        var merged = existingRecords.Select(item => item.Clone()).ToList();
+        foreach (var record in generatedRecords)
+        {
+            var copy = record.Clone();
+            copy.Id = 0;
+            merged.Add(copy);
+        }
+
+        for (var i = 0; i < merged.Count; i++)
+        {
+            merged[i].Index = i + 1;
+        }
+
+        return merged;
     }
 
     private GenerationAttempt GenerateWithRequest(FlowAutoGenerationRequest request)

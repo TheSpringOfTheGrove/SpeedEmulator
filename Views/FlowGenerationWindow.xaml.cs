@@ -136,7 +136,7 @@ public partial class FlowGenerationWindow : Window
             Owner = this
         };
 
-        WindowNavigation.ShowDialogAsCurrent(this, window);
+        WindowNavigation.ShowAsCurrent(this, window);
     }
 
     private async Task ApplyColumnSettingsAsync(string scope, IEnumerable<SpeedEmulator.Models.ColumnDefinition> columns)

@@ -39,7 +39,7 @@ public partial class MainWindow : Window
             Owner = this
         };
 
-        WindowNavigation.ShowDialogAsCurrent(this, window);
+        WindowNavigation.ShowAsCurrent(this, window);
     }
 
     protected override void OnClosed(EventArgs e)

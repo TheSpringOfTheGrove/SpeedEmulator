@@ -7,6 +7,7 @@
         MinWidth="560"
         MinHeight="620"
         WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
         Background="#F4F4F4">
     <Window.Resources>
         <Style x:Key="FilterButtonStyle" TargetType="Button">

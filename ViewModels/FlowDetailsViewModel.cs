@@ -335,10 +335,13 @@ public sealed class FlowDetailsViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            BankUser.OpeningBalance = (decimal)OpeningBalance;
             BankUser.AutoCalculateInterest = AutoCalculateInterest;
 
-            var previewBalance = RoundMoney(OpeningBalance);
+            var originalOpeningBalance = RoundMoney(OpeningBalance);
+            var previewBalance = originalOpeningBalance;
+            var minimumBalance = previewBalance;
+            FlowRecord? firstNegativeRecord = null;
+            var firstNegativeIndex = -1;
             for (var i = 0; i < allRecords.Count; i++)
             {
                 var record = allRecords[i];
@@ -348,19 +351,30 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 }
 
                 previewBalance = RoundMoney(previewBalance + RoundMoney(record.TradeMoney.Value));
-                if (previewBalance < 0)
+                if (previewBalance < minimumBalance)
                 {
-                    SelectedRecord = record;
-                    RequestScrollToRecord?.Invoke(record);
-                    StatusMessage = $"第 {i + 1} 行余额为负，请调整金额或期初余额";
-                    MessageBox.Show(
-                        $"第 {i + 1} 行重新计算后余额为负：{previewBalance:N2}，请调整金额或期初余额。",
-                        "提示",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
-                    return;
+                    minimumBalance = previewBalance;
+                }
+
+                if (previewBalance < -0.009d && firstNegativeRecord is null)
+                {
+                    firstNegativeRecord = record;
+                    firstNegativeIndex = i;
                 }
             }
+
+            var adjustedOpeningBalance = false;
+            if (minimumBalance < -0.009d)
+            {
+                OpeningBalance = RoundMoney(originalOpeningBalance - minimumBalance + 1d);
+                adjustedOpeningBalance = true;
+            }
+            else
+            {
+                OpeningBalance = originalOpeningBalance;
+            }
+
+            BankUser.OpeningBalance = (decimal)OpeningBalance;
 
             var balance = RoundMoney(OpeningBalance);
             foreach (var record in allRecords)
@@ -382,11 +396,38 @@ public sealed class FlowDetailsViewModel : ObservableObject
             }
 
             var selected = SelectedRecord;
+            if (adjustedOpeningBalance && firstNegativeRecord is not null)
+            {
+                selected = firstNegativeRecord;
+            }
+
             ReindexAllRecords();
             await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            if (bankUserRepository is not null)
+            {
+                await bankUserRepository.SaveAsync(BankUser);
+            }
+
             RefreshDisplay(selected);
-            StatusMessage = "重新计算成功";
-            MessageBox.Show("重新计算成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (adjustedOpeningBalance)
+            {
+                if (firstNegativeRecord is not null)
+                {
+                    RequestScrollToRecord?.Invoke(firstNegativeRecord);
+                }
+
+                StatusMessage = $"重新计算成功，已将期初余额从 {originalOpeningBalance:N2} 调整为 {OpeningBalance:N2}";
+                MessageBox.Show(
+                    $"重新计算成功\n\n检测到第 {firstNegativeIndex + 1} 行起出现负余额，已将期初余额从 {originalOpeningBalance:N2} 调整为 {OpeningBalance:N2}，所有余额已重算为非负。",
+                    "提示",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            else
+            {
+                StatusMessage = "重新计算成功";
+                MessageBox.Show("重新计算成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
         }
         catch (Exception ex)
         {
