@@ -213,10 +213,10 @@ public sealed class FlowAutoGenerator
         GenerateNativeRequiredReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         if (!IsWechatBank(request.Bank) && request.References.Count < 200)
         {
-            EnsureNativeOptionalReferenceRuleCoverage(request, start, end, targetIncome, random, records, scheduleState, amountUsage);
+            EnsureNativeOptionalReferenceRuleCoverage(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         }
         GenerateNativeOptionalReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
-        EnsureNativeOptionalReferenceRuleCoverage(request, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        EnsureNativeOptionalReferenceRuleCoverage(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         CompleteNativeConfiguredTotals(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
         RedistributeFirstMonthIncomeRecords(request, monthlyPlan, random, records, scheduleState);
         perfTrace.Mark("base generation", records);
@@ -4363,10 +4363,25 @@ public sealed class FlowAutoGenerator
             return;
         }
 
+        var requiredIncomeRules = requiredRules.Where(IsIncomeRuleSafe).ToList();
+        var minimumIncomePresenceAmount = requiredIncomeRules.Count == 0
+            ? 0
+            : requiredIncomeRules.Min(rule => GetRuleAmountBounds(rule).Min);
+
         for (var monthIndex = 0; monthIndex < monthlyPlan.Months.Count; monthIndex++)
         {
             var month = monthlyPlan.Months[monthIndex];
-            foreach (var rule in requiredRules)
+            var futureMonthsWithoutIncome = monthlyPlan.Months
+                .Skip(monthIndex + 1)
+                .Count(futureMonth => !records.Any(item =>
+                    item.TradeMoney > 0.009d
+                    && IsRecordInRange(item, futureMonth.Start, futureMonth.End)));
+            var futureIncomeReserve = RoundMoney(futureMonthsWithoutIncome * minimumIncomePresenceAmount);
+            var orderedRules = requiredIncomeRules
+                .OrderBy(_ => random.Next())
+                .Concat(requiredRules.Where(rule => !IsIncomeRuleSafe(rule)))
+                .ToList();
+            foreach (var rule in orderedRules)
             {
                 var count = GetRequiredMonthlyCount(rule);
                 for (var index = 0; index < count; index++)
@@ -4381,9 +4396,32 @@ public sealed class FlowAutoGenerator
                         ? RoundMoney(incomeCap - SumIncome(records))
                         : double.MaxValue;
                     var bounds = GetRuleAmountBounds(rule);
-                    var available = IsWideAmountRange(bounds)
-                        ? Math.Min(availableTotal, bounds.Max)
-                        : Math.Min(availableTotal, remainingMonthTarget > 0 ? Math.Max(remainingMonthTarget, bounds.Min) : availableTotal);
+                    double available;
+                    if (isIncome)
+                    {
+                        var availableForCurrentMonth = RoundMoney(Math.Max(0, availableTotal - futureIncomeReserve));
+                        var monthHasIncome = existingMonthTotal > 0.009d;
+                        var desiredForCurrent = monthHasIncome
+                            ? remainingMonthTarget
+                            : RoundMoney(Math.Max(bounds.Min, remainingMonthTarget));
+                        if (desiredForCurrent < bounds.Min - 0.009d
+                            || availableForCurrentMonth < bounds.Min - 0.009d)
+                        {
+                            continue;
+                        }
+
+                        available = Math.Min(bounds.Max, Math.Min(desiredForCurrent, availableForCurrentMonth));
+                    }
+                    else
+                    {
+                        available = IsWideAmountRange(bounds)
+                            ? Math.Min(availableTotal, bounds.Max)
+                            : Math.Min(
+                                availableTotal,
+                                remainingMonthTarget > 0
+                                    ? Math.Max(remainingMonthTarget, bounds.Min)
+                                    : availableTotal);
+                    }
 
                     if (!TryCreateNativeUniqueAmount(rule, available, random, preferLower: false, records, isIncome, amountUsage, out var amount))
                     {
@@ -4466,8 +4504,7 @@ public sealed class FlowAutoGenerator
 
     private static void EnsureNativeOptionalReferenceRuleCoverage(
         FlowAutoGenerationRequest request,
-        DateTime start,
-        DateTime end,
+        MonthlyAmountPlan monthlyPlan,
         double incomeCap,
         Random random,
         ICollection<FlowRecord> records,
@@ -4500,10 +4537,19 @@ public sealed class FlowAutoGenerator
             {
                 var isIncome = IsIncomeRuleSafe(rule);
                 var bounds = GetRuleAmountBounds(rule);
-                var budget = isIncome
+                var availableTotal = isIncome
                     ? RoundMoney(Math.Max(0, incomeCap - SumIncome(records)))
                     : RoundMoney(Math.Max(0, SumIncome(records) - SumExpense(records)));
-                if (budget < bounds.Min - 0.009d)
+                if (!TrySelectNativeCoverageMonth(
+                        monthlyPlan,
+                        rule,
+                        isIncome,
+                        availableTotal,
+                        records,
+                        scheduleState,
+                        random,
+                        out var month,
+                        out var budget))
                 {
                     break;
                 }
@@ -4521,7 +4567,7 @@ public sealed class FlowAutoGenerator
                     break;
                 }
 
-                var accountTime = PickNativeDistributedTime(start, end, rule, isIncome, random, scheduleState);
+                var accountTime = PickNativeDistributedTime(month.Start, month.End, rule, isIncome, random, scheduleState);
                 var record = CreateRecordFromRule(
                     request,
                     rule,
@@ -4535,6 +4581,62 @@ public sealed class FlowAutoGenerator
                 existingReferenceCounts[rule.Index] = existingReferenceCounts.GetValueOrDefault(rule.Index) + 1;
             }
         }
+    }
+
+    private static bool TrySelectNativeCoverageMonth(
+        MonthlyAmountPlan monthlyPlan,
+        GenerateReferenceRule rule,
+        bool isIncome,
+        double availableTotal,
+        IEnumerable<FlowRecord> records,
+        NativeScheduleState scheduleState,
+        Random random,
+        out (DateTime Start, DateTime End) month,
+        out double budget)
+    {
+        month = default;
+        budget = 0;
+        var bounds = GetRuleAmountBounds(rule);
+        if (availableTotal < bounds.Min - 0.009d)
+        {
+            return false;
+        }
+
+        var candidates = Enumerable.Range(0, monthlyPlan.Months.Count)
+            .Select(index =>
+            {
+                var range = monthlyPlan.Months[index];
+                var monthRecords = records.Where(item => IsRecordInRange(item, range.Start, range.End));
+                var current = isIncome ? SumIncome(monthRecords) : SumExpense(monthRecords);
+                var target = isIncome ? monthlyPlan.IncomeTargets[index] : monthlyPlan.ExpenseTargets[index];
+                var fundingRoom = isIncome
+                    ? availableTotal
+                    : Math.Min(availableTotal, Math.Max(0, SumIncome(monthRecords) - SumExpense(monthRecords)));
+                var remaining = RoundMoney(Math.Min(fundingRoom, Math.Max(0, target - current)));
+                return new
+                {
+                    Range = range,
+                    Current = current,
+                    Target = target,
+                    Remaining = remaining,
+                    Completion = target > 0.009d ? current / target : double.MaxValue
+                };
+            })
+            .Where(item => item.Remaining >= bounds.Min - 0.009d)
+            .Where(item => scheduleState.GetCandidateDates(item.Range.Start, item.Range.End, rule).Count > 0)
+            .OrderBy(item => item.Completion)
+            .ThenByDescending(item => item.Remaining)
+            .ThenBy(_ => random.Next())
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        var selected = candidates[0];
+        month = selected.Range;
+        budget = RoundMoney(Math.Min(bounds.Max, selected.Remaining));
+        return budget >= bounds.Min - 0.009d;
     }
 
     private static bool EnsureNativeFinalReferenceRuleCoverage(
