@@ -202,6 +202,7 @@ public sealed class FlowAutoGenerator
         GenerateNativeRequiredReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         GenerateNativeOptionalReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         CompleteNativeConfiguredTotals(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        RedistributeFirstMonthIncomeRecords(request, monthlyPlan, random, records, scheduleState);
         perfTrace.Mark("base generation", records);
 
         if (request.BankUser.AutoCalculateInterest)
@@ -370,6 +371,13 @@ public sealed class FlowAutoGenerator
             ReducePositiveFinalBalanceSafely(records, request, openingBalance);
             RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
         }
+        RedistributeFirstMonthIncomeRecords(
+            request,
+            monthlyPlan,
+            random,
+            records,
+            NativeScheduleState.From(records),
+            openingBalance);
         perfTrace.Mark("final balance", records);
         PruneZeroAmountRecords(records);
         ApplyBalances(records, openingBalance);
@@ -4337,6 +4345,116 @@ public sealed class FlowAutoGenerator
             amountUsage);
     }
 
+    private static void RedistributeFirstMonthIncomeRecords(
+        FlowAutoGenerationRequest request,
+        MonthlyAmountPlan monthlyPlan,
+        Random random,
+        List<FlowRecord> records,
+        NativeScheduleState scheduleState,
+        double? openingBalance = null)
+    {
+        var monthCount = monthlyPlan.Months.Count;
+        if (monthCount < 4 || records.Count == 0)
+        {
+            return;
+        }
+
+        var monthIncomes = monthlyPlan.Months
+            .Select(month => SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End))))
+            .ToArray();
+        var totalIncome = RoundMoney(monthIncomes.Sum());
+        var firstIncome = monthIncomes[0];
+        if (totalIncome <= 0.009d || firstIncome <= 0.009d)
+        {
+            return;
+        }
+
+        var average = totalIncome / monthCount;
+        var otherMax = monthIncomes.Skip(1).DefaultIfEmpty(0).Max();
+        if (firstIncome <= average * 1.45d + 0.009d
+            || firstIncome <= otherMax * 1.18d + 0.009d)
+        {
+            return;
+        }
+
+        var plannedFirst = monthlyPlan.IncomeTargets.Length > 0 ? monthlyPlan.IncomeTargets[0] : average;
+        var softCap = Math.Max(average * 1.18d, plannedFirst * 1.12d);
+        if (otherMax > 0.009d)
+        {
+            softCap = Math.Min(softCap, Math.Max(average, otherMax * 1.08d));
+        }
+
+        softCap = RoundMoney(Math.Max(0, softCap));
+        if (firstIncome <= softCap + 0.009d)
+        {
+            return;
+        }
+
+        var firstMonth = monthlyPlan.Months[0];
+        var movableRecords = records
+            .Where(item => item.TradeMoney > 0.009d)
+            .Where(item => item.AccountTime.HasValue)
+            .Where(item => IsRecordInRange(item, firstMonth.Start, firstMonth.End))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => IsGeneratedReferenceRecord(item))
+            .Where(item => !IsRequiredGeneratedRecord(item))
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item) as GenerateReferenceRule,
+                Amount = RoundMoney(Math.Abs(item.TradeMoney ?? 0))
+            })
+            .Where(item => item.Rule is not null && IsIncomeRuleSafe(item.Rule) && item.Amount > 0.009d)
+            .OrderByDescending(item => item.Amount)
+            .ThenBy(_ => random.Next())
+            .ToList();
+
+        foreach (var item in movableRecords)
+        {
+            if (monthIncomes[0] <= softCap + 0.009d)
+            {
+                break;
+            }
+
+            var destinationIndex = Enumerable.Range(1, monthCount - 1)
+                .Where(index => scheduleState.GetCandidateDates(monthlyPlan.Months[index].Start, monthlyPlan.Months[index].End, item.Rule!).Count > 0)
+                .OrderBy(index => monthIncomes[index] / Math.Max(1d, monthlyPlan.IncomeTargets[index]))
+                .ThenBy(index => monthIncomes[index])
+                .ThenBy(_ => random.Next())
+                .FirstOrDefault(-1);
+            if (destinationIndex < 1)
+            {
+                continue;
+            }
+
+            var destination = monthlyPlan.Months[destinationIndex];
+            var originalTime = item.Record.AccountTime!.Value;
+            item.Record.AccountTime = PickNativeDistributedTime(
+                destination.Start,
+                destination.End,
+                item.Rule!,
+                isIncome: true,
+                random,
+                scheduleState);
+            scheduleState.Move(item.Record, originalTime);
+            if (openingBalance.HasValue)
+            {
+                ApplyBalances(records, openingBalance.Value);
+                if (GetMinimumBalance(records, openingBalance.Value) < -0.009d)
+                {
+                    var movedTime = item.Record.AccountTime!.Value;
+                    item.Record.AccountTime = originalTime;
+                    scheduleState.Move(item.Record, movedTime);
+                    ApplyBalances(records, openingBalance.Value);
+                    continue;
+                }
+            }
+
+            monthIncomes[0] = RoundMoney(monthIncomes[0] - item.Amount);
+            monthIncomes[destinationIndex] = RoundMoney(monthIncomes[destinationIndex] + item.Amount);
+        }
+    }
+
     private static void FillNativeSignedTotalToTarget(
         FlowAutoGenerationRequest request,
         MonthlyAmountPlan monthlyPlan,
@@ -7320,6 +7438,7 @@ public sealed class FlowAutoGenerator
         if (request.Config.SelectIndex != 2)
         {
             AmplifyMonthlyBalanceSwing(incomeTargets, expenseTargets, random);
+            PreventFirstMonthIncomeSpike(incomeTargets, targetIncome, random);
             SpreadMonthlyExpenseTargets(expenseTargets, incomeTargets, targetExpense, expenseRules);
         }
 
@@ -8360,6 +8479,93 @@ public sealed class FlowAutoGenerator
             incomeTargets[index] = reorderedIncome[index];
             expenseTargets[index] = reorderedExpense[index];
         }
+    }
+
+    private static void PreventFirstMonthIncomeSpike(
+        double[] incomeTargets,
+        double targetIncome,
+        Random random)
+    {
+        var monthCount = incomeTargets.Length;
+        if (monthCount < 4 || targetIncome <= 0.009d)
+        {
+            return;
+        }
+
+        var total = RoundMoney(incomeTargets.Sum());
+        if (total <= 0.009d || incomeTargets[0] <= 0.009d)
+        {
+            return;
+        }
+
+        var average = total / monthCount;
+        var otherMax = incomeTargets
+            .Skip(1)
+            .DefaultIfEmpty(0)
+            .Max();
+        var first = incomeTargets[0];
+        var isObviousFirstPeak = first > average * 1.75d + 0.009d
+            && first > otherMax * 1.45d + 0.009d;
+        if (!isObviousFirstPeak)
+        {
+            return;
+        }
+
+        var absoluteShareCap = monthCount <= 6 ? 0.34d : 0.26d;
+        var softCap = Math.Max(average * (1.20d + random.NextDouble() * 0.30d), otherMax * (1.08d + random.NextDouble() * 0.18d));
+        softCap = Math.Min(softCap, total * absoluteShareCap);
+        softCap = RoundMoney(Math.Max(average * 0.88d, softCap));
+        var excess = RoundMoney(first - softCap);
+        if (excess <= 0.009d)
+        {
+            return;
+        }
+
+        incomeTargets[0] = RoundMoney(first - excess);
+        var receiverIndexes = Enumerable.Range(1, monthCount - 1)
+            .OrderBy(index => incomeTargets[index])
+            .ThenBy(_ => random.Next())
+            .ToList();
+        foreach (var index in receiverIndexes)
+        {
+            if (excess <= 0.009d)
+            {
+                break;
+            }
+
+            var localCap = Math.Max(average * (1.35d + random.NextDouble() * 0.55d), incomeTargets[index] + average * 0.35d);
+            var room = RoundMoney(Math.Max(0, localCap - incomeTargets[index]));
+            if (room <= 0.009d)
+            {
+                continue;
+            }
+
+            var add = RoundMoney(Math.Min(room, excess));
+            incomeTargets[index] = RoundMoney(incomeTargets[index] + add);
+            excess = RoundMoney(excess - add);
+        }
+
+        if (excess > 0.009d)
+        {
+            var index = receiverIndexes
+                .OrderBy(item => incomeTargets[item])
+                .ThenBy(_ => random.Next())
+                .FirstOrDefault(1);
+            incomeTargets[index] = RoundMoney(incomeTargets[index] + excess);
+        }
+
+        NormalizeMonthlyTargetsInPlace(incomeTargets, targetIncome);
+    }
+
+    private static void NormalizeMonthlyTargetsInPlace(double[] targets, double targetTotal)
+    {
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        var normalized = NormalizeRawTargets(targets, targetTotal);
+        Array.Copy(normalized, targets, targets.Length);
     }
 
     private static void SpreadMonthlyExpenseTargets(
