@@ -190,6 +190,7 @@ public sealed class FlowAutoGenerator
 
     public FlowAutoGenerationResult Generate(FlowAutoGenerationRequest request)
     {
+        request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
         if (end < start)
@@ -487,6 +488,7 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
         if (end < start)
@@ -566,6 +568,7 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationResult source,
         double correctedOpeningBalance)
     {
+        request = ExcludeUngeneratableReferenceRules(request);
         var openingBalance = RoundMoney(correctedOpeningBalance);
         var records = source.Records
             .Select(item =>
@@ -629,6 +632,7 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         List<FlowRecord> records)
     {
+        request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
         if (end < start)
@@ -696,6 +700,7 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         List<FlowRecord> records)
     {
+        request = ExcludeUngeneratableReferenceRules(request);
         if (records.Count == 0)
         {
             return;
@@ -10682,6 +10687,9 @@ public sealed class FlowAutoGenerator
         DateTime accountTime,
         double amount)
     {
+        var amountBounds = GetRuleAmountBounds(rule);
+        var amountSign = amount < -0.009d ? -1d : 1d;
+        amount = amountSign * ClampAmountToBounds(Math.Abs(amount), amountBounds);
         var record = CreateBaseRecord(request, accountTime, amount);
         CopyMatchingProperties(rule, record);
         CopyByMatchingColumnNames(rule, ruleColumns, request.Bank.FlowColumns, record);
@@ -10690,7 +10698,6 @@ public sealed class FlowAutoGenerator
         record.AccountTime = accountTime;
         record.TradeMoney = amount;
         record.ExtraFields[AmountUnitField] = FormatInvariant(GetAmountUnit(rule.FloutLength));
-        var amountBounds = GetRuleAmountBounds(rule);
         record.ExtraFields[AmountMinField] = FormatInvariant(amountBounds.Min);
         record.ExtraFields[AmountMaxField] = FormatInvariant(amountBounds.Max);
         record.ExtraFields[SourceKindField] = rule is GenerateConstRule ? ConstSourceKind : ReferenceSourceKind;
@@ -14113,7 +14120,51 @@ public sealed class FlowAutoGenerator
         High
     }
 
+    private static FlowAutoGenerationRequest ExcludeUngeneratableReferenceRules(FlowAutoGenerationRequest request)
+    {
+        List<GenerateReferenceRule>? filteredReferences = null;
+        for (var index = 0; index < request.References.Count; index++)
+        {
+            var rule = request.References[index];
+            if (!rule.IsCheck || TryGetRuleAmountBounds(rule, out _))
+            {
+                filteredReferences?.Add(rule);
+                continue;
+            }
+
+            filteredReferences ??= request.References.Take(index).ToList();
+        }
+
+        if (filteredReferences is null)
+        {
+            return request;
+        }
+
+        return new FlowAutoGenerationRequest
+        {
+            Bank = request.Bank,
+            BankUser = request.BankUser,
+            Config = request.Config,
+            References = filteredReferences,
+            ConstItems = request.ConstItems,
+            InterestSetting = request.InterestSetting,
+            OpeningBalanceOverride = request.OpeningBalanceOverride
+        };
+    }
+
     private static AmountBounds GetRuleAmountBounds(FlowRuleBase rule)
+    {
+        if (TryGetRuleAmountBounds(rule, out var bounds))
+        {
+            return bounds;
+        }
+
+        throw new InvalidOperationException(
+            $"参照明细 ID {rule.Index} 的金额范围 {rule.MinMoney:0.##}~{rule.MaxMoney:0.##} " +
+            $"与小数位 {rule.FloutLength} 冲突，范围内没有符合位数规则的金额。");
+    }
+
+    private static bool TryGetRuleAmountBounds(FlowRuleBase rule, out AmountBounds bounds)
     {
         var unit = GetAmountUnit(rule.FloutLength);
         var min = Math.Max(0.01d, rule.MinMoney ?? 10d);
@@ -14132,10 +14183,26 @@ public sealed class FlowAutoGenerator
 
         if (roundedMax < roundedMin)
         {
-            roundedMax = roundedMin;
+            bounds = default;
+            return false;
         }
 
-        return new AmountBounds(RoundMoney(roundedMin), RoundMoney(roundedMax), unit);
+        if (RequiresNonZeroPrecisionDigit(unit))
+        {
+            var firstValid = FindValidAmountAtOrAbove(roundedMin, roundedMax, unit);
+            var lastValid = FindValidAmountAtOrBelow(roundedMax, roundedMin, unit);
+            if (!firstValid.HasValue || !lastValid.HasValue || firstValid.Value > lastValid.Value + 0.009d)
+            {
+                bounds = default;
+                return false;
+            }
+
+            roundedMin = firstValid.Value;
+            roundedMax = lastValid.Value;
+        }
+
+        bounds = new AmountBounds(RoundMoney(roundedMin), RoundMoney(roundedMax), unit);
+        return true;
     }
 
     private static AmountBounds GetRecordAmountBounds(FlowRecord record)
@@ -14173,7 +14240,67 @@ public sealed class FlowAutoGenerator
             bounded = bounds.Max;
         }
 
+        if (!HasRequiredNonZeroPrecisionDigit(bounded, bounds.Unit))
+        {
+            var lower = FindValidAmountAtOrBelow(bounded, bounds.Min, bounds.Unit);
+            var upper = FindValidAmountAtOrAbove(bounded, bounds.Max, bounds.Unit);
+            bounded = (lower, upper) switch
+            {
+                ({ } lowerValue, { } upperValue) =>
+                    bounded - lowerValue <= upperValue - bounded ? lowerValue : upperValue,
+                ({ } lowerValue, null) => lowerValue,
+                (null, { } upperValue) => upperValue,
+                _ => throw new InvalidOperationException(
+                    $"金额范围 {bounds.Min:0.##}~{bounds.Max:0.##} 内没有符合位数规则的金额。")
+            };
+        }
+
         return RoundMoney(bounded);
+    }
+
+    private static bool RequiresNonZeroPrecisionDigit(double unit)
+    {
+        return unit >= 10d - 0.0000001d;
+    }
+
+    private static bool HasRequiredNonZeroPrecisionDigit(double amount, double unit)
+    {
+        if (!RequiresNonZeroPrecisionDigit(unit))
+        {
+            return true;
+        }
+
+        var precisionPlaceValue = Math.Floor((Math.Abs(amount) + 0.0000001d) / unit);
+        var digit = (int)(precisionPlaceValue % 10d);
+        return digit is >= 1 and <= 9;
+    }
+
+    private static double? FindValidAmountAtOrAbove(double start, double maximum, double unit)
+    {
+        var candidate = CeilAmountToUnit(start, unit);
+        for (var offset = 0; offset <= 10 && candidate <= maximum + 0.009d; offset++, candidate = RoundMoney(candidate + unit))
+        {
+            if (HasRequiredNonZeroPrecisionDigit(candidate, unit))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static double? FindValidAmountAtOrBelow(double start, double minimum, double unit)
+    {
+        var candidate = FloorAmountToUnit(start, unit);
+        for (var offset = 0; offset <= 10 && candidate >= minimum - 0.009d; offset++, candidate = RoundMoney(candidate - unit))
+        {
+            if (HasRequiredNonZeroPrecisionDigit(candidate, unit))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private static double MoveAmountAwayFromEdges(double amount, AmountBounds bounds, Random random)
