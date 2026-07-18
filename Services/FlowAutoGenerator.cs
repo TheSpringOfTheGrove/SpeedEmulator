@@ -219,6 +219,7 @@ public sealed class FlowAutoGenerator
         GenerateNativeOptionalReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         EnsureNativeOptionalReferenceRuleCoverage(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         CompleteNativeConfiguredTotals(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        ExpandWechatReferenceVolume(request, start, end, random, records, scheduleState, amountUsage);
         RedistributeFirstMonthIncomeRecords(request, monthlyPlan, random, records, scheduleState);
         perfTrace.Mark("base generation", records);
 
@@ -423,6 +424,8 @@ public sealed class FlowAutoGenerator
         EnforceLowReferenceRecordRatio(records, request, start, end, openingBalance, random);
         RebalanceLowReferenceNaturalSegmentTotals(records, openingBalance, random);
         EnsureConfiguredFractionalReferenceAmounts(records, random);
+        RestoreConfiguredIncomeWithMatchedExpense(records, request, start, end, openingBalance, random);
+        RedistributeFinalMonthlyExpenseWaves(records, request, start, end, openingBalance, random);
         ApplyBalances(records, openingBalance);
         if (GetMinimumBalance(records, openingBalance) < -0.009d)
         {
@@ -442,6 +445,7 @@ public sealed class FlowAutoGenerator
             ForceCloseExternalFinalBalance(request, records);
         }
 
+        CompactWechatReferenceVolume(request, start, end, random, records);
         ApplyBalances(records, openingBalance);
         if (GetMinimumBalance(records, openingBalance) < -0.009d)
         {
@@ -451,6 +455,8 @@ public sealed class FlowAutoGenerator
             ReducePositiveFinalBalanceSafely(records, request, openingBalance);
             ApplyBalances(records, openingBalance);
         }
+        EnsureWideExpenseUpperSegmentPresence(records, openingBalance, random);
+        ApplyBalances(records, openingBalance);
         perfTrace.Mark("final apply", records);
 
         var incomeTotal = SumIncome(records);
@@ -482,6 +488,192 @@ public sealed class FlowAutoGenerator
             RequiresOpeningBalanceCorrection = needsCorrection,
             RequiredOpeningBalance = RoundMoney(Math.Max(0, requiredOpeningBalance))
         };
+    }
+
+    private static bool EnsureWideExpenseUpperSegmentPresence(
+        List<FlowRecord> records,
+        double openingBalance,
+        Random random)
+    {
+        if (records.Count == 0 || GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            return false;
+        }
+
+        var amountSnapshot = CaptureRecordAmountSnapshot(records);
+        var expenseTotalBefore = SumExpense(records);
+        var changed = false;
+        var groups = records
+            .Where(IsReferenceGeneratedRecord)
+            .Where(item => item.TradeMoney < -0.009d && !IsSystemInterestRecord(item))
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                return (
+                    bounds.Min,
+                    bounds.Max,
+                    bounds.Unit);
+            })
+            .Where(group => group.Key.Max >= 100_000d - 0.009d)
+            .Where(group => group.Count() >= 3)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit);
+            var segments = CreateRuleAmountDistributionSegments(bounds);
+            if (segments.Count < 3)
+            {
+                continue;
+            }
+
+            var tailSegments = segments
+                .Skip(Math.Max(0, segments.Count - 4))
+                .ToList();
+            var tailMinimum = tailSegments[0].Min;
+            var groupRecords = group
+                .Where(item => item.AccountTime.HasValue)
+                .OrderBy(item => item.AccountTime)
+                .ToList();
+            var desiredUpperCount = Math.Max(
+                1,
+                (int)Math.Round(groupRecords.Count * 0.16d, MidpointRounding.AwayFromZero));
+            var existingUpperCount = groupRecords.Count(item =>
+                Math.Abs(item.TradeMoney ?? 0) >= tailMinimum - 0.009d);
+            var missingUpperCount = Math.Max(0, desiredUpperCount - existingUpperCount);
+            if (missingUpperCount <= 0)
+            {
+                continue;
+            }
+
+            var targets = groupRecords
+                .Where(item => Math.Abs(item.TradeMoney ?? 0) < tailMinimum - 0.009d)
+                .GroupBy(item => new DateTime(item.AccountTime!.Value.Year, item.AccountTime.Value.Month, 1))
+                .OrderBy(_ => random.Next())
+                .SelectMany(monthGroup => monthGroup
+                    .OrderByDescending(item => item.AccountTime)
+                    .Take(Math.Max(1, (int)Math.Ceiling(missingUpperCount / (double)Math.Max(1, groupRecords
+                        .Select(record => new DateTime(record.AccountTime!.Value.Year, record.AccountTime.Value.Month, 1))
+                        .Distinct()
+                        .Count())))))
+                .Take(missingUpperCount)
+                .ToList();
+            var segmentOffset = random.Next(tailSegments.Count);
+            for (var targetIndex = 0; targetIndex < targets.Count; targetIndex++)
+            {
+                var target = targets[targetIndex];
+                var targetMonth = new DateTime(
+                    target.AccountTime!.Value.Year,
+                    target.AccountTime.Value.Month,
+                    1);
+                var donors = groupRecords
+                    .Where(item => !ReferenceEquals(item, target))
+                    .Where(item => item.AccountTime < target.AccountTime)
+                    .Where(item => item.AccountTime.HasValue
+                        && item.AccountTime.Value.Year == targetMonth.Year
+                        && item.AccountTime.Value.Month == targetMonth.Month)
+                    .Where(item => Math.Abs(item.TradeMoney ?? 0) < tailMinimum - 0.009d)
+                    .ToList();
+                var available = RoundMoney(donors.Sum(item =>
+                    Math.Max(0, Math.Abs(item.TradeMoney ?? 0) - bounds.Min)));
+                var current = RoundMoney(Math.Abs(target.TradeMoney ?? 0));
+                var targetSegment = tailSegments[(segmentOffset + targetIndex) % tailSegments.Count];
+                var ratio = 0.18d + (random.NextDouble() * 0.64d);
+                var desired = ClampAmountToBounds(
+                    targetSegment.Min + ((targetSegment.Max - targetSegment.Min) * ratio),
+                    bounds);
+                desired = Math.Min(desired, ClampAmountToBounds(current + available, bounds));
+                if (desired < targetSegment.Min - 0.009d || desired <= current + 0.009d)
+                {
+                    continue;
+                }
+
+                var snapshot = CaptureRecordAmountSnapshot(groupRecords);
+                var transfer = RoundMoney(desired - current);
+                if (!TryDecreaseExpenseDonorsBalanced(donors, bounds, transfer, random))
+                {
+                    RestoreRecordAmounts(snapshot);
+                    continue;
+                }
+
+                ApplySignedAmount(target, -1d, desired);
+                ApplyBalances(records, openingBalance);
+                if (GetMinimumBalance(records, openingBalance) < -0.009d)
+                {
+                    RestoreRecordAmounts(snapshot);
+                    ApplyBalances(records, openingBalance);
+                    continue;
+                }
+
+                changed = true;
+            }
+        }
+
+        if (Math.Abs(SumExpense(records) - expenseTotalBefore) > 0.009d)
+        {
+            RestoreRecordAmounts(amountSnapshot);
+            ApplyBalances(records, openingBalance);
+            return false;
+        }
+
+        return changed;
+    }
+
+    private static bool TryDecreaseExpenseDonorsBalanced(
+        IReadOnlyList<FlowRecord> donors,
+        AmountBounds bounds,
+        double amount,
+        Random random)
+    {
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var remaining = RoundAmountToUnit(Math.Max(0, amount), unit);
+        for (var pass = 0; pass < 4 && remaining >= unit - 0.009d; pass++)
+        {
+            var candidates = donors
+                .Where(item => Math.Abs(item.TradeMoney ?? 0) >= bounds.Min + unit - 0.009d)
+                .OrderByDescending(item => Math.Abs(item.TradeMoney ?? 0))
+                .ThenBy(_ => random.Next())
+                .ToList();
+            for (var index = 0; index < candidates.Count && remaining >= unit - 0.009d; index++)
+            {
+                var record = candidates[index];
+                var current = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+                var room = RoundMoney(current - bounds.Min);
+                var slotsLeft = candidates.Count - index;
+                var requested = RoundAmountToUnit(remaining / Math.Max(1, slotsLeft), unit);
+                var reduction = FloorAmountToUnit(Math.Min(room, Math.Min(remaining, Math.Max(unit, requested))), unit);
+                if (reduction < unit - 0.009d)
+                {
+                    continue;
+                }
+
+                var nextAmount = ClampAmountToBounds(current - reduction, bounds);
+                var actualReduction = RoundMoney(current - nextAmount);
+                if (actualReduction <= 0.009d || actualReduction > remaining + 0.009d)
+                {
+                    var fallback = FindValidAmountAtOrAbove(
+                        Math.Max(bounds.Min, current - remaining),
+                        current - unit,
+                        unit);
+                    if (!fallback.HasValue)
+                    {
+                        continue;
+                    }
+
+                    nextAmount = ClampAmountToBounds(fallback.Value, bounds);
+                    actualReduction = RoundMoney(current - nextAmount);
+                    if (actualReduction <= 0.009d || actualReduction > remaining + 0.009d)
+                    {
+                        continue;
+                    }
+                }
+
+                ApplySignedAmount(record, -1d, nextAmount);
+                remaining = RoundMoney(remaining - actualReduction);
+            }
+        }
+
+        return remaining <= 0.009d;
     }
 
     public FlowAutoGenerationResult ApplyNegativeBalanceCorrection(
@@ -2730,6 +2922,116 @@ public sealed class FlowAutoGenerator
         return changed;
     }
 
+    private static bool RedistributeFinalMonthlyExpenseWaves(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        double openingBalance,
+        Random random)
+    {
+        var months = EnumerateMonths(start, end).ToList();
+        if (months.Count < 4 || records.Count == 0)
+        {
+            return false;
+        }
+
+        ApplyBalances(records, openingBalance);
+        var averageIncome = Math.Max(1d, SumIncome(records) / months.Count);
+        var scheduleState = NativeScheduleState.From(records);
+        var dayCounts = BuildDayCounts(records, start, end);
+        var changed = false;
+        var cycleStart = 0;
+        var totalMoves = 0;
+        var maxTotalMoves = Math.Min(600, Math.Max(80, records.Count / 2));
+
+        while (cycleStart < months.Count - 1 && totalMoves < maxTotalMoves)
+        {
+            var buildLength = random.Next(1, 4);
+            var drainIndex = Math.Min(months.Count - 1, cycleStart + buildLength);
+            var drainMonth = months[drainIndex];
+            var drainDays = Math.Max(1, (drainMonth.End.Date - drainMonth.Start.Date).Days + 1);
+            var drainWindowStart = drainMonth.Start.Date.AddDays(Math.Max(0, (int)Math.Floor(drainDays * 0.45d)));
+            var lowTarget = Math.Max(100d, averageIncome * (0.001d + (random.NextDouble() * 0.005d)));
+            var closingBalance = CalculateBalanceThroughDate(records, openingBalance, drainMonth.End);
+            var movesThisCycle = 0;
+
+            while (closingBalance > lowTarget + 0.009d
+                   && totalMoves < maxTotalMoves
+                   && movesThisCycle < 100)
+            {
+                var spendable = RoundMoney(Math.Max(0, closingBalance - 0.01d));
+                var desired = RoundMoney(Math.Max(0, closingBalance - lowTarget));
+                var candidates = records
+                    .Where(item => (item.TradeMoney ?? 0) < -0.009d)
+                    .Where(item => item.AccountTime.HasValue && item.AccountTime.Value > drainMonth.End)
+                    .Where(item => IsGeneratedReferenceRecord(item))
+                    .Where(item => !IsRequiredGeneratedRecord(item) && !IsSystemInterestRecord(item))
+                    .Where(item => dayCounts.GetValueOrDefault(item.AccountTime!.Value.Date) > 1)
+                    .Select(item => new
+                    {
+                        Record = item,
+                        Rule = ResolveRecordSourceRule(request, item) as GenerateReferenceRule,
+                        Amount = RoundMoney(Math.Abs(item.TradeMoney ?? 0))
+                    })
+                    .Where(item => item.Rule is not null && !IsIncomeRuleSafe(item.Rule))
+                    .Where(item => item.Amount <= spendable + 0.009d)
+                    .Where(item => scheduleState.GetCandidateDates(drainWindowStart, drainMonth.End, item.Rule!).Count > 0)
+                    .OrderBy(item => Math.Abs(desired - item.Amount))
+                    .ThenByDescending(item => item.Amount)
+                    .Take(24)
+                    .ToList();
+                if (candidates.Count == 0)
+                {
+                    break;
+                }
+
+                var selected = candidates[0];
+                var originalTime = selected.Record.AccountTime!.Value;
+                var movedTime = PickNativeDistributedTime(
+                    drainWindowStart,
+                    drainMonth.End,
+                    selected.Rule!,
+                    isIncome: false,
+                    random,
+                    scheduleState);
+                selected.Record.AccountTime = movedTime;
+                scheduleState.Move(selected.Record, originalTime);
+                dayCounts[originalTime.Date] = Math.Max(0, dayCounts.GetValueOrDefault(originalTime.Date) - 1);
+                dayCounts[movedTime.Date] = dayCounts.GetValueOrDefault(movedTime.Date) + 1;
+                ApplyBalances(records, openingBalance);
+                if (GetMinimumBalance(records, openingBalance) < -0.009d)
+                {
+                    selected.Record.AccountTime = originalTime;
+                    scheduleState.Move(selected.Record, movedTime);
+                    dayCounts[movedTime.Date] = Math.Max(0, dayCounts.GetValueOrDefault(movedTime.Date) - 1);
+                    dayCounts[originalTime.Date] = dayCounts.GetValueOrDefault(originalTime.Date) + 1;
+                    ApplyBalances(records, openingBalance);
+                    break;
+                }
+
+                closingBalance = CalculateBalanceThroughDate(records, openingBalance, drainMonth.End);
+                changed = true;
+                movesThisCycle++;
+                totalMoves++;
+            }
+
+            cycleStart = drainIndex + 1;
+        }
+
+        return changed;
+    }
+
+    private static double CalculateBalanceThroughDate(
+        IEnumerable<FlowRecord> records,
+        double openingBalance,
+        DateTime end)
+    {
+        return RoundMoney(openingBalance + records
+            .Where(item => item.AccountTime.HasValue && item.AccountTime.Value <= end)
+            .Sum(item => item.TradeMoney ?? 0));
+    }
+
     private static int CalculateMonthlySwingCycleCount(int days, int incomeRecordCount, int expenseRecordCount, bool isWechat)
     {
         if (days <= 0 || incomeRecordCount <= 0 || expenseRecordCount <= 0)
@@ -4475,7 +4777,6 @@ public sealed class FlowAutoGenerator
         {
             var month = monthlyPlan.Months[monthIndex];
             var monthIncomeTarget = monthlyPlan.IncomeTargets[monthIndex];
-            var monthExpenseTarget = monthlyPlan.ExpenseTargets[monthIndex];
 
             GenerateNativeOptionalForMonth(
                 request,
@@ -4489,9 +4790,22 @@ public sealed class FlowAutoGenerator
                 records,
                 scheduleState,
                 amountUsage);
+        }
 
-            var monthIncome = SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End)));
-            var expenseTarget = Math.Min(monthExpenseTarget, Math.Max(0, monthIncome));
+        for (var monthIndex = 0; monthIndex < monthlyPlan.Months.Count; monthIndex++)
+        {
+            var month = monthlyPlan.Months[monthIndex];
+            var monthExpenseTarget = monthlyPlan.ExpenseTargets[monthIndex];
+            var throughMonth = records.Where(item =>
+                item.AccountTime.HasValue && item.AccountTime.Value <= month.End);
+            var availableThroughMonth = RoundMoney(Math.Max(
+                0,
+                SumIncome(throughMonth) - SumExpense(throughMonth)));
+            var existingMonthExpense = SumExpense(records.Where(item =>
+                IsRecordInRange(item, month.Start, month.End)));
+            var expenseTarget = Math.Min(
+                monthExpenseTarget,
+                RoundMoney(existingMonthExpense + availableThroughMonth));
             GenerateNativeOptionalForMonth(
                 request,
                 month.Start,
@@ -5114,6 +5428,425 @@ public sealed class FlowAutoGenerator
             amountUsage);
     }
 
+    private static void ExpandWechatReferenceVolume(
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        Random random,
+        List<FlowRecord> records,
+        NativeScheduleState scheduleState,
+        AmountUsageTracker amountUsage)
+    {
+        if (!IsWechatBank(request.Bank) || records.Count == 0)
+        {
+            return;
+        }
+
+        var dayCount = Math.Max(1, (end.Date - start.Date).Days + 1);
+        var targetTotal = Math.Max(
+            records.Count,
+            (int)Math.Round(
+                dayCount * (21.2d + (random.NextDouble() * 1.2d)),
+                MidpointRounding.AwayFromZero));
+        var incomeRatio = 0.54d + (random.NextDouble() * 0.02d);
+        var targetIncomeCount = (int)Math.Round(targetTotal * incomeRatio, MidpointRounding.AwayFromZero);
+        var targetExpenseCount = Math.Max(0, targetTotal - targetIncomeCount);
+
+        ExpandWechatDirectionVolume(
+            request,
+            start,
+            end,
+            targetIncomeCount,
+            isIncome: true,
+            random,
+            records,
+            scheduleState,
+            amountUsage);
+        ExpandWechatDirectionVolume(
+            request,
+            start,
+            end,
+            targetExpenseCount,
+            isIncome: false,
+            random,
+            records,
+            scheduleState,
+            amountUsage);
+
+        ConsolidateWechatHighExpenseRecords(records, random);
+        PruneZeroAmountRecords(records);
+    }
+
+    private static void ExpandWechatDirectionVolume(
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        int targetCount,
+        bool isIncome,
+        Random random,
+        List<FlowRecord> records,
+        NativeScheduleState scheduleState,
+        AmountUsageTracker amountUsage)
+    {
+        var currentCount = records.Count(item =>
+            !IsSystemInterestRecord(item)
+            && GetAmountSign(item.TradeMoney ?? 0) == (isIncome ? 1 : -1));
+        var missingCount = Math.Max(0, targetCount - currentCount);
+        if (missingCount <= 0)
+        {
+            return;
+        }
+
+        var lowRules = request.References
+            .Where(item => item.IsCheck && IsIncomeRuleSafe(item) == isIncome)
+            .Where(item => GetRequiredMonthlyCount(item) <= 0)
+            .Select(item => TryCreateCapacityTierAmountSlice(item, ReferenceCapacityTier.Low, out var slice)
+                ? slice
+                : null)
+            .Where(item => item is not null)
+            .Cast<GenerateReferenceRule>()
+            .OrderBy(item => GetRuleAmountBounds(item).Max)
+            .ThenBy(_ => random.Next())
+            .ToList();
+        if (lowRules.Count == 0)
+        {
+            return;
+        }
+
+        var donors = records
+            .Where(IsGeneratedReferenceRecord)
+            .Where(item => !IsRequiredGeneratedRecord(item))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => GetAmountSign(item.TradeMoney ?? 0) == (isIncome ? 1 : -1))
+            .Where(item => GetGeneratedAmountCapacityTier(Math.Abs(item.TradeMoney ?? 0)) != ReferenceCapacityTier.Low)
+            .Where(item => Math.Abs(item.TradeMoney ?? 0) > GetRecordAmountBounds(item).Min + 0.009d)
+            .ToList();
+        var donorCapacity = RoundMoney(donors.Sum(item =>
+            Math.Max(0, Math.Abs(item.TradeMoney ?? 0) - GetRecordAmountBounds(item).Min)));
+        if (donorCapacity <= 0.009d)
+        {
+            return;
+        }
+
+        var added = new List<FlowRecord>(missingCount);
+        var addedTotal = 0d;
+        var failedRules = 0;
+        for (var index = 0; index < missingCount && failedRules < lowRules.Count; index++)
+        {
+            var rule = lowRules[index % lowRules.Count];
+            var remainingCapacity = RoundMoney(donorCapacity - addedTotal);
+            if (remainingCapacity < GetRuleAmountBounds(rule).Min - 0.009d)
+            {
+                failedRules++;
+                index--;
+                continue;
+            }
+
+            if (!TryCreateNativeUniqueAmount(
+                    rule,
+                    remainingCapacity,
+                    random,
+                    preferLower: false,
+                    records,
+                    isIncome,
+                    amountUsage,
+                    out var amount))
+            {
+                failedRules++;
+                index--;
+                continue;
+            }
+
+            failedRules = 0;
+            var accountTime = PickNativeDistributedTime(start, end, rule, isIncome, random, scheduleState);
+            var record = CreateRecordFromRule(
+                request,
+                rule,
+                request.Bank.ReferenceColumns,
+                accountTime,
+                isIncome ? amount : -amount);
+            record.ExtraFields[RequiredOccurrenceField] = "false";
+            records.Add(record);
+            added.Add(record);
+            scheduleState.Register(record);
+            amountUsage.Register(record);
+            addedTotal = RoundMoney(addedTotal + amount);
+        }
+
+        if (added.Count == 0 || addedTotal <= 0.009d)
+        {
+            return;
+        }
+
+        var donorTotalBefore = RoundMoney(donors.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        DecreaseSignedRecordsWithinBounds(donors, isIncome, addedTotal, allowDropOptional: false);
+        var donorTotalAfter = RoundMoney(donors.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var transferred = RoundMoney(Math.Max(0, donorTotalBefore - donorTotalAfter));
+        if (transferred <= 0.009d)
+        {
+            foreach (var record in added)
+            {
+                ApplySignedAmount(record, isIncome ? 1d : -1d, 0);
+            }
+
+            return;
+        }
+
+        RebalanceSignedRecords(added, transferred);
+    }
+
+    private static void ConsolidateWechatHighExpenseRecords(List<FlowRecord> records, Random random)
+    {
+        var candidates = records
+            .Where(IsGeneratedReferenceRecord)
+            .Where(item => !IsRequiredGeneratedRecord(item))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => item.TradeMoney < -0.009d)
+            .Where(item => GetGeneratedAmountCapacityTier(Math.Abs(item.TradeMoney ?? 0)) == ReferenceCapacityTier.High)
+            .ToList();
+        if (candidates.Count < 2)
+        {
+            return;
+        }
+
+        var total = RoundMoney(candidates.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var sourceAverages = candidates
+            .GroupBy(GetGeneratedAmountDistributionKey)
+            .Select(group => EstimateBalancedRangeAverage(GetRecordAmountBounds(group.First())))
+            .Where(item => item > 0.009d)
+            .ToList();
+        var targetAverage = sourceAverages.Count == 0
+            ? candidates.Average(item => Math.Abs(item.TradeMoney ?? 0))
+            : sourceAverages.Average();
+        targetAverage *= 0.96d + (random.NextDouble() * 0.08d);
+        var targetCount = Math.Clamp(
+            (int)Math.Ceiling(total / Math.Max(1d, targetAverage)),
+            sourceAverages.Count,
+            candidates.Count);
+        if (targetCount >= candidates.Count)
+        {
+            return;
+        }
+
+        var sourceCounts = candidates
+            .GroupBy(GetGeneratedAmountDistributionKey)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        while (candidates.Count > targetCount)
+        {
+            var removable = candidates
+                .Where(item => sourceCounts.GetValueOrDefault(GetGeneratedAmountDistributionKey(item)) > 1)
+                .OrderByDescending(item => sourceCounts.GetValueOrDefault(GetGeneratedAmountDistributionKey(item)))
+                .ThenBy(item => Math.Abs(item.TradeMoney ?? 0))
+                .ThenBy(_ => random.Next())
+                .FirstOrDefault();
+            if (removable is null)
+            {
+                break;
+            }
+
+            var maximumAfterRemoval = RoundMoney(candidates
+                .Where(item => !ReferenceEquals(item, removable))
+                .Sum(item => GetRecordAmountBounds(item).Max));
+            if (maximumAfterRemoval < total - 0.009d)
+            {
+                break;
+            }
+
+            var sourceKey = GetGeneratedAmountDistributionKey(removable);
+            sourceCounts[sourceKey]--;
+            candidates.Remove(removable);
+            ApplySignedAmount(removable, -1d, 0);
+        }
+
+        RebalanceSignedRecords(candidates, total);
+    }
+
+    private static void CompactWechatReferenceVolume(
+        FlowAutoGenerationRequest request,
+        DateTime start,
+        DateTime end,
+        Random random,
+        List<FlowRecord> records)
+    {
+        if (!IsWechatBank(request.Bank) || records.Count == 0)
+        {
+            return;
+        }
+
+        var dayCount = Math.Max(1, (end.Date - start.Date).Days + 1);
+        var targetMaximum = (int)Math.Ceiling(dayCount * 23.5d);
+        var excessCount = Math.Max(0, records.Count - targetMaximum);
+        if (excessCount <= 0)
+        {
+            return;
+        }
+
+        var incomeCount = records.Count(item => (item.TradeMoney ?? 0) > 0.009d);
+        var expenseCount = records.Count(item => (item.TradeMoney ?? 0) < -0.009d);
+        var targetIncomeCount = (int)Math.Round(targetMaximum * 0.55d, MidpointRounding.AwayFromZero);
+        var directions = new[]
+            {
+                (IsIncome: true, Surplus: incomeCount - targetIncomeCount),
+                (IsIncome: false, Surplus: expenseCount - (targetMaximum - targetIncomeCount))
+            }
+            .OrderByDescending(item => item.Surplus)
+            .ToList();
+
+        foreach (var direction in directions)
+        {
+            if (excessCount <= 0)
+            {
+                break;
+            }
+
+            var requested = direction.Surplus > 0
+                ? Math.Min(excessCount, direction.Surplus)
+                : excessCount;
+            var removed = CompactWechatDirectionVolume(
+                request,
+                direction.IsIncome,
+                requested,
+                random,
+                records);
+            excessCount -= removed;
+        }
+
+        PruneZeroAmountRecords(records);
+    }
+
+    private static int CompactWechatDirectionVolume(
+        FlowAutoGenerationRequest request,
+        bool isIncome,
+        int requestedCount,
+        Random random,
+        List<FlowRecord> records)
+    {
+        if (requestedCount <= 0)
+        {
+            return 0;
+        }
+
+        var sign = isIncome ? 1 : -1;
+        var sourceCounts = GetExistingGeneratedReferenceIndexCounts(records);
+        var rulesByIndex = request.References
+            .GroupBy(item => item.Index)
+            .ToDictionary(group => group.Key, group => group.First());
+        var dayCounts = records
+            .Where(item => item.AccountTime.HasValue)
+            .GroupBy(item => item.AccountTime!.Value.Date)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var candidates = records
+            .Where(IsGeneratedReferenceRecord)
+            .Where(item => !IsRequiredGeneratedRecord(item))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
+            .Where(item => GetGeneratedAmountCapacityTier(Math.Abs(item.TradeMoney ?? 0)) == ReferenceCapacityTier.Low)
+            .Select(item => new
+            {
+                Record = item,
+                SourceIndex = item.ExtraFields.TryGetValue(SourceIndexField, out var sourceIndexText)
+                    && ParseInt(sourceIndexText) is { } sourceIndex
+                        ? sourceIndex
+                        : -1
+            })
+            .Where(item => item.SourceIndex >= 0 && rulesByIndex.ContainsKey(item.SourceIndex))
+            .OrderByDescending(item => sourceCounts.GetValueOrDefault(item.SourceIndex))
+            .ThenByDescending(item => item.Record.AccountTime.HasValue
+                ? dayCounts.GetValueOrDefault(item.Record.AccountTime.Value.Date)
+                : 0)
+            .ThenBy(item => Math.Abs(item.Record.TradeMoney ?? 0))
+            .ThenBy(_ => random.Next())
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        var selected = new List<FlowRecord>(Math.Min(requestedCount, candidates.Count));
+        foreach (var candidate in candidates)
+        {
+            var rule = rulesByIndex[candidate.SourceIndex];
+            var minimumCoverage = GetFinalOptionalReferenceCoverageTarget(request.Bank, rule);
+            if (sourceCounts.GetValueOrDefault(candidate.SourceIndex) <= minimumCoverage)
+            {
+                continue;
+            }
+
+            selected.Add(candidate.Record);
+            sourceCounts[candidate.SourceIndex]--;
+            if (selected.Count >= requestedCount)
+            {
+                break;
+            }
+        }
+
+        if (selected.Count == 0)
+        {
+            return 0;
+        }
+
+        var selectedSet = selected.ToHashSet();
+        var recipients = records
+            .Where(IsGeneratedReferenceRecord)
+            .Where(item => !selectedSet.Contains(item))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
+            .Where(item => GetGeneratedAmountCapacityTier(Math.Abs(item.TradeMoney ?? 0)) != ReferenceCapacityTier.Low)
+            .ToList();
+        var recipientCapacity = RoundMoney(recipients.Sum(item =>
+            Math.Max(0, GetRecordAmountBounds(item).Max - Math.Abs(item.TradeMoney ?? 0))));
+        while (selected.Count > 0
+               && selected.Sum(item => Math.Abs(item.TradeMoney ?? 0)) > recipientCapacity + 0.009d)
+        {
+            selected.RemoveAt(selected.Count - 1);
+        }
+
+        if (selected.Count == 0 || recipients.Count == 0)
+        {
+            return 0;
+        }
+
+        var originalRecords = records.ToList();
+        var amountSnapshot = CaptureRecordAmountSnapshot(originalRecords);
+        var transferAmount = RoundMoney(selected.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        var recipientTotal = RoundMoney(recipients.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+        foreach (var record in selected)
+        {
+            records.Remove(record);
+        }
+
+        IncreaseSignedRecordsWithinBounds(recipients, isIncome, transferAmount);
+        var transferred = RoundMoney(recipients.Sum(item => Math.Abs(item.TradeMoney ?? 0)) - recipientTotal);
+        var remaining = RoundMoney(Math.Max(0, transferAmount - transferred));
+        if (remaining > 0.009d)
+        {
+            var residualRecipients = records
+                .Where(IsGeneratedReferenceRecord)
+                .Where(item => !IsSystemInterestRecord(item))
+                .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
+                .Where(item => GetGeneratedAmountCapacityTier(Math.Abs(item.TradeMoney ?? 0)) == ReferenceCapacityTier.Low)
+                .Where(item => GetRecordAmountBounds(item).Max > Math.Abs(item.TradeMoney ?? 0) + 0.009d)
+                .OrderBy(item => GetRecordAmountUnit(item))
+                .ThenBy(item => Math.Abs(item.TradeMoney ?? 0))
+                .ToList();
+            var residualTotal = RoundMoney(residualRecipients.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+            IncreaseSignedRecordsWithinBounds(residualRecipients, isIncome, remaining);
+            transferred = RoundMoney(transferred
+                + residualRecipients.Sum(item => Math.Abs(item.TradeMoney ?? 0))
+                - residualTotal);
+        }
+
+        if (Math.Abs(transferred - transferAmount) > 0.009d)
+        {
+            records.Clear();
+            records.AddRange(originalRecords);
+            RestoreRecordAmounts(amountSnapshot);
+            return 0;
+        }
+
+        return selected.Count;
+    }
+
     private static bool RestoreConfiguredIncomeWithMatchedExpense(
         List<FlowRecord> records,
         FlowAutoGenerationRequest request,
@@ -5551,13 +6284,30 @@ public sealed class FlowAutoGenerator
                 return;
             }
 
-            // Generate from the configured ranges first. Existing rows only absorb the
-            // final remainder, otherwise repeatedly filling them pushes values to max.
-            IncreaseSignedRecordsWithinBounds(records, isIncome, remaining);
+            // Keep remainder absorption inside each month's own target. A global increase
+            // here would push the remainder into late records and flatten the balance wave.
+            IncreaseSignedRecordsWithinMonthlyTargets(
+                records,
+                monthlyPlan,
+                targetTotal,
+                isIncome,
+                remaining);
             remaining = RoundMoney(targetTotal - GetNativeSignedTotal(records, isIncome));
             if (remaining <= 0.009d)
             {
                 return;
+            }
+
+            // Only use the global capacity as the final exact-total fallback after every
+            // monthly generation pass has been exhausted.
+            if (pass == 5)
+            {
+                IncreaseSignedRecordsWithinBounds(records, isIncome, remaining);
+                remaining = RoundMoney(targetTotal - GetNativeSignedTotal(records, isIncome));
+                if (remaining <= 0.009d)
+                {
+                    return;
+                }
             }
 
             var afterTotal = GetNativeSignedTotal(records, isIncome);
@@ -5648,57 +6398,90 @@ public sealed class FlowAutoGenerator
             targetTotal,
             monthlyPlan.Months.Count);
 
-        for (var monthIndex = 0; monthIndex < monthlyPlan.Months.Count; monthIndex++)
+        for (var pass = 0; pass < 4; pass++)
         {
-            var globalRemaining = RoundMoney(targetTotal - GetNativeSignedTotal(records, isIncome));
-            if (globalRemaining <= 0.009d)
+            var totalBeforePass = GetNativeSignedTotal(records, isIncome);
+            for (var monthIndex = 0; monthIndex < monthlyPlan.Months.Count; monthIndex++)
             {
-                return;
+                var globalRemaining = RoundMoney(targetTotal - GetNativeSignedTotal(records, isIncome));
+                if (globalRemaining <= 0.009d)
+                {
+                    return;
+                }
+
+                var month = monthlyPlan.Months[monthIndex];
+                var monthCurrent = GetNativeSignedTotal(
+                    records.Where(item => IsRecordInRange(item, month.Start, month.End)),
+                    isIncome);
+                var monthRemaining = RoundMoney(Math.Max(0, monthlyTargets[monthIndex] - monthCurrent));
+                monthRemaining = RoundMoney(Math.Min(monthRemaining, globalRemaining));
+                if (monthRemaining <= 0.009d)
+                {
+                    continue;
+                }
+
+                GenerateNativeOptionalForMonth(
+                    request,
+                    month.Start,
+                    month.End,
+                    rules,
+                    isIncome,
+                    monthRemaining,
+                    Math.Max(0, request.Config.AllInMoney),
+                    random,
+                    records,
+                    scheduleState,
+                    amountUsage);
             }
 
+            var totalAfterPass = GetNativeSignedTotal(records, isIncome);
+            if (totalAfterPass <= totalBeforePass + 0.009d)
+            {
+                break;
+            }
+        }
+    }
+
+    private static bool IncreaseSignedRecordsWithinMonthlyTargets(
+        IEnumerable<FlowRecord> records,
+        MonthlyAmountPlan monthlyPlan,
+        double targetTotal,
+        bool isIncome,
+        double amount)
+    {
+        var remaining = RoundMoney(Math.Max(0, amount));
+        if (remaining <= 0.009d || monthlyPlan.Months.Count == 0)
+        {
+            return remaining <= 0.009d;
+        }
+
+        var monthlyTargets = ScaleNativeTargets(
+            isIncome ? monthlyPlan.IncomeTargets : monthlyPlan.ExpenseTargets,
+            targetTotal,
+            monthlyPlan.Months.Count);
+        var materialized = records as IReadOnlyCollection<FlowRecord> ?? records.ToList();
+
+        for (var monthIndex = 0; monthIndex < monthlyPlan.Months.Count && remaining > 0.009d; monthIndex++)
+        {
             var month = monthlyPlan.Months[monthIndex];
-            var monthCurrent = GetNativeSignedTotal(
-                records.Where(item => IsRecordInRange(item, month.Start, month.End)),
-                isIncome);
-            var monthRemaining = RoundMoney(Math.Max(0, monthlyTargets[monthIndex] - monthCurrent));
-            monthRemaining = RoundMoney(Math.Min(monthRemaining, globalRemaining));
-            if (monthRemaining <= 0.009d)
+            var monthRecords = materialized
+                .Where(item => IsRecordInRange(item, month.Start, month.End))
+                .ToList();
+            var current = GetNativeSignedTotal(monthRecords, isIncome);
+            var deficit = RoundMoney(Math.Max(0, monthlyTargets[monthIndex] - current));
+            var requested = RoundMoney(Math.Min(deficit, remaining));
+            if (requested <= 0.009d)
             {
                 continue;
             }
 
-            GenerateNativeOptionalForMonth(
-                request,
-                month.Start,
-                month.End,
-                rules,
-                isIncome,
-                monthRemaining,
-                Math.Max(0, request.Config.AllInMoney),
-                random,
-                records,
-                scheduleState,
-                amountUsage);
+            var before = GetNativeSignedTotal(monthRecords, isIncome);
+            IncreaseSignedRecordsWithinBounds(monthRecords, isIncome, requested);
+            var after = GetNativeSignedTotal(monthRecords, isIncome);
+            remaining = RoundMoney(Math.Max(0, remaining - Math.Max(0, after - before)));
         }
 
-        var remaining = RoundMoney(targetTotal - GetNativeSignedTotal(records, isIncome));
-        if (remaining <= 0.009d)
-        {
-            return;
-        }
-
-        GenerateNativeOptionalForMonth(
-            request,
-            start,
-            end,
-            rules,
-            isIncome,
-            remaining,
-            Math.Max(0, request.Config.AllInMoney),
-            random,
-            records,
-            scheduleState,
-            amountUsage);
+        return remaining <= 0.009d;
     }
 
     private static double[] ScaleNativeTargets(IReadOnlyList<double> sourceTargets, double targetTotal, int count)
@@ -5930,7 +6713,7 @@ public sealed class FlowAutoGenerator
                 var groupRecords = group.ToList();
                 var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit);
                 var current = RoundMoney(groupRecords.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
-                var expected = RoundMoney(EstimateNaturalSegmentAverage(bounds) * groupRecords.Count);
+                var expected = RoundMoney(EstimateBalancedRangeAverage(bounds) * groupRecords.Count);
                 return new
                 {
                     Records = groupRecords,
@@ -5993,17 +6776,13 @@ public sealed class FlowAutoGenerator
         var weightedAverage = groups.Sum(group =>
             weights.GetValueOrDefault(group.Tier) * EstimateRuleSequenceAverage(group.Rules));
         weightedAverage = Math.Max(0.01d, weightedAverage);
-        var dailyTargetCount = groupsByTier.ContainsKey(ReferenceCapacityTier.Low)
-            ? dailySlots.Count
-            : 0;
-        var desiredFromDaily = weights.GetValueOrDefault(ReferenceCapacityTier.Low) > 0.0001d
-            ? (int)Math.Ceiling(dailyTargetCount / weights[ReferenceCapacityTier.Low])
-            : 0;
+        var estimatedCount = (int)Math.Ceiling(targetAmount / weightedAverage);
+        var countVariation = isIncome
+            ? 1.15d
+            : 0.92d + (random.NextDouble() * 0.16d);
         var totalToAdd = Math.Max(
             groups.Count,
-            Math.Max(
-                desiredFromDaily,
-                (int)Math.Ceiling(targetAmount / weightedAverage)));
+            (int)Math.Round(estimatedCount * countVariation, MidpointRounding.AwayFromZero));
         totalToAdd = Math.Clamp(totalToAdd, 1, 100000);
 
         List<CapacityTierGenerationPlan> plans = [];
@@ -6014,6 +6793,17 @@ public sealed class FlowAutoGenerator
                 weights,
                 existingCounts,
                 totalToAdd);
+            if (!isIncome
+                && dailySlots.Count > 0
+                && groupsByTier.ContainsKey(ReferenceCapacityTier.Low))
+            {
+                // Daily small expenses are an independent coverage target. They must
+                // not inflate the medium/high record counts through the tier ratio.
+                counts[ReferenceCapacityTier.Low] = Math.Max(
+                    counts[ReferenceCapacityTier.Low],
+                    dailySlots.Count);
+            }
+
             plans = CreateCapacityTierPlansForCounts(
                 groupsByTier,
                 counts,
@@ -6192,12 +6982,7 @@ public sealed class FlowAutoGenerator
             }
 
             var dailySlotLimit = tier == ReferenceCapacityTier.Low
-                ? Math.Clamp(
-                    (int)Math.Round(
-                        count * (0.28d + (random.NextDouble() * 0.10d)),
-                        MidpointRounding.AwayFromZero),
-                    0,
-                    count)
+                ? Math.Min(count, dailySlots.Count)
                 : 0;
             var selectedDailySlots = dailySlotLimit > 0
                 ? dailySlots.OrderBy(_ => random.Next()).Take(dailySlotLimit).ToList()
@@ -6236,7 +7021,7 @@ public sealed class FlowAutoGenerator
         {
             var bounds = GetRuleAmountBounds(rules[index % rules.Count]);
             minimum += bounds.Min;
-            expected += EstimateNaturalSegmentAverage(bounds);
+            expected += EstimateBalancedRangeAverage(bounds);
             maximum += bounds.Max;
         }
 
@@ -6247,15 +7032,12 @@ public sealed class FlowAutoGenerator
     {
         return rules.Count == 0
             ? 0d
-            : rules.Average(rule => EstimateNaturalSegmentAverage(GetRuleAmountBounds(rule)));
+            : rules.Average(rule => EstimateBalancedRangeAverage(GetRuleAmountBounds(rule)));
     }
 
-    private static double EstimateNaturalSegmentAverage(AmountBounds bounds)
+    private static double EstimateBalancedRangeAverage(AmountBounds bounds)
     {
-        var segments = CreateRuleAmountSegments(bounds);
-        return segments.Count == 0
-            ? bounds.Min
-            : segments.Average(segment => segment.Min + ((segment.Max - segment.Min) * 0.5d));
+        return RoundAmountToUnit(bounds.Min + ((bounds.Max - bounds.Min) * 0.5d), bounds.Unit);
     }
 
     private static void AllocateCapacityTierPlanBudgets(
@@ -6869,23 +7651,23 @@ public sealed class FlowAutoGenerator
                 .GroupBy(item => item)
                 .ToDictionary(group => group.Key, group => group.Count());
 
-        var naturalSegments = CreateRuleAmountSegments(effectiveBounds);
-        if (naturalSegments.Count > 1 && values.Count > 1)
+        var distributionSegments = CreateRuleAmountDistributionSegments(effectiveBounds);
+        if (distributionSegments.Count > 1 && values.Count > 1)
         {
-            var valuesByNaturalSegment = values
-                .GroupBy(value => GetAmountSegmentIndex(value, naturalSegments))
+            var valuesBySegment = values
+                .GroupBy(value => GetAmountSegmentIndex(value, distributionSegments))
                 .Where(group => group.Key >= 0)
                 .ToDictionary(group => group.Key, group => group.ToList());
-            if (valuesByNaturalSegment.Count > 1)
+            if (valuesBySegment.Count > 1)
             {
-                var selectedNaturalSegment = naturalSegments
-                    .Where(segment => valuesByNaturalSegment.ContainsKey(segment.Index))
+                var selectedSegment = distributionSegments
+                    .Where(segment => valuesBySegment.ContainsKey(segment.Index))
                     .OrderBy(segment => usage
                         .Where(item => item.Key >= segment.Min - 0.009d && item.Key <= segment.Max + 0.009d)
                         .Sum(item => item.Value))
                     .ThenBy(_ => random.Next())
                     .First();
-                values = valuesByNaturalSegment[selectedNaturalSegment.Index];
+                values = valuesBySegment[selectedSegment.Index];
             }
         }
 
@@ -6919,14 +7701,20 @@ public sealed class FlowAutoGenerator
     private static string GetRuleAmountDistributionKey(FlowRuleBase rule)
     {
         var sourceKind = rule is GenerateConstRule ? ConstSourceKind : ReferenceSourceKind;
-        return CreateAmountDistributionKey(sourceKind, GetRuleAmountBounds(rule));
+        return CreateAmountDistributionKey(
+            sourceKind,
+            rule.Index.ToString(CultureInfo.InvariantCulture),
+            GetRuleAmountBounds(rule));
     }
 
-    private static string CreateAmountDistributionKey(string sourceKind, AmountBounds bounds)
+    private static string CreateAmountDistributionKey(
+        string sourceKind,
+        string sourceIndex,
+        AmountBounds bounds)
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{sourceKind}:{bounds.Min:0.########}:{bounds.Max:0.########}:{bounds.Unit:0.########}");
+            $"{sourceKind}:{sourceIndex}:{bounds.Min:0.########}:{bounds.Max:0.########}:{bounds.Unit:0.########}");
     }
 
     private static List<double> CreateRuleAmountPoolValues(AmountBounds bounds)
@@ -7064,7 +7852,45 @@ public sealed class FlowAutoGenerator
 
     private static List<AmountSegment> CreateRuleAmountDistributionSegments(AmountBounds bounds)
     {
-        return CreateRuleAmountSegments(bounds);
+        var unit = Math.Max(0.01d, bounds.Unit);
+        var totalSteps = Math.Floor((bounds.Max - bounds.Min + 0.0000001d) / unit) + 1d;
+        var segmentCount = (int)Math.Clamp(Math.Min(10d, totalSteps), 1d, 10d);
+        if (segmentCount <= 1)
+        {
+            return [new AmountSegment(bounds.Min, bounds.Max, 0)];
+        }
+
+        var result = new List<AmountSegment>(segmentCount);
+        for (var index = 0; index < segmentCount; index++)
+        {
+            var startStep = Math.Floor(index * totalSteps / segmentCount);
+            var endStep = Math.Floor((index + 1d) * totalSteps / segmentCount) - 1d;
+            if (index == segmentCount - 1)
+            {
+                endStep = totalSteps - 1d;
+            }
+
+            var minimum = CeilAmountToUnit(bounds.Min + (startStep * unit), unit);
+            var maximum = FloorAmountToUnit(bounds.Min + (Math.Max(startStep, endStep) * unit), unit);
+            if (RequiresNonZeroPrecisionDigit(unit))
+            {
+                var validMinimum = FindValidAmountAtOrAbove(minimum, maximum, unit);
+                var validMaximum = FindValidAmountAtOrBelow(maximum, minimum, unit);
+                if (!validMinimum.HasValue || !validMaximum.HasValue || validMinimum.Value > validMaximum.Value + 0.009d)
+                {
+                    continue;
+                }
+
+                minimum = validMinimum.Value;
+                maximum = validMaximum.Value;
+            }
+
+            result.Add(new AmountSegment(RoundMoney(minimum), RoundMoney(maximum), result.Count));
+        }
+
+        return result.Count == 0
+            ? [new AmountSegment(bounds.Min, bounds.Max, 0)]
+            : result;
     }
 
     private static int GetAmountSegmentIndex(double amount, IReadOnlyList<AmountSegment> segments)
@@ -7176,7 +8002,7 @@ public sealed class FlowAutoGenerator
             && record.ExtraFields.ContainsKey(AmountMaxField)
             && record.ExtraFields.ContainsKey(AmountUnitField))
         {
-            return CreateAmountDistributionKey(sourceKind, GetRecordAmountBounds(record));
+            return CreateAmountDistributionKey(sourceKind, sourceIndex, GetRecordAmountBounds(record));
         }
 
         if (!string.IsNullOrWhiteSpace(sourceKind) || !string.IsNullOrWhiteSpace(sourceIndex))
@@ -8138,7 +8964,7 @@ public sealed class FlowAutoGenerator
 
             var currentTotal = RoundMoney(groupRecords.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
             var desiredTotal = RoundAmountToUnit(
-                EstimateNaturalSegmentAverage(bounds) * groupRecords.Count,
+                EstimateBalancedRangeAverage(bounds) * groupRecords.Count,
                 Math.Max(0.01d, bounds.Unit));
             var desiredMove = RoundMoney(desiredTotal - currentTotal);
             if (Math.Abs(desiredMove) < Math.Max(0.01d, bounds.Unit) - 0.009d)
@@ -10067,6 +10893,7 @@ public sealed class FlowAutoGenerator
             PreventFirstMonthIncomeSpike(incomeTargets, targetIncome, random);
             BalanceMonthlyIncomeAcrossTimeline(incomeTargets, targetIncome, random);
             SpreadMonthlyExpenseTargets(expenseTargets, incomeTargets, targetExpense, expenseRules);
+            AlignMonthlyExpensesToBalanceWaves(expenseTargets, incomeTargets, targetExpense, random);
         }
 
         return new MonthlyAmountPlan
@@ -11346,6 +12173,59 @@ public sealed class FlowAutoGenerator
         {
             expenseTargets[index] = values[index];
         }
+    }
+
+    private static void AlignMonthlyExpensesToBalanceWaves(
+        double[] expenseTargets,
+        IReadOnlyList<double> incomeTargets,
+        double targetExpense,
+        Random random)
+    {
+        var monthCount = Math.Min(expenseTargets.Length, incomeTargets.Count);
+        var totalIncome = RoundMoney(incomeTargets.Take(monthCount).Sum(item => Math.Max(0, item)));
+        targetExpense = RoundMoney(Math.Clamp(targetExpense, 0, totalIncome));
+        if (monthCount < 3 || totalIncome <= 0.009d || targetExpense <= 0.009d)
+        {
+            return;
+        }
+
+        var finalCarry = RoundMoney(Math.Max(0, totalIncome - targetExpense));
+        var averageIncome = totalIncome / monthCount;
+        var carry = 0d;
+        var buildLength = random.Next(1, 4);
+        var buildPosition = 0;
+        for (var index = 0; index < monthCount; index++)
+        {
+            var income = Math.Max(0, incomeTargets[index]);
+            var available = RoundMoney(carry + income);
+            double desiredCarry;
+            if (index == monthCount - 1)
+            {
+                desiredCarry = Math.Min(available, finalCarry);
+            }
+            else if (buildPosition < buildLength)
+            {
+                // Retain most of the current month's income for one to three months so
+                // the balance visibly climbs before the following drain month.
+                var retainedIncome = income * (0.62d + (random.NextDouble() * 0.28d));
+                desiredCarry = Math.Min(available, Math.Max(finalCarry, carry + retainedIncome));
+                buildPosition++;
+            }
+            else
+            {
+                // Drain the accumulated carry close to zero, then begin a new independent
+                // build cycle. The final configured carry remains the hard lower target.
+                var lowTarget = averageIncome * (0.002d + (random.NextDouble() * 0.010d));
+                desiredCarry = Math.Min(available, Math.Max(finalCarry, lowTarget));
+                buildLength = random.Next(1, 4);
+                buildPosition = 0;
+            }
+
+            expenseTargets[index] = RoundMoney(Math.Max(0, available - desiredCarry));
+            carry = RoundMoney(desiredCarry);
+        }
+
+        NormalizeMonthlyTargetsInPlace(expenseTargets, targetExpense);
     }
 
     private static void PullExpenseTargetsForwardByIncomeCurve(
@@ -14101,7 +14981,7 @@ public sealed class FlowAutoGenerator
         public IReadOnlyList<GenerateReferenceRule> Rules { get; } = rules;
         public double Minimum { get; } = rules.Min(rule => GetRuleAmountBounds(rule).Min);
         public double Maximum { get; } = rules.Max(rule => GetRuleAmountBounds(rule).Max);
-        public double Expected { get; } = rules.Average(rule => EstimateNaturalSegmentAverage(GetRuleAmountBounds(rule)));
+        public double Expected { get; } = rules.Average(rule => EstimateBalancedRangeAverage(GetRuleAmountBounds(rule)));
     }
 
     private sealed record CapacityTierGenerationResult(

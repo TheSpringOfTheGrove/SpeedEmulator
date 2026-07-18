@@ -8,13 +8,26 @@ public sealed class FlowStatisticsViewModel : ObservableObject
     public FlowStatisticsViewModel(IEnumerable<FlowRecord> records)
     {
         Items = records
-            .Where(item => item.AccountTime.HasValue)
-            .GroupBy(item => new DateTime(item.AccountTime!.Value.Year, item.AccountTime.Value.Month, 1))
+            .Select((record, sourceOrder) => new { Record = record, SourceOrder = sourceOrder })
+            .Where(item => item.Record.AccountTime.HasValue)
+            .GroupBy(item => new DateTime(
+                item.Record.AccountTime!.Value.Year,
+                item.Record.AccountTime.Value.Month,
+                1))
             .OrderBy(group => group.Key)
-            .Select(group => new FlowMonthlyStatistic(
-                group.Key.ToString("yyyy年MM"),
-                Math.Round(group.Where(item => item.TradeMoney > 0).Sum(item => item.TradeMoney ?? 0), 2),
-                Math.Round(group.Where(item => item.TradeMoney < 0).Sum(item => 0 - (item.TradeMoney ?? 0)), 2)))
+            .Select(group =>
+            {
+                var lastRecord = group
+                    .OrderBy(item => item.Record.AccountTime)
+                    .ThenBy(item => item.SourceOrder)
+                    .Last()
+                    .Record;
+                return new FlowMonthlyStatistic(
+                    group.Key.ToString("yyyy年MM"),
+                    Math.Round(group.Where(item => item.Record.TradeMoney > 0).Sum(item => item.Record.TradeMoney ?? 0), 2),
+                    Math.Round(group.Where(item => item.Record.TradeMoney < 0).Sum(item => 0 - (item.Record.TradeMoney ?? 0)), 2),
+                    Math.Round(lastRecord.Balance ?? lastRecord.BalanceAmount ?? 0, 2));
+            })
             .ToList();
 
         var maxValue = Items.Count == 0
@@ -52,4 +65,4 @@ public sealed class FlowStatisticsViewModel : ObservableObject
     }
 }
 
-public sealed record FlowMonthlyStatistic(string Month, double Income, double Expense);
+public sealed record FlowMonthlyStatistic(string Month, double Income, double Expense, double Balance);

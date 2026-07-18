@@ -41,6 +41,7 @@
             <StackPanel x:Name="ExpenseLegend"
                         Orientation="Horizontal"
                         Cursor="Hand"
+                        Margin="0,0,28,0"
                         MouseLeftButtonDown="ExpenseLegend_MouseLeftButtonDown">
                 <Ellipse x:Name="ExpenseLegendMarker"
                          Width="14"
@@ -51,6 +52,20 @@
                          Margin="0,0,6,0" />
                 <TextBlock x:Name="ExpenseLegendText"
                            Text="支出"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel x:Name="BalanceLegend"
+                        Orientation="Horizontal"
+                        Cursor="Hand"
+                        MouseLeftButtonDown="BalanceLegend_MouseLeftButtonDown">
+                <Ellipse Width="14"
+                         Height="14"
+                         Stroke="#008C72"
+                         StrokeThickness="3"
+                         Fill="White"
+                         Margin="0,0,6,0" />
+                <TextBlock x:Name="BalanceLegendText"
+                           Text="余额"
                            VerticalAlignment="Center" />
             </StackPanel>
         </StackPanel>
@@ -83,7 +98,7 @@
         </Grid>
 
         <TextBlock Grid.Row="2"
-                   Text="收入/支出统计图"
+                   Text="收入/支出/余额统计图"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Bottom"
                    FontSize="22"
