@@ -11,6 +11,16 @@ namespace SpeedEmulator.Controls;
 
 public sealed class FormattedDatePicker : UserControl
 {
+    private enum DateTimeStepPart
+    {
+        Year,
+        Month,
+        Day,
+        Hour,
+        Minute,
+        Second
+    }
+
     public static readonly DependencyProperty SelectedDateProperty =
         DependencyProperty.Register(
             nameof(SelectedDate),
@@ -65,9 +75,9 @@ public sealed class FormattedDatePicker : UserControl
         calendar = new System.Windows.Controls.Calendar();
         calendar.SelectedDatesChanged += Calendar_SelectedDatesChanged;
 
-        hourBox = CreateTimeBox();
-        minuteBox = CreateTimeBox();
-        secondBox = CreateTimeBox();
+        hourBox = CreateTimeBox(DateTimeStepPart.Hour);
+        minuteBox = CreateTimeBox(DateTimeStepPart.Minute);
+        secondBox = CreateTimeBox(DateTimeStepPart.Second);
 
         var popupPanel = new StackPanel();
         popupPanel.Children.Add(calendar);
@@ -300,27 +310,69 @@ public sealed class FormattedDatePicker : UserControl
 
     private void StepSelectedPart(int direction)
     {
+        if (hourBox.IsKeyboardFocusWithin)
+        {
+            StepTimeBoxPart(DateTimeStepPart.Hour, direction, hourBox);
+            return;
+        }
+
+        if (minuteBox.IsKeyboardFocusWithin)
+        {
+            StepTimeBoxPart(DateTimeStepPart.Minute, direction, minuteBox);
+            return;
+        }
+
+        if (secondBox.IsKeyboardFocusWithin)
+        {
+            StepTimeBoxPart(DateTimeStepPart.Second, direction, secondBox);
+            return;
+        }
+
+        var part = GetStepPartFromTextSelection();
+        CommitText();
+        StepDateTimePart(part, direction);
+        textBox.Focus();
+        SelectTextGroup(part);
+    }
+
+    private DateTimeStepPart GetStepPartFromTextSelection()
+    {
         var caret = Math.Clamp(
             textBox.SelectionLength > 0 ? textBox.SelectionStart : textBox.CaretIndex,
             0,
             (textBox.Text ?? string.Empty).Length);
-        CommitText();
+
+        return GetStepPartFromCaret(caret);
+    }
+
+    private void StepTimeBoxPart(DateTimeStepPart part, int direction, TextBox box)
+    {
+        CommitTimeBoxes();
+        StepDateTimePart(part, direction);
+        box.Focus();
+        box.SelectAll();
+    }
+
+    private void StepDateTimePart(DateTimeStepPart part, int direction)
+    {
         var current = SelectedDate ?? TrimToSecond(DateTime.Now);
-        var next = GetStepPartFromCaret(caret) switch
+        var next = part switch
         {
-            0 => current.AddYears(direction),
-            1 => current.AddMonths(direction),
-            2 => current.AddDays(direction),
-            _ => current.AddDays(direction)
+            DateTimeStepPart.Year => current.AddYears(direction),
+            DateTimeStepPart.Month => current.AddMonths(direction),
+            DateTimeStepPart.Day => current.AddDays(direction),
+            DateTimeStepPart.Hour => current.AddHours(direction),
+            DateTimeStepPart.Minute => current.AddMinutes(direction),
+            DateTimeStepPart.Second => current.AddSeconds(direction),
+            _ => current
         };
 
         SelectedDate = TrimToSecond(next);
         RefreshText();
         BindingOperations.GetBindingExpression(this, SelectedDateProperty)?.UpdateSource();
-        textBox.Focus();
     }
 
-    private int GetStepPartFromCaret(int caret)
+    private DateTimeStepPart GetStepPartFromCaret(int caret)
     {
         var text = textBox.Text ?? string.Empty;
         caret = Math.Clamp(caret, 0, text.Length);
@@ -343,11 +395,70 @@ public sealed class FormattedDatePicker : UserControl
             groupIndex++;
             if (caret >= start && caret <= index)
             {
-                return groupIndex;
+                return GroupIndexToStepPart(groupIndex);
             }
         }
 
-        return 2;
+        return DateTimeStepPart.Day;
+    }
+
+    private static DateTimeStepPart GroupIndexToStepPart(int groupIndex)
+    {
+        return groupIndex switch
+        {
+            0 => DateTimeStepPart.Year,
+            1 => DateTimeStepPart.Month,
+            2 => DateTimeStepPart.Day,
+            3 => DateTimeStepPart.Hour,
+            4 => DateTimeStepPart.Minute,
+            5 => DateTimeStepPart.Second,
+            _ => DateTimeStepPart.Day
+        };
+    }
+
+    private static int StepPartToGroupIndex(DateTimeStepPart part)
+    {
+        return part switch
+        {
+            DateTimeStepPart.Year => 0,
+            DateTimeStepPart.Month => 1,
+            DateTimeStepPart.Day => 2,
+            DateTimeStepPart.Hour => 3,
+            DateTimeStepPart.Minute => 4,
+            DateTimeStepPart.Second => 5,
+            _ => 2
+        };
+    }
+
+    private void SelectTextGroup(DateTimeStepPart part)
+    {
+        var targetGroupIndex = StepPartToGroupIndex(part);
+        var text = textBox.Text ?? string.Empty;
+        var groupIndex = -1;
+
+        for (var index = 0; index < text.Length;)
+        {
+            if (!char.IsDigit(text[index]))
+            {
+                index++;
+                continue;
+            }
+
+            var start = index;
+            while (index < text.Length && char.IsDigit(text[index]))
+            {
+                index++;
+            }
+
+            groupIndex++;
+            if (groupIndex == targetGroupIndex)
+            {
+                textBox.Select(start, index - start);
+                return;
+            }
+        }
+
+        textBox.CaretIndex = Math.Min(text.Length, textBox.CaretIndex);
     }
 
     private UIElement CreateTimeEditor()
@@ -405,7 +516,7 @@ public sealed class FormattedDatePicker : UserControl
         };
     }
 
-    private TextBox CreateTimeBox()
+    private TextBox CreateTimeBox(DateTimeStepPart part)
     {
         var box = new TextBox
         {
@@ -418,6 +529,11 @@ public sealed class FormattedDatePicker : UserControl
         };
 
         box.GotKeyboardFocus += (_, _) => box.SelectAll();
+        box.PreviewMouseWheel += (_, e) =>
+        {
+            StepTimeBoxPart(part, e.Delta > 0 ? 1 : -1, box);
+            e.Handled = true;
+        };
         box.PreviewMouseLeftButtonDown += (_, e) =>
         {
             if (box.IsKeyboardFocusWithin)
@@ -448,6 +564,16 @@ public sealed class FormattedDatePicker : UserControl
             else if (e.Key == Key.Escape)
             {
                 popup.IsOpen = false;
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Up)
+            {
+                StepTimeBoxPart(part, 1, box);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Down)
+            {
+                StepTimeBoxPart(part, -1, box);
                 e.Handled = true;
             }
         };
