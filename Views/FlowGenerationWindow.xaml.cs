@@ -20,6 +20,8 @@ public partial class FlowGenerationWindow : Window
     private readonly IFlowRecordRepository flowRecordRepository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly ITableExcelService tableExcelService;
+    private readonly IPdfImportService pdfImportService;
+    private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
 
     public FlowGenerationWindow(
         FlowGenerationViewModel viewModel,
@@ -27,7 +29,9 @@ public partial class FlowGenerationWindow : Window
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowRecordRepository flowRecordRepository,
         IBankUserRepository bankUserRepository,
-        ITableExcelService tableExcelService)
+        ITableExcelService tableExcelService,
+        IPdfImportService pdfImportService,
+        IPdfImportPreviewDialogService pdfImportPreviewDialogService)
     {
         InitializeComponent();
         this.viewModel = viewModel;
@@ -36,6 +40,8 @@ public partial class FlowGenerationWindow : Window
         this.flowRecordRepository = flowRecordRepository;
         this.bankUserRepository = bankUserRepository;
         this.tableExcelService = tableExcelService;
+        this.pdfImportService = pdfImportService;
+        this.pdfImportPreviewDialogService = pdfImportPreviewDialogService;
         DataContext = viewModel;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenMonthDetails += ViewModel_RequestOpenMonthDetails;
@@ -130,7 +136,7 @@ public partial class FlowGenerationWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this

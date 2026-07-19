@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections;
 using System.Globalization;
+using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
@@ -16,6 +17,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     private readonly IFlowRecordRepository repository;
     private readonly ITableExcelService tableExcelService;
     private readonly IBankUserRepository? bankUserRepository;
+    private readonly IPdfImportService pdfImportService;
+    private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private readonly List<FlowRecord> allRecords = [];
     private List<FlowFilterCondition> activeFilterConditions = [];
     private FlowRecord? selectedRecord;
@@ -29,13 +32,17 @@ public sealed class FlowDetailsViewModel : ObservableObject
         BankUser bankUser,
         IFlowRecordRepository repository,
         ITableExcelService tableExcelService,
-        IBankUserRepository? bankUserRepository = null)
+        IBankUserRepository? bankUserRepository = null,
+        IPdfImportService? pdfImportService = null,
+        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null)
     {
         Bank = bank;
         BankUser = bankUser;
         this.repository = repository;
         this.tableExcelService = tableExcelService;
         this.bankUserRepository = bankUserRepository;
+        this.pdfImportService = pdfImportService ?? new PdfImportService();
+        this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         openingBalance = (double)bankUser.OpeningBalance;
         autoCalculateInterest = bankUser.AutoCalculateInterest;
 
@@ -58,6 +65,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         CloseCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
         ImportRecordCommand = new AsyncRelayCommand(ImportRecordsFromXlsxAsync);
         ExportRecordCommand = new RelayCommand(ExportRecordsToXlsx);
+        ImportPdfRecordCommand = new AsyncRelayCommand(ImportRecordsFromPdfAsync);
     }
 
     public event EventHandler? RequestClose;
@@ -126,6 +134,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public AsyncRelayCommand SaveAllRecordCommand { get; }
     public RelayCommand PrintRecordCommand { get; }
     public ICommand ImportRecordCommand { get; }
+    public ICommand ImportPdfRecordCommand { get; }
     public ICommand ExportRecordCommand { get; }
     public RelayCommand OpenFilterCommand { get; }
     public RelayCommand SetColumnFieldCommand { get; }
@@ -752,6 +761,151 @@ public sealed class FlowDetailsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private async Task ImportRecordsFromPdfAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        if (!EnsurePdfImportSupported())
+        {
+            return;
+        }
+
+        var path = pdfImportService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            StatusMessage = "正在解析 PDF 用户信息和流水，请稍候...";
+            var result = await pdfImportService.ImportBankUserAndFlowRecordsAsync(path, Bank, BankUser);
+            if (!pdfImportPreviewDialogService.Confirm(result))
+            {
+                StatusMessage = result.HasBlockingErrors ? "PDF 导入存在错误，已取消保存。" : "已取消 PDF 导入。";
+                return;
+            }
+
+            var imported = result.FlowRecords;
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有读取到可导入的流水数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var overwriteResult = MessageBox.Show(
+                $"已读取 {imported.Count} 条流水数据。\n\n是否覆盖当前流水？\n是：覆盖；否：追加；取消：放弃导入。",
+                "导入PDF",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (overwriteResult == MessageBoxResult.Cancel)
+            {
+                StatusMessage = "已取消 PDF 导入。";
+                return;
+            }
+
+            if (overwriteResult == MessageBoxResult.Yes)
+            {
+                allRecords.Clear();
+            }
+
+            if (result.User is not null)
+            {
+                ApplyImportedUserInfo(BankUser, result.User);
+                OpeningBalance = (double)BankUser.OpeningBalance;
+                AutoCalculateInterest = BankUser.AutoCalculateInterest;
+            }
+
+            FlowRecord? lastImported = null;
+            foreach (var record in imported)
+            {
+                record.Id = 0;
+                record.BankId = Bank.Id;
+                record.BankUserId = BankUser.Id;
+                allRecords.Add(record);
+                lastImported = record;
+            }
+
+            ReindexAllRecords();
+            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            if (bankUserRepository is not null)
+            {
+                await bankUserRepository.SaveAsync(BankUser);
+            }
+
+            RefreshDisplay(lastImported);
+            StatusMessage = $"PDF导入成功：{imported.Count} 条流水";
+            MessageBox.Show($"PDF导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (InvalidDataException ex)
+        {
+            StatusMessage = ex.Message;
+            MessageBox.Show(ex.Message, "导入PDF", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"PDF导入失败：{ex.Message}";
+            MessageBox.Show($"PDF导入失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private bool EnsurePdfImportSupported()
+    {
+        if (pdfImportService.IsBankSupported(Bank))
+        {
+            return true;
+        }
+
+        var message = pdfImportService.GetUnsupportedBankMessage(Bank);
+        StatusMessage = message;
+        MessageBox.Show(message, "导入PDF", MessageBoxButton.OK, MessageBoxImage.Information);
+        return false;
+    }
+
+    private static void ApplyImportedUserInfo(BankUser target, BankUser source)
+    {
+        target.UserCode = UseImported(source.UserCode, target.UserCode);
+        target.AccountName = UseImported(source.AccountName, target.AccountName);
+        target.AccountNo = UseImported(source.AccountNo, target.AccountNo);
+        target.CardNo = UseImported(source.CardNo, target.CardNo);
+        target.IdNumber = UseImported(source.IdNumber, target.IdNumber);
+        target.PhoneNumber = UseImported(source.PhoneNumber, target.PhoneNumber);
+        target.OpenBranch = UseImported(source.OpenBranch, target.OpenBranch);
+        target.Balance = source.Balance != 0 ? source.Balance : target.Balance;
+        target.StartDate = source.StartDate;
+        target.EndDate = source.EndDate;
+        target.TransactionType = UseImported(source.TransactionType, target.TransactionType);
+        target.Currency = UseImported(source.Currency, target.Currency);
+        target.ChapterCode = UseImported(source.ChapterCode, target.ChapterCode);
+        target.ChapterBranch = UseImported(source.ChapterBranch, target.ChapterBranch);
+        target.ShouldPrintSeal = source.ShouldPrintSeal || target.ShouldPrintSeal;
+        target.OpeningBalance = source.OpeningBalance != 0 ? source.OpeningBalance : target.OpeningBalance;
+        target.AutoCalculateInterest = source.AutoCalculateInterest || target.AutoCalculateInterest;
+        target.Remark = UseImported(source.Remark, target.Remark);
+
+        foreach (var item in source.ExtraFields)
+        {
+            if (!string.IsNullOrWhiteSpace(item.Value))
+            {
+                target[item.Key] = item.Value;
+            }
+        }
+    }
+
+    private static string UseImported(string imported, string current)
+    {
+        return string.IsNullOrWhiteSpace(imported) ? current : imported.Trim();
     }
 
     private void ExportRecordsToXlsx()

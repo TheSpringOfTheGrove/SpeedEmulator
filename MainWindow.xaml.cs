@@ -15,6 +15,8 @@ public partial class MainWindow : Window
     private readonly IFlowGenerationRepository flowGenerationRepository = new InMemoryFlowGenerationRepository();
     private readonly IFlowRecordRepository flowRecordRepository = new InMemoryFlowRecordRepository();
     private readonly ITableExcelService tableExcelService = new TableExcelService();
+    private readonly IPdfImportService pdfImportService = new PdfImportService();
+    private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService = new PdfImportPreviewDialogService();
     private readonly IFrontApiClient frontApiClient;
 
     public MainWindow(FrontSession session, IFrontApiClient frontApiClient)
@@ -33,8 +35,10 @@ public partial class MainWindow : Window
             frontApiClient,
             new ImageFilePickerService(),
             tableExcelService,
-            flowRecordRepository);
-        var window = new BankUsersWindow(viewModel, bankUserRepository, bankUserColumnSettingsRepository, bankInterestSettingsRepository, flowGenerationRepository, flowRecordRepository, tableExcelService)
+            flowRecordRepository,
+            pdfImportService,
+            pdfImportPreviewDialogService);
+        var window = new BankUsersWindow(viewModel, bankUserRepository, bankUserColumnSettingsRepository, bankInterestSettingsRepository, flowGenerationRepository, flowRecordRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
         {
             Owner = this
         };

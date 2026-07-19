@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Input;
@@ -18,6 +19,8 @@ public sealed class BankUsersViewModel : ObservableObject
     private readonly IImageFilePickerService imageFilePickerService;
     private readonly ITableExcelService tableExcelService;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IPdfImportService pdfImportService;
+    private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private BankUser editableUser;
     private BankUser? selectedUser;
     private bool isNewRecord = true;
@@ -34,7 +37,9 @@ public sealed class BankUsersViewModel : ObservableObject
         IFrontApiClient frontApiClient,
         IImageFilePickerService imageFilePickerService,
         ITableExcelService tableExcelService,
-        IFlowRecordRepository flowRecordRepository)
+        IFlowRecordRepository flowRecordRepository,
+        IPdfImportService? pdfImportService = null,
+        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null)
     {
         Bank = bank;
         this.repository = repository;
@@ -43,6 +48,8 @@ public sealed class BankUsersViewModel : ObservableObject
         this.imageFilePickerService = imageFilePickerService;
         this.tableExcelService = tableExcelService;
         this.flowRecordRepository = flowRecordRepository;
+        this.pdfImportService = pdfImportService ?? new PdfImportService();
+        this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         editableUser = BankUser.CreateDraft(bank);
         statusMessage = $"正在维护 {bank.Name} 用户资料";
 
@@ -64,6 +71,7 @@ public sealed class BankUsersViewModel : ObservableObject
         BackCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
         ImportXlsxCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromXlsxAsync);
         ExportXlsxCommand = new AsyncRelayCommand(ExportSelectedUserFlowsToXlsxAsync);
+        ImportPdfCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromPdfAsync);
     }
 
     public event EventHandler? RequestClose;
@@ -101,7 +109,18 @@ public sealed class BankUsersViewModel : ObservableObject
         get => selectedUser;
         set
         {
-            if (SetProperty(ref selectedUser, value) && value is not null)
+            if (!SetProperty(ref selectedUser, value))
+            {
+                return;
+            }
+
+            if (value is null)
+            {
+                LoadEditor(BankUser.CreateDraft(Bank), true);
+                return;
+            }
+
+            if (value is not null)
             {
                 LoadEditor(value, value.Id <= 0);
             }
@@ -147,6 +166,8 @@ public sealed class BankUsersViewModel : ObservableObject
     public ICommand ImportXlsxCommand { get; }
 
     public ICommand ExportXlsxCommand { get; }
+
+    public ICommand ImportPdfCommand { get; }
 
     public RelayCommand AutoGenerateFlowCommand { get; }
 
@@ -836,6 +857,104 @@ public sealed class BankUsersViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private async Task ImportSelectedUserFlowsFromPdfAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        if (!EnsurePdfImportSupported())
+        {
+            return;
+        }
+
+        var path = pdfImportService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            StatusMessage = "正在解析 PDF 用户信息和流水，请稍候...";
+            var isNewUser = SelectedUser is null;
+            var sourceUser = SelectedUser ?? BankUser.CreateDraft(Bank);
+            var originalUserId = sourceUser.Id;
+            var result = await pdfImportService.ImportBankUserAndFlowRecordsAsync(path, Bank, sourceUser);
+            if (!pdfImportPreviewDialogService.Confirm(result))
+            {
+                StatusMessage = result.HasBlockingErrors ? "PDF 导入存在错误，已取消保存。" : "已取消 PDF 导入。";
+                return;
+            }
+
+            var imported = result.FlowRecords;
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("没有读取到可导入的流水数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var targetUser = result.User ?? sourceUser.Clone();
+            NormalizeEditableUserBeforeSave(targetUser);
+            if (string.IsNullOrWhiteSpace(targetUser.AccountName))
+            {
+                targetUser.AccountName = $"{Bank.Name}PDF导入用户";
+            }
+
+            targetUser.BankId = Bank.Id;
+            targetUser.BankName = Bank.Name;
+            var savedUser = await repository.SaveAsync(targetUser);
+
+            var nextRecords = new List<FlowRecord>();
+            foreach (var record in imported)
+            {
+                record.Id = 0;
+                record.BankId = Bank.Id;
+                record.BankUserId = savedUser.Id;
+                nextRecords.Add(record);
+            }
+
+            ReindexFlowRecords(nextRecords);
+            await flowRecordRepository.SaveAllAsync(Bank.Id, savedUser.Id, nextRecords);
+            ReplaceUserInList(sourceUser, originalUserId, savedUser);
+            _ = SyncBackendUserAsync(savedUser);
+
+            StatusMessage = isNewUser
+                ? $"PDF导入成功：新建用户并导入 {imported.Count} 条流水"
+                : $"PDF导入成功：已覆盖 {savedUser.AccountName} 的用户信息和 {imported.Count} 条流水";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (InvalidDataException ex)
+        {
+            StatusMessage = ex.Message;
+            MessageBox.Show(ex.Message, "导入PDF", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"PDF导入失败：{ex.Message}";
+            MessageBox.Show($"PDF导入失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private bool EnsurePdfImportSupported()
+    {
+        if (pdfImportService.IsBankSupported(Bank))
+        {
+            return true;
+        }
+
+        var message = pdfImportService.GetUnsupportedBankMessage(Bank);
+        StatusMessage = message;
+        MessageBox.Show(message, "导入PDF", MessageBoxButton.OK, MessageBoxImage.Information);
+        return false;
     }
 
     private async Task ExportSelectedUserFlowsToXlsxAsync()

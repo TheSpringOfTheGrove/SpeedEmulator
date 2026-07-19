@@ -773,11 +773,11 @@ public sealed class MainViewModel : ObservableObject
         for (var index = 0; index < columnNames.Count; index++)
         {
             var columnName = columnNames[index];
-            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(bankName, columnName);
             if (field is null || ShouldUseExtraFlowRecordField(field, usedFixedFields))
             {
                 field = CreateFlowRecordExtraFieldPath(bankName, columnName, index);
-                type = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName).Type;
+                type = ExcelColumnFieldResolver.ResolveFlowRecordField(bankName, columnName).Type;
             }
 
             yield return Column(

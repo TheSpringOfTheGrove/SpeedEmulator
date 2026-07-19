@@ -254,6 +254,7 @@
                 <Button Content="保存全部" Command="{Binding SaveAllRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="打印" Command="{Binding PrintRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="导入xlsx" Command="{Binding ImportRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
+                <Button Content="导入PDF" Command="{Binding ImportPdfRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="导出xlsx" Command="{Binding ExportRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="开启筛选" Command="{Binding OpenFilterCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="设置字段" Command="{Binding SetColumnFieldCommand}" Style="{StaticResource FlowSideButtonStyle}" />

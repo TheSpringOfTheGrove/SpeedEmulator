@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -506,6 +507,29 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 return rowIndex.ToString(CultureInfo.InvariantCulture);
             }
 
+            if (IsSpdbPersonalElectronicSummaryColumn(column))
+            {
+                return ApplyTabSize(FormatValue(FirstNotBlank(record.Remark, record.TradeExplain), column.Type));
+            }
+
+            if (IsPostalSummaryColumn(column))
+            {
+                return ApplyTabSize(FormatValue(FirstNotBlank(
+                    record.Remark,
+                    record["\u9644\u8A00"]), column.Type));
+            }
+
+            if (IsPostalChannelColumn(column))
+            {
+                var channel = FirstNotBlank(
+                    record.TradeChannel,
+                    record["\u4EA4\u6613\u65B9\u5F0F"],
+                    record["\u4EA4\u6613\u6E20\u9053"],
+                    IsPostalCashFlag(record.CashCheck) ? string.Empty : record.CashCheck);
+
+                return ApplyTabSize(FormatValue(channel, column.Type));
+            }
+
             var value = ReadEntityValue(record, column.Field);
             if (value is null && string.Equals(column.Field, nameof(FlowRecord.Balance), StringComparison.OrdinalIgnoreCase))
             {
@@ -518,12 +542,132 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 formatted = GetKnownColumnFallback(record, column);
             }
 
+            if (IsWechatMerchantOrderColumn(column))
+            {
+                formatted = CleanWechatMerchantOrderText(formatted);
+            }
+
             if (ShouldSuppressPaperMainRowValue(record, column, formatted))
             {
                 return GetPaperMainRowFallback(record, column);
             }
 
             return formatted;
+        }
+
+        private bool IsWechatMerchantOrderColumn(PrintPdfColumn column)
+        {
+            if (!IsWechatContext())
+            {
+                return false;
+            }
+
+            var name = column.Name ?? string.Empty;
+            return string.Equals(column.Field, nameof(FlowRecord.MerchantName), StringComparison.OrdinalIgnoreCase)
+                || name.Contains("\u5546\u6237\u5355\u53F7", StringComparison.Ordinal)
+                || name.Contains("\u5546\u5BB6\u8BA2\u5355\u53F7", StringComparison.Ordinal);
+        }
+
+        private bool IsWechatContext()
+        {
+            var bankName = context.Bank.Name ?? string.Empty;
+            var templateName = context.Template.Name ?? string.Empty;
+            return context.Bank.Id == 2
+                || context.Template.BankId == 2
+                || bankName.Contains("\u5FAE\u4FE1", StringComparison.Ordinal)
+                || templateName.Contains("\u5FAE\u4FE1", StringComparison.Ordinal);
+        }
+
+        private static string CleanWechatMerchantOrderText(string value)
+        {
+            var text = NormalizeSingleLineText(value);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            foreach (var cue in new[]
+            {
+                "\u8BF4\u660E",
+                "\u8BF4\u660E\uFF1A",
+                "\u8D22\u4ED8\u901A\u652F\u4ED8\u79D1\u6280\u6709\u9650\u516C\u53F8",
+                "\u76D6\u7AE0"
+            })
+            {
+                var index = text.IndexOf(cue, StringComparison.Ordinal);
+                if (index > 0)
+                {
+                    text = text[..index].Trim();
+                }
+            }
+
+            var match = Regex.Match(text, @"^(?:/|[A-Za-z0-9][A-Za-z0-9_./-]*)");
+            return match.Success ? match.Value : text;
+        }
+
+        private static string NormalizeSingleLineText(string? value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", " ");
+        }
+
+        private bool IsSpdbPersonalElectronicSummaryColumn(PrintPdfColumn column)
+        {
+            var bankName = context.Bank.Name ?? string.Empty;
+            var templateName = context.Template.Name ?? string.Empty;
+            var columnName = column.Name ?? string.Empty;
+            var isSpdb = context.Bank.Id == 12
+                || context.Template.BankId == 12
+                || bankName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
+                || bankName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal)
+                || templateName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
+                || templateName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal);
+
+            return isSpdb
+                && templateName.Contains("\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal)
+                && (string.Equals(columnName, "\u6458\u8981", StringComparison.Ordinal)
+                    || columnName.Contains("\u4EA4\u6613\u6458\u8981", StringComparison.Ordinal));
+        }
+
+        private bool IsPostalSummaryColumn(PrintPdfColumn column)
+        {
+            if (!IsPostalContext())
+            {
+                return false;
+            }
+
+            var columnName = column.Name ?? string.Empty;
+            return string.Equals(columnName, "\u6458\u8981", StringComparison.Ordinal)
+                || columnName.Contains("\u4EA4\u6613\u6458\u8981", StringComparison.Ordinal);
+        }
+
+        private bool IsPostalChannelColumn(PrintPdfColumn column)
+        {
+            if (!IsPostalContext())
+            {
+                return false;
+            }
+
+            var columnName = column.Name ?? string.Empty;
+            return columnName.Contains("\u4EA4\u6613\u6E20\u9053", StringComparison.Ordinal)
+                || columnName.Contains("\u4EA4\u6613\u65B9\u5F0F", StringComparison.Ordinal);
+        }
+
+        private bool IsPostalContext()
+        {
+            var bankName = context.Bank.Name ?? string.Empty;
+            var templateName = context.Template.Name ?? string.Empty;
+            return context.Bank.Id == 15
+                || context.Template.BankId == 15
+                || bankName.Contains("\u90AE\u653F", StringComparison.Ordinal)
+                || bankName.Contains("\u90AE\u50A8", StringComparison.Ordinal)
+                || templateName.Contains("\u90AE\u653F", StringComparison.Ordinal)
+                || templateName.Contains("\u90AE\u50A8", StringComparison.Ordinal);
+        }
+
+        private static bool IsPostalCashFlag(string? value)
+        {
+            var text = value?.Trim() ?? string.Empty;
+            return text is "\u949E" or "\u6C47" or "\u949E\u6C47";
         }
 
         private static string GetKnownColumnFallback(FlowRecord record, PrintPdfColumn column)

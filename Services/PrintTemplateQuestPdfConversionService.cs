@@ -54,7 +54,7 @@ public static class PrintTemplateQuestPdfConversionService
 
     private static PrintPdfConfig CreateConfig(Bank bank, PrintTemplate template)
     {
-        var parsed = TryParseStimulsoftTemplate(template.PdfData);
+        var parsed = TryParseStimulsoftTemplate(bank, template.PdfData);
         var pageSize = parsed?.PageSize ?? template.PageSize;
         var isPortrait = IsPortrait(pageSize);
         var existing = template.Config?.Clone() ?? new PrintPdfConfig();
@@ -103,7 +103,7 @@ public static class PrintTemplateQuestPdfConversionService
         };
     }
 
-    private static ParsedTemplate? TryParseStimulsoftTemplate(string pdfData)
+    private static ParsedTemplate? TryParseStimulsoftTemplate(Bank bank, string pdfData)
     {
         if (string.IsNullOrWhiteSpace(pdfData) || !pdfData.TrimStart().StartsWith('<'))
         {
@@ -119,7 +119,7 @@ public static class PrintTemplateQuestPdfConversionService
             var pageSize = pageWidth > pageHeight ? "A4Landscape" : "A4Portrait";
             var margins = ParseMargins(page?.Elements().FirstOrDefault(item => item.Name.LocalName == "Margins")?.Value);
             var flowColumns = ReadBusinessObjectColumns(document, "流水")
-                .Select(CreateColumnFromBusinessObject)
+                .Select(column => CreateColumnFromBusinessObject(bank, column))
                 .Where(item => item is not null)
                 .Select(item => item!)
                 .ToList();
@@ -162,7 +162,7 @@ public static class PrintTemplateQuestPdfConversionService
         }
     }
 
-    private static PrintPdfColumn? CreateColumnFromBusinessObject(BusinessColumn column)
+    private static PrintPdfColumn? CreateColumnFromBusinessObject(Bank bank, BusinessColumn column)
     {
         if (string.Equals(column.Field, nameof(FlowRecord.Index), StringComparison.OrdinalIgnoreCase)
             || string.Equals(column.Name, "ID", StringComparison.OrdinalIgnoreCase)
@@ -186,7 +186,7 @@ public static class PrintTemplateQuestPdfConversionService
             };
         }
 
-        var (field, resolvedType) = ExcelColumnFieldResolver.ResolveFlowRecordField(column.Name);
+        var (field, resolvedType) = ExcelColumnFieldResolver.ResolveFlowRecordField(bank.Name, column.Name);
         field ??= column.Field;
         var type = ResolveColumnType(column, resolvedType);
         return new PrintPdfColumn

@@ -236,7 +236,7 @@ public sealed class TableExcelService : ITableExcelService
         for (var index = 0; index < columnNames.Count; index++)
         {
             var columnName = columnNames[index];
-            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(bank.Name, columnName);
             if (field is null || !usedFixedFields.Add(field))
             {
                 field = CreateExportFlowExtraFieldPath(bank.Name, columnName, index);

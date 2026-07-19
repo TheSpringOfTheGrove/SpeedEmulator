@@ -4,6 +4,21 @@ namespace SpeedEmulator.Services;
 
 public static class ExcelColumnFieldResolver
 {
+    public static (string? Field, string Type) ResolveFlowRecordField(string bankName, string columnName)
+    {
+        if (IsPostalBankName(bankName))
+        {
+            return NormalizeColumnName(columnName) switch
+            {
+                "交易方式" => (nameof(FlowRecord.TradeChannel), "Text"),
+                "摘要" or "交易摘要" => (nameof(FlowRecord.Remark), "Text"),
+                _ => ResolveFlowRecordField(columnName)
+            };
+        }
+
+        return ResolveFlowRecordField(columnName);
+    }
+
     public static (string? Field, string Type) ResolveBankUserField(string columnName)
     {
         var normalizedName = NormalizeColumnName(columnName);
@@ -77,13 +92,13 @@ public static class ExcelColumnFieldResolver
             "交易说明" or "注释" or "交易描述" => (nameof(FlowRecord.TradeExplain), "Text"),
             "交易方式" or "现转标志" or "钞汇" or "冲补帐" => (nameof(FlowRecord.CashCheck), "Text"),
             "交易代码" or "交易码" => (nameof(FlowRecord.TradeCode), "Text"),
-            "交易对方" or "对方户名" or "对方名称" or "对手户名" or "对手方户名" or "对方账户名" or "交易对手名称" or "对方姓名" or "对方名称" or "对方户名" => (nameof(FlowRecord.OppositeUsername), "Text"),
+            "交易对方" or "对手信息" or "户名" or "对方户名" or "对方名称" or "对手户名" or "对手方户名" or "对方账户名" or "交易对手名称" or "对方姓名" or "对方名称" or "对方户名" => (nameof(FlowRecord.OppositeUsername), "Text"),
             "对方账号" or "对方账户" or "对手账号" or "交易对手账号" or "对方卡号账号" or "对手方账户" or "对方帐号" => (nameof(FlowRecord.OppositeAccount), "Text"),
             "对方开户行" or "对方银行" or "对手银行" or "对方行名" or "对方开户行联行号" or "对手银行" or "对方开户行" => (nameof(FlowRecord.OppositeBank), "Text"),
             "商家订单号" or "商户单号" or "商户名称" => (nameof(FlowRecord.MerchantName), "Text"),
             "支付宝分类" or "交易分类" or "收支其他" or "APP交易分类" => (nameof(FlowRecord.Usage), "Text"),
             "收入支出" or "收支" or "收支属性" => (nameof(FlowRecord.IncomeAttribute), "Text"),
-            "账号" or "帐号" or "客户账号" or "交易账户" or "账户代码" or "卡号" => (nameof(FlowRecord.Account), "Text"),
+            "账号" or "帐号" or "客户账号" or "交易账户" or "交易账号" or "交易帐号" or "账户代码" or "卡号" => (nameof(FlowRecord.Account), "Text"),
             "应用号" => (nameof(FlowRecord.AppNum), "Text"),
             "币种" or "货币" or "币别" => (nameof(FlowRecord.Currency), "Text"),
             "交易币种" => (nameof(FlowRecord.TradeCurrency), "Text"),
@@ -205,5 +220,11 @@ public static class ExcelColumnFieldResolver
             || columnName.Contains("存入", StringComparison.Ordinal)
             || columnName.Contains("支取", StringComparison.Ordinal)
             || columnName is "借方" or "贷方" or "金额";
+    }
+
+    private static bool IsPostalBankName(string bankName)
+    {
+        return bankName.Contains("邮政", StringComparison.Ordinal)
+            || bankName.Contains("邮储", StringComparison.Ordinal);
     }
 }

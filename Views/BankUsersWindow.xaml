@@ -382,6 +382,7 @@
                 <Button Content="保存" Command="{Binding SaveCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="导入xlsx" Command="{Binding ImportXlsxCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="导出xlsx" Command="{Binding ExportXlsxCommand}" Style="{StaticResource SideButtonStyle}" />
+                <Button Content="导入PDF" Command="{Binding ImportPdfCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="自动生成流水" Command="{Binding AutoGenerateFlowCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="设置字段" Command="{Binding SetColumnsCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="设置利息" Command="{Binding SetInterestCommand}" Style="{StaticResource SideButtonStyle}" />

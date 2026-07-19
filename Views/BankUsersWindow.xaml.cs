@@ -24,6 +24,8 @@ public partial class BankUsersWindow : Window
     private readonly IFlowGenerationRepository flowGenerationRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
     private readonly ITableExcelService tableExcelService;
+    private readonly IPdfImportService pdfImportService;
+    private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private readonly IPrintTemplateRepository printTemplateRepository = new JsonPrintTemplateRepository();
     private readonly IPrintPdfService printPdfService = new ZhenchengPrintBridgeService();
 
@@ -34,7 +36,9 @@ public partial class BankUsersWindow : Window
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowGenerationRepository flowGenerationRepository,
         IFlowRecordRepository flowRecordRepository,
-        ITableExcelService tableExcelService)
+        ITableExcelService tableExcelService,
+        IPdfImportService pdfImportService,
+        IPdfImportPreviewDialogService pdfImportPreviewDialogService)
     {
         InitializeComponent();
         this.viewModel = viewModel;
@@ -44,6 +48,8 @@ public partial class BankUsersWindow : Window
         this.flowGenerationRepository = flowGenerationRepository;
         this.flowRecordRepository = flowRecordRepository;
         this.tableExcelService = tableExcelService;
+        this.pdfImportService = pdfImportService;
+        this.pdfImportPreviewDialogService = pdfImportPreviewDialogService;
         DataContext = viewModel;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenAutoGenerateFlow += ViewModel_RequestOpenAutoGenerateFlow;
@@ -92,7 +98,7 @@ public partial class BankUsersWindow : Window
                 interestSettingsRepository,
                 new FlowRuleExcelService());
 
-            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService)
+            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
             {
                 Owner = this
             };
@@ -112,7 +118,7 @@ public partial class BankUsersWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
@@ -368,12 +374,27 @@ public partial class BankUsersWindow : Window
             return;
         }
 
+        var row = FindVisualParent<DataGridRow>(cell);
+        var rowItem = row?.Item;
+        if (rowItem is not null
+            && IsIdColumn(cell.Column)
+            && ReferenceEquals(UsersGrid.SelectedItem, rowItem))
+        {
+            UsersGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+            UsersGrid.CommitEdit(DataGridEditingUnit.Row, true);
+            UsersGrid.SelectedIndex = -1;
+            UsersGrid.CurrentCell = default;
+            viewModel.SelectedUser = null;
+            e.Handled = true;
+            return;
+        }
+
         if (!cell.IsFocused)
         {
             cell.Focus();
         }
 
-        if (FindVisualParent<DataGridRow>(cell)?.Item is { } rowItem && cell.Column is not null)
+        if (rowItem is not null && cell.Column is not null)
         {
             UsersGrid.SelectedItem = rowItem;
             UsersGrid.CurrentCell = new DataGridCellInfo(rowItem, cell.Column);
@@ -544,6 +565,11 @@ public partial class BankUsersWindow : Window
     private static bool IsIdColumn(SpeedEmulator.Models.ColumnDefinition column)
     {
         return string.Equals(column.Name, "ID", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsIdColumn(DataGridColumn? column)
+    {
+        return string.Equals(Convert.ToString(column?.Header, CultureInfo.CurrentCulture), "ID", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class RowNumberConverter : IValueConverter
