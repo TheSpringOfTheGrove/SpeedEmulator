@@ -1423,8 +1423,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
-            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
             if (IsAgriculturalBankPersonalPaperTemplate(context))
@@ -1473,7 +1473,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
-                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                var accountNumber = NormalizePrintNumber(context, FirstNotBlank(
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
@@ -1482,12 +1482,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
                     $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
-                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -2250,8 +2250,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
-            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
             if (IsAgriculturalBankPersonalPaperTemplate(context))
@@ -2300,7 +2300,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
-                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                var accountNumber = NormalizePrintNumber(context, FirstNotBlank(
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
@@ -2309,12 +2309,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
                     $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
-                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -2989,8 +2989,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
-            var userNumber = NormalizePrintNumber(ResolveBankUserNumber(context, values));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
             if (IsAgriculturalBankPersonalPaperTemplate(context))
@@ -3039,7 +3039,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
-                var accountNumber = NormalizePrintNumber(FirstNotBlank(
+                var accountNumber = NormalizePrintNumber(context, FirstNotBlank(
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
@@ -3048,12 +3048,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
                     $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
-                Set(target, "OppositeAccount", NormalizePrintNumber(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -3428,6 +3428,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyAlipayPersonalStatementBankUserFields(context, target, values);
         }
 
+        if (IsSpdbCorporatePrintContext(context))
+        {
+            ApplySpdbCorporateBankUserFields(context, target, values);
+        }
+
+        if (IsChinaMerchantsCorporatePrintContext(context))
+        {
+            ApplyChinaMerchantsCorporateBankUserFields(context, target, values);
+        }
+
         if (IsHuaxiaPersonalElectronicPrintContext(context))
         {
             ApplyHuaxiaPersonalElectronicBankUserFields(context, target, values);
@@ -3436,6 +3446,83 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (IsChinaMerchantsBank(context.Bank))
         {
             ApplyChinaMerchantsBankUserFields(context, target, values);
+        }
+    }
+
+    private static void ApplySpdbCorporateBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var accountNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.AccountNo,
+            GetBankUserColumnValue(context, values, "\u8D26\u53F7", "\u8D26\u6237\u8D26\u53F7", "\u5BA2\u6237\u8D26\u53F7"),
+            GetValue(values, "AccountNum"),
+            GetValue(values, "Account"),
+            GetValue(values, "AccountNo"),
+            GetValue(values, "\u8D26\u53F7")));
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "Account", accountNumber);
+            Set(target, "AccountNo", accountNumber);
+            Set(target, "BankAccount", accountNumber);
+            Set(target, "BankAccountNo", accountNumber);
+            Set(target, "CardNum", accountNumber);
+        }
+
+        var customerNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetValue(values, "\u5BA2\u6237\u53F7"),
+            GetValue(values, "\u5BA2\u6237\u7F16\u53F7"),
+            GetValue(values, "CustomerNo"),
+            GetValue(values, "CustomerNumber"),
+            GetBankUserColumnValue(context, values, "\u5BA2\u6237\u53F7", "\u5BA2\u6237\u7F16\u53F7"),
+            context.BankUser.UserCode));
+        if (!string.IsNullOrWhiteSpace(customerNumber))
+        {
+            Set(target, "UserNum", customerNumber);
+            Set(target, "CustomerNo", customerNumber);
+            Set(target, "CustomerNumber", customerNumber);
+            Set(target, "CustomerCode", customerNumber);
+            Set(target, "PrintNo", customerNumber);
+        }
+    }
+
+    private static void ApplyChinaMerchantsCorporateBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var accountNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.AccountNo,
+            GetBankUserColumnValue(context, values, "\u8D26\u53F7", "\u6237\u53E3\u53F7", "\u8D26\u6237\u4EE3\u7801"),
+            GetValue(values, "AccountNum"),
+            GetValue(values, "Account"),
+            GetValue(values, "AccountNo"),
+            GetValue(values, "\u8D26\u53F7")));
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "Account", accountNumber);
+            Set(target, "AccountNo", accountNumber);
+            Set(target, "BankAccount", accountNumber);
+            Set(target, "BankAccountNo", accountNumber);
+            Set(target, "CardNum", accountNumber);
+        }
+
+        var openBranch = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.OpenBranch,
+            GetBankUserColumnValue(context, values, "\u5F00\u6237\u94F6\u884C", "\u7F51\u70B9\u540D\u79F0"),
+            GetValue(values, "OpenBranch")));
+        if (!string.IsNullOrWhiteSpace(openBranch))
+        {
+            Set(target, "OpenBranch", openBranch);
+            Set(target, "PrintBranch", openBranch);
+            Set(target, "PrintAgency", openBranch);
+            Set(target, "PrintOrg", openBranch);
+            Set(target, "PrintInstitution", openBranch);
+            Set(target, "PrintNet", openBranch);
+            Set(target, "PrintNetwork", openBranch);
         }
     }
 
@@ -4808,6 +4895,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplySpdbPersonalElectronicFlowFields(context, source, values, target);
         }
 
+        if (IsSpdbCorporatePrintContext(context))
+        {
+            ApplySpdbCorporateFlowFields(context, source, values, target);
+        }
+
+        if (IsChinaMerchantsCorporatePrintContext(context))
+        {
+            ApplyChinaMerchantsCorporateFlowFields(context, source, values, target);
+        }
+
+        if (IsCiticCorporatePrintContext(context))
+        {
+            ApplyCiticCorporateFlowFields(context, source, values, target);
+        }
+
         if (IsPostalPrintContext(context))
         {
             ApplyPostalFlowPrintFields(context, source, values, target);
@@ -4850,6 +4952,37 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             && templateName.Contains("\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal);
     }
 
+    private static bool IsSpdbCorporatePrintContext(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        var bankType = context.Bank.Type ?? string.Empty;
+        return (IsSpdbBank(context.Bank)
+                || context.Bank.Id == 110
+                || context.Template.BankId == 110
+                || context.Template.VendorBankId == 99
+                || templateName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
+                || templateName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal))
+            && (string.Equals(bankType, BankTypes.Corporate, StringComparison.Ordinal)
+                || context.Bank.Name.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u516C\u53F8", StringComparison.Ordinal));
+    }
+
+    private static bool IsChinaMerchantsCorporatePrintContext(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        var bankType = context.Bank.Type ?? string.Empty;
+        return (IsChinaMerchantsBank(context.Bank)
+                || context.Bank.Id == 116
+                || context.Template.BankId == 116
+                || templateName.Contains("\u62DB\u884C", StringComparison.Ordinal)
+                || templateName.Contains("\u62DB\u5546", StringComparison.Ordinal))
+            && (string.Equals(bankType, BankTypes.Corporate, StringComparison.Ordinal)
+                || context.Bank.Name.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u516C\u53F8", StringComparison.Ordinal));
+    }
+
     private static bool IsSpdbPersonalElectronicPrintContext(PrintRenderContext context)
     {
         var templateName = context.Template.Name ?? string.Empty;
@@ -4889,6 +5022,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 || templateName.Contains("\u4E2D\u4FE1", StringComparison.Ordinal))
             && templateName.Contains("\u4E2A\u4EBA", StringComparison.Ordinal)
             && templateName.Contains("\u7535\u5B50\u72482", StringComparison.Ordinal);
+    }
+
+    private static bool IsCiticCorporatePrintContext(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        var bankType = context.Bank.Type ?? string.Empty;
+        return (IsCiticBank(context.Bank)
+                || context.Bank.Id == 103
+                || context.Template.BankId == 103
+                || context.Template.VendorBankId == 95
+                || templateName.Contains("\u4E2D\u4FE1", StringComparison.Ordinal))
+            && (string.Equals(bankType, BankTypes.Corporate, StringComparison.Ordinal)
+                || context.Bank.Name.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u5BF9\u516C", StringComparison.Ordinal)
+                || templateName.Contains("\u516C\u53F8", StringComparison.Ordinal));
     }
 
     private static bool IsHuaxiaPersonalElectronicPrintContext(PrintRenderContext context)
@@ -5017,6 +5165,127 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static void ApplySpdbCorporateFlowFields(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var serialNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u4EA4\u6613\u6D41\u6C34\u53F7", "\u67DC\u5458\u6D41\u6C34", "\u67DC\u5458\u6D41\u6C34\u53F7"),
+            source.SerialNum,
+            GetValue(values, nameof(FlowRecord.SerialNum)),
+            source.LogNum,
+            GetValue(values, nameof(FlowRecord.LogNum))));
+        if (!string.IsNullOrWhiteSpace(serialNumber))
+        {
+            Set(target, nameof(FlowRecord.SerialNum), serialNumber);
+            Set(target, nameof(FlowRecord.SequenceNum), serialNumber);
+            Set(target, nameof(FlowRecord.LogNum), serialNumber);
+            Set(target, "TellerSerial", serialNumber);
+            Set(target, "TellerSerialNumber", serialNumber);
+            Set(target, "SerialNumber", serialNumber);
+            Set(target, "TransactionSerialNumber", serialNumber);
+            Set(target, "FlowNo", serialNumber);
+            SetPrintFieldAlias(target, "\u4EA4\u6613\u6D41\u6C34\u53F7", serialNumber);
+            SetPrintFieldAlias(target, "\u67DC\u5458\u6D41\u6C34", serialNumber);
+            SetPrintFieldAlias(target, "\u67DC\u5458\u6D41\u6C34\u53F7", serialNumber);
+        }
+
+        var counterpartyInstitution = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u5BF9\u624B\u673A\u6784", "\u5BF9\u65B9\u5F00\u6237\u884C", "\u5BF9\u65B9\u94F6\u884C", "\u5BF9\u65B9\u884C\u540D"),
+            source.OppositeBank,
+            GetValue(values, nameof(FlowRecord.OppositeBank))));
+        if (!string.IsNullOrWhiteSpace(counterpartyInstitution))
+        {
+            Set(target, nameof(FlowRecord.OppositeBank), counterpartyInstitution);
+            Set(target, "CounterpartyInstitution", counterpartyInstitution);
+            Set(target, "CounterpartyBank", counterpartyInstitution);
+            Set(target, "CounterpartyBankName", counterpartyInstitution);
+            Set(target, "OppositeBranch", counterpartyInstitution);
+            Set(target, "CounterpartyBranch", counterpartyInstitution);
+            Set(target, nameof(FlowRecord.VoucherType), counterpartyInstitution);
+            SetPrintFieldAlias(target, "\u5BF9\u624B\u673A\u6784", counterpartyInstitution);
+            SetPrintFieldAlias(target, "\u5BF9\u624B\u673A\u8D2D", counterpartyInstitution);
+            SetPrintFieldAlias(target, "\u5BF9\u65B9\u5F00\u6237\u884C", counterpartyInstitution);
+            SetPrintFieldAlias(target, "\u5BF9\u65B9\u94F6\u884C", counterpartyInstitution);
+        }
+
+        var counterpartyName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u5BF9\u624B\u540D\u79F0", "\u5BF9\u65B9\u6237\u540D", "\u5BF9\u65B9\u540D\u79F0"),
+            source.OppositeUsername,
+            GetValue(values, nameof(FlowRecord.OppositeUsername))));
+        if (!string.IsNullOrWhiteSpace(counterpartyName))
+        {
+            Set(target, nameof(FlowRecord.OppositeUsername), counterpartyName);
+            Set(target, "CounterpartyName", counterpartyName);
+            Set(target, "OppositeName", counterpartyName);
+            SetPrintFieldAlias(target, "\u5BF9\u624B\u540D\u79F0", counterpartyName);
+            SetPrintFieldAlias(target, "\u5BF9\u65B9\u6237\u540D", counterpartyName);
+            SetPrintFieldAlias(target, "\u5BF9\u65B9\u540D\u79F0", counterpartyName);
+        }
+    }
+
+    private static void ApplyChinaMerchantsCorporateFlowFields(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var businessType = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u4E1A\u52A1\u7C7B\u578B", "\u4EA4\u6613\u7C7B\u578B", "\u4EA4\u6613\u79CD\u7C7B"),
+            source.ProductName,
+            GetValue(values, nameof(FlowRecord.ProductName)),
+            source.ProductType,
+            GetValue(values, nameof(FlowRecord.ProductType))));
+        if (!string.IsNullOrWhiteSpace(businessType))
+        {
+            Set(target, nameof(FlowRecord.ProductName), businessType);
+            Set(target, nameof(FlowRecord.ProductType), businessType);
+            Set(target, nameof(FlowRecord.AccountNum), businessType);
+            Set(target, nameof(FlowRecord.Account), businessType);
+            Set(target, "AccountNo", businessType);
+            Set(target, "BankAccount", businessType);
+            Set(target, "BankAccountNo", businessType);
+            SetPrintFieldAlias(target, "\u4E1A\u52A1\u7C7B\u578B", businessType);
+            SetPrintFieldAlias(target, "\u4EA4\u6613\u7C7B\u578B", businessType);
+        }
+
+        var billNo = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u7968\u636E\u53F7", "\u7968\u636E\u53F7\u7801", "\u4EA4\u6613\u6D41\u6C34\u53F7", "\u6D41\u6C34\u53F7", "\u51ED\u8BC1\u53F7", "\u51ED\u8BC1\u53F7\u7801"),
+            source.VoucherNum,
+            GetValue(values, nameof(FlowRecord.VoucherNum)),
+            source.SerialNum,
+            GetValue(values, nameof(FlowRecord.SerialNum)),
+            source.SequenceNum,
+            GetValue(values, nameof(FlowRecord.SequenceNum)),
+            source.LogNum,
+            GetValue(values, nameof(FlowRecord.LogNum))));
+        Set(target, nameof(FlowRecord.VoucherNum), billNo);
+        Set(target, nameof(FlowRecord.SerialNum), billNo);
+        Set(target, nameof(FlowRecord.SequenceNum), billNo);
+        Set(target, nameof(FlowRecord.LogNum), billNo);
+        SetPrintFieldAlias(target, "\u7968\u636E\u53F7", billNo);
+        SetPrintFieldAlias(target, "\u7968\u636E\u53F7\u7801", billNo);
+
+        var summary = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u6458\u8981", "\u6458\u8981\u4EE3\u7801", "\u5907\u6CE8"),
+            source.ProductBrief,
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            source.Remark,
+            GetValue(values, nameof(FlowRecord.Remark)),
+            source.TradeExplain,
+            GetValue(values, nameof(FlowRecord.TradeExplain))));
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            Set(target, nameof(FlowRecord.ProductBrief), summary);
+            Set(target, nameof(FlowRecord.Remark), summary);
+            Set(target, nameof(FlowRecord.TradeExplain), summary);
+            SetPrintFieldAlias(target, "\u6458\u8981", summary);
+            SetPrintFieldAlias(target, "\u6458\u8981\u4EE3\u7801", summary);
+        }
+    }
+
     private static void ApplyPostalFlowPrintFields(
         PrintRenderContext context,
         FlowRecord source,
@@ -5086,6 +5355,82 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "CounterpartyAccount", oppositeAccount);
         Set(target, "OpponentAccount", oppositeAccount);
         Set(target, "RecipientAccount", oppositeAccount);
+    }
+
+    private static void ApplyCiticCorporateFlowFields(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
+    {
+        var tellerSerial = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u67DC\u5458\u4EA4\u6613\u53F7", "\u6838\u5FC3\u6D41\u6C34\u53F7"),
+            source.SerialNum,
+            GetValue(values, nameof(FlowRecord.SerialNum)),
+            source.LogNum,
+            GetValue(values, nameof(FlowRecord.LogNum)),
+            source.OperatorNum,
+            GetValue(values, nameof(FlowRecord.OperatorNum))));
+        if (!string.IsNullOrWhiteSpace(tellerSerial))
+        {
+            Set(target, nameof(FlowRecord.TradeCode), tellerSerial);
+            Set(target, nameof(FlowRecord.Operator), tellerSerial);
+            Set(target, nameof(FlowRecord.OperatorNum), tellerSerial);
+            Set(target, "TellerSerial", tellerSerial);
+            Set(target, "TellerSerialNumber", tellerSerial);
+            Set(target, "TellerTransactionNo", tellerSerial);
+            SetPrintFieldAlias(target, "\u67DC\u5458\u4EA4\u6613\u53F7", tellerSerial);
+            SetPrintFieldAlias(target, "\u6838\u5FC3\u6D41\u6C34\u53F7", tellerSerial);
+        }
+
+        var summary = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u6458\u8981\u4FE1\u606F", "\u6458\u8981"),
+            source.ProductBrief,
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            source.ProductName,
+            GetValue(values, nameof(FlowRecord.ProductName))));
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            Set(target, nameof(FlowRecord.ProductBrief), summary);
+            Set(target, nameof(FlowRecord.ProductName), summary);
+            Set(target, nameof(FlowRecord.Remark), summary);
+            Set(target, nameof(FlowRecord.TradeExplain), summary);
+            SetPrintFieldAlias(target, "\u6458\u8981\u4FE1\u606F", summary);
+            SetPrintFieldAlias(target, "\u6458\u8981", summary);
+        }
+
+        var oppositeAccount = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u5BF9\u65B9\u8D26\u53F7", "\u5BF9\u624B\u8D26\u53F7", "\u5BF9\u65B9\u8D26\u6237"),
+            source.OppositeAccount,
+            GetValue(values, nameof(FlowRecord.OppositeAccount))));
+        Set(target, nameof(FlowRecord.OppositeAccount), oppositeAccount);
+        Set(target, "OppositeAccountNum", oppositeAccount);
+        Set(target, "CounterpartyAccount", oppositeAccount);
+        Set(target, "OpponentAccount", oppositeAccount);
+        Set(target, "RecipientAccount", oppositeAccount);
+        SetPrintFieldAlias(target, "\u5BF9\u65B9\u8D26\u53F7", oppositeAccount);
+        SetPrintFieldAlias(target, "\u5BF9\u624B\u8D26\u53F7", oppositeAccount);
+
+        var oppositeName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u5BF9\u65B9\u8D26\u6237\u540D\u79F0", "\u5BF9\u65B9\u6237\u540D", "\u5BF9\u65B9\u540D\u79F0", "\u5BF9\u65B9\u6237\u540D"),
+            source.OppositeUsername,
+            GetValue(values, nameof(FlowRecord.OppositeUsername))));
+        Set(target, nameof(FlowRecord.OppositeUsername), oppositeName);
+        Set(target, "CounterpartyName", oppositeName);
+        Set(target, "OppositeName", oppositeName);
+        SetPrintFieldAlias(target, "\u5BF9\u65B9\u8D26\u6237\u540D\u79F0", oppositeName);
+        SetPrintFieldAlias(target, "\u5BF9\u65B9\u6237\u540D", oppositeName);
+
+        var fundBook = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetFlowExtraFieldValue(context.Bank, source, values, "\u52A8\u8D26\u8D44\u91D1\u5206\u7C3F"),
+            source.ProductType,
+            GetValue(values, nameof(FlowRecord.ProductType))));
+        Set(target, nameof(FlowRecord.ProductType), fundBook);
+        Set(target, nameof(FlowRecord.AccountNum), fundBook);
+        Set(target, nameof(FlowRecord.SerialNum), fundBook);
+        Set(target, nameof(FlowRecord.SequenceNum), fundBook);
+        Set(target, nameof(FlowRecord.LogNum), fundBook);
+        SetPrintFieldAlias(target, "\u52A8\u8D26\u8D44\u91D1\u5206\u7C3F", fundBook);
     }
 
     private static void ApplyHuaxiaPersonalElectronicFlowFields(
@@ -5991,6 +6336,60 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, property, value);
     }
 
+    private static void SetPrintFieldAlias(object target, string fieldName, string value)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName) || string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var normalizedFieldName = NormalizeFieldName(fieldName);
+        Set(target, normalizedFieldName, value);
+        SetExtraFieldValue(target, normalizedFieldName, value);
+        SetExtraFieldValue(target, $"[{normalizedFieldName}]", value);
+    }
+
+    private static void SetExtraFieldValue(object target, string key, string value)
+    {
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var property = target.GetType().GetProperty(nameof(FlowRecord.ExtraFields), BindingFlags.Public | BindingFlags.Instance)
+            ?? target.GetType().GetProperty("ExtraFields", BindingFlags.Public | BindingFlags.Instance);
+        if (property is null)
+        {
+            return;
+        }
+
+        var extraFields = property.CanRead ? property.GetValue(target) : null;
+        if (extraFields is null && property.CanWrite)
+        {
+            extraFields = new Dictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                property.SetValue(target, extraFields);
+            }
+            catch
+            {
+                extraFields = null;
+            }
+        }
+
+        if (extraFields is IDictionary dictionary)
+        {
+            try
+            {
+                dictionary[key] = value;
+            }
+            catch
+            {
+                // Some vendor types expose read-only or strongly typed dictionaries; ignore unsupported aliases.
+            }
+        }
+    }
+
     private static void SetTargetValueIfBlank(object target, string propertyName, object? value)
     {
         if (string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.CurrentCulture)))
@@ -6075,12 +6474,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             usedIndexes.Add(targetIndex);
-            Set(vendorColumn, "Name", localColumn.Name);
+            Set(vendorColumn, "Name", NormalizeVendorPdfColumnName(localColumn.Name));
             Set(vendorColumn, "ColumnWidth", localColumn.Width);
             Set(vendorColumn, "FontSize", localColumn.FontSize);
             Set(vendorColumn, "FontFamily", localColumn.FontFamily);
             Set(vendorColumn, "LineHeight", localColumn.LineHeight);
         }
+    }
+
+    private static string NormalizeVendorPdfColumnName(string name)
+    {
+        return string.Equals(name, "\u5BF9\u624B\u673A\u8D2D", StringComparison.Ordinal)
+            ? "\u5BF9\u624B\u673A\u6784"
+            : name;
     }
 
     private static int FindVendorPdfColumnIndex(IList vendorColumns, string name, ISet<int> usedIndexes)
@@ -6899,8 +7305,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         return FirstNotBlank(
             GetValue(values, "UserNum"),
-            context.BankUser.UserCode,
+            GetValue(values, "\u5BA2\u6237\u53F7"),
+            GetValue(values, "\u5BA2\u6237\u7F16\u53F7"),
             GetValue(values, "CustomerNo"),
+            GetValue(values, "CustomerNumber"),
+            context.BankUser.UserCode,
             GetValue(values, "SerialNum"),
             GetValue(values, "PrintNo"));
     }
@@ -6991,6 +7400,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         var seed = string.IsNullOrWhiteSpace(digits) ? "6228480398401725673" : digits;
         return (seed + "6228480398401725673")[..18];
+    }
+
+    private static string NormalizePrintNumber(PrintRenderContext context, string value)
+    {
+        return IsSpdbCorporatePrintContext(context)
+            || IsChinaMerchantsCorporatePrintContext(context)
+            || IsCiticCorporatePrintContext(context)
+            ? NormalizeSingleLinePrintText(value)
+            : NormalizePrintNumber(value);
     }
 
     private static string NormalizeCurrency(string value)

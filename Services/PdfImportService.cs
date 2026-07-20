@@ -44,7 +44,18 @@ public sealed class PdfImportService : IPdfImportService
         new("广发", "广发银行个人账户交易流水证明 PDF", ["个人账户交易流水证明", "广发银行股份有限公司", "交易时间", "交易金额"]),
         new("华夏", "华夏银行个人账户交易明细 PDF", ["记账日期", "Accounting Date", "对方卡/账号", "华夏银行股份有"]),
         new("微信", "微信支付交易明细证明 PDF", ["微信支付交易明细证明", "微信号", "交易明细对应时间段", "交易单号"]),
-        new("支付宝", "支付宝交易流水证明 PDF", ["支付宝支付科技有限公司", "交易流水证明", "支付宝账号", "交易时间段"])
+        new("支付宝", "支付宝交易流水证明 PDF", ["支付宝支付科技有限公司", "交易流水证明", "支付宝账号", "交易时间段"]),
+        new("浦发对公", "上海浦东发展银行对公电子对账单 PDF", ["上海浦东发展银行电子对账单", "客户名称", "Account Number", "交易流水号"]),
+        new("兴业对公", "兴业银行对公交易明细对账单 PDF", ["兴业银行", "交易明细对账单", "活期账号", "对方账号"]),
+        new("招行对公", "招商银行对公账务明细清单 PDF", ["账务明细清单", "Statement Of Account", "开户银行", "账户名称"]),
+        new("中行对公", "中国银行对公账户对账单 PDF", ["Account No.", "Account Name", "开户行", "借方发生额"]),
+        new("中信对公", "中信银行对公账户交易明细 PDF", ["账户交易明细", "查询周期", "账户：", "柜员交易号"]),
+        new("工行对公", "中国工商银行对公账户明细清单 PDF", ["中国工商银行账户明细清单", "本方账号户名", "对方账号", "借贷标志"]),
+        new("光大对公", "中国光大银行对公账户对账单 PDF", ["中国光大银行对公账户对账单", "账户名称", "借/贷", "流水号"]),
+        new("建行对公", "中国建设银行对公账户明细信息 PDF", ["中国建设银行账户明细信息", "本方户名", "账户明细编号", "交易流水号"]),
+        new("交行对公", "交通银行对公明细对账单 PDF", ["交通银行", "明细对账单", "会计日期", "对方账号"]),
+        new("民生对公", "中国民生银行对公单位账户对账单 PDF", ["单位账户对账单", "客户名称", "客户账号", "对方户名/账号"]),
+        new("农行对公", "中国农业银行对公账户明细 PDF", ["账户明细", "户名", "收入金额", "对方开户行"])
     ];
 
     private static readonly HuaxiaColumnSpec[] HuaxiaPersonalElectronicColumns =
@@ -58,6 +69,116 @@ public sealed class PdfImportService : IPdfImportService
         new("OppositeAccount", 342, 416),
         new("OppositeBank", 416, 496),
         new("Remark", 496, 570)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] SpdbCorporateColumns =
+    [
+        new("Date", 18, 82),
+        new("Serial", 82, 165),
+        new("Debit", 165, 266),
+        new("Credit", 266, 356),
+        new("Balance", 356, 442),
+        new("OppositeBank", 442, 555),
+        new("OppositeName", 555, 640),
+        new("Summary", 640, 730),
+        new("Remark", 730, 830)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] CiticCorporateColumns =
+    [
+        new("Date", 20, 82),
+        new("TellerSerial", 82, 155),
+        new("Summary", 155, 255),
+        new("OppositeAccount", 255, 350),
+        new("OppositeName", 350, 510),
+        new("FundBook", 510, 610),
+        new("Debit", 610, 690),
+        new("Credit", 690, 760),
+        new("Balance", 760, 835)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] IcbcCorporateColumns =
+    [
+        new("OppositeAccount", 35, 112),
+        new("Date", 112, 143),
+        new("Time", 143, 172),
+        new("Direction", 172, 225),
+        new("OppositeName", 225, 305),
+        new("OppositeBankNo", 305, 365),
+        new("Usage", 365, 430),
+        new("Summary", 430, 496),
+        new("Remark", 496, 555),
+        new("Balance", 555, 620),
+        new("Amount", 620, 675),
+        new("PostingDate", 675, 744),
+        new("AvailableBalance", 744, 810)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] CcbCorporateColumns =
+    [
+        new("Account", 0, 48),
+        new("DateTime", 48, 82),
+        new("Debit", 82, 116),
+        new("Credit", 116, 146),
+        new("Balance", 146, 182),
+        new("Currency", 182, 212),
+        new("OppositeName", 212, 247),
+        new("OppositeAccount", 247, 285),
+        new("OppositeBank", 285, 316),
+        new("PostingDate", 316, 352),
+        new("Summary", 352, 382),
+        new("Remark", 382, 415),
+        new("Serial", 415, 455),
+        new("EnterpriseSerial", 455, 485),
+        new("VoucherType", 485, 516),
+        new("VoucherNum", 516, 555),
+        new("Medium", 555, 590)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] BocomCorporateColumns =
+    [
+        new("Index", 18, 42),
+        new("AccountingDate", 42, 82),
+        new("TradeDate", 82, 122),
+        new("TradeName", 122, 166),
+        new("VoucherType", 166, 212),
+        new("VoucherNum", 212, 260),
+        new("Debit", 260, 324),
+        new("Credit", 324, 382),
+        new("Balance", 382, 466),
+        new("CardNo", 466, 516),
+        new("TradePlace", 516, 564),
+        new("OppositeAccount", 564, 610),
+        new("OppositeName", 610, 658),
+        new("OppositeBank", 658, 706),
+        new("Summary", 706, 756),
+        new("Serial", 756, 832)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] CmbcCorporateColumns =
+    [
+        new("DateTime", 18, 58),
+        new("Summary", 58, 198),
+        new("VoucherType", 198, 232),
+        new("VoucherNum", 232, 270),
+        new("Debit", 300, 352),
+        new("Credit", 378, 426),
+        new("Balance", 456, 498),
+        new("Serial", 498, 542),
+        new("Counterparty", 542, 705),
+        new("OppositeBank", 705, 832)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] AbcCorporateColumns =
+    [
+        new("DateTime", 20, 82),
+        new("Income", 92, 152),
+        new("Expense", 162, 222),
+        new("Balance", 232, 292),
+        new("OppositeAccount", 292, 370),
+        new("OppositeName", 370, 438),
+        new("OppositeBank", 438, 516),
+        new("Summary", 516, 580)
     ];
 
     public bool IsBankSupported(Bank bank)
@@ -146,7 +267,8 @@ public sealed class PdfImportService : IPdfImportService
 
     private static BankPdfTemplateDefinition? FindTemplate(Bank bank)
     {
-        if (!string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal))
+        if (!string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal)
+            && !string.Equals(bank.Type, BankTypes.Corporate, StringComparison.Ordinal))
         {
             return null;
         }
@@ -295,6 +417,17 @@ public sealed class PdfImportService : IPdfImportService
             "华夏" => ParseHuaxiaPdf(bank, bankUser, document, result),
             "微信" => ParseWechatPdf(bank, bankUser, document, result),
             "支付宝" => ParseAlipayPdf(bank, bankUser, document, result),
+            "浦发对公" => ParseSpdbCorporatePdf(bank, bankUser, document, result),
+            "兴业对公" => ParseCibCorporatePdf(bank, bankUser, document, result),
+            "招行对公" => ParseCmbCorporatePdf(bank, bankUser, document, result),
+            "中行对公" => ParseBocCorporatePdf(bank, bankUser, document, result),
+            "中信对公" => ParseCiticCorporatePdf(bank, bankUser, document, result),
+            "工行对公" => ParseIcbcCorporatePdf(bank, bankUser, document, result),
+            "光大对公" => ParseEverbrightCorporatePdf(bank, bankUser, document, result),
+            "建行对公" => ParseCcbCorporatePdf(bank, bankUser, document, result),
+            "交行对公" => ParseBocomCorporatePdf(bank, bankUser, document, result),
+            "民生对公" => ParseCmbcCorporatePdf(bank, bankUser, document, result),
+            "农行对公" => ParseAbcCorporatePdf(bank, bankUser, document, result),
             _ => false
         };
 
@@ -323,7 +456,7 @@ public sealed class PdfImportService : IPdfImportService
             result.Issues.Add(new PdfImportIssue
             {
                 Severity = PdfImportIssueSeverity.Error,
-                Message = "没有识别到可导入的用户信息。请确认 PDF 是当前银行的个人流水模板。"
+                Message = $"没有识别到可导入的用户信息。请确认 PDF 是当前银行的{bank.GetBankType()}流水模板。"
             });
         }
 
@@ -332,7 +465,7 @@ public sealed class PdfImportService : IPdfImportService
             result.Issues.Add(new PdfImportIssue
             {
                 Severity = PdfImportIssueSeverity.Error,
-                Message = $"已识别为{bank.Name}个人 PDF 模板，但没有解析到可导入的流水明细。"
+                Message = $"已识别为{bank.Name}{bank.GetBankType()} PDF 模板，但没有解析到可导入的流水明细。"
             });
         }
 
@@ -1468,6 +1601,2179 @@ public sealed class PdfImportService : IPdfImportService
         return parsedUser;
     }
 
+    private static bool ParseSpdbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(180))
+        {
+            var text = CleanPdfValue(line.Text);
+            var customerMatch = Regex.Match(text, @"客户名称\s+Customer\s+Name\s+(?<name>.+)$");
+            if (customerMatch.Success)
+            {
+                SetUserNamed(user, bank, "客户户名", customerMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+
+            var accountNameMatch = Regex.Match(text, @"^(?<name>.+?)账户名称\s+Account\s+Name$");
+            if (accountNameMatch.Success)
+            {
+                SetUserNamed(user, bank, "客户户名", accountNameMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+
+            var customerNumberMatch = Regex.Match(text, @"客户号\s+Customer\s+Number\s+(?<customer>\S+)");
+            if (customerNumberMatch.Success)
+            {
+                user["客户号"] = CleanPdfValue(customerNumberMatch.Groups["customer"].Value);
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"账号\s+Account\s+Number\s+(?<account>\d+)");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                parsedUser = true;
+            }
+
+            var rangeMatch = Regex.Match(text, @"账单统计日期\s+Start\s+Time\s+&\s+End\s+Time\s+(?<start>\d{4}/\d{2}/\d{2})\s+-\s+(?<end>\d{4}/\d{2}/\d{2})\s+开户行\s+The\s+Bank\s+of\s+Account\s+Opening\s+(?<branch>.+?)(?:\s+Page\s+\d+\s+of\s+\d+)?$");
+            if (rangeMatch.Success)
+            {
+                SetUserNamed(user, bank, "起始日期", rangeMatch.Groups["start"].Value);
+                SetUserNamed(user, bank, "终止日期", rangeMatch.Groups["end"].Value);
+                SetUserNamed(user, bank, "开户行", rangeMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "年份", rangeMatch.Groups["start"].Value[..4]);
+                parsedUser = true;
+            }
+
+            var currencyMatch = Regex.Match(text, @"账单币种\s+Currency\s+(?<currency>.+?)(?:\s+CNY)?$");
+            if (currencyMatch.Success)
+            {
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(currencyMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var openingBalanceMatch = Regex.Match(text, @"期初余额\s+Opening\s+Balance\s+(?<balance>[+-]?\d[\d,]*\.\d{2})");
+            if (openingBalanceMatch.Success && decimal.TryParse(openingBalanceMatch.Groups["balance"].Value.Replace(",", string.Empty, StringComparison.Ordinal), NumberStyles.Number, CultureInfo.InvariantCulture, out var openingBalance))
+            {
+                user.OpeningBalance = openingBalance;
+                parsedUser = true;
+            }
+        }
+
+        var positionedRecords = new List<FlowRecord>();
+        foreach (var row in BuildPositionedRows(
+            document.Words,
+            SpdbCorporateColumns,
+            IsSpdbCorporateHeaderWord,
+            IsSpdbCorporateFooterWord,
+            @"^\d{4}/\d{2}/\d{2}$",
+            90,
+            250))
+        {
+            if (TryParseSpdbCorporateRecord(row, bank, user, out var record))
+            {
+                positionedRecords.Add(record);
+            }
+        }
+
+        var textRecords = new List<FlowRecord>();
+        double? previousSpdbBalance = user.OpeningBalance != 0 ? (double)user.OpeningBalance : null;
+        foreach (var group in GroupLinesByStart(lines, IsSpdbCorporateTextRecordStart, IsSpdbCorporateTextIgnoredLine))
+        {
+            if (TryParseSpdbCorporateTextRecord(group, bank, user, previousSpdbBalance, out var record))
+            {
+                textRecords.Add(record);
+                previousSpdbBalance = record.Balance ?? previousSpdbBalance;
+            }
+        }
+
+        if (textRecords.Count > positionedRecords.Count)
+        {
+            MergeSpdbCorporatePositionedRecords(textRecords, positionedRecords);
+            result.FlowRecords.AddRange(textRecords);
+        }
+        else
+        {
+            result.FlowRecords.AddRange(positionedRecords);
+        }
+
+        InferSpdbCorporateMoneyDirections(result.FlowRecords);
+        return parsedUser;
+    }
+
+    private static bool ParseCibCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(120))
+        {
+            var text = CleanPdfValue(line.Text);
+            var rangeMatch = Regex.Match(text, @"打印日期:\s*(?<print>\d{4}-\d{2}-\d{2})\s+本期时间范围:\s*(?<start>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+至\s+(?<end>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+            if (rangeMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印时间", rangeMatch.Groups["print"].Value);
+                SetUserNamed(user, bank, "起始日期", rangeMatch.Groups["start"].Value);
+                SetUserNamed(user, bank, "终止日期", rangeMatch.Groups["end"].Value);
+                SetUserNamed(user, bank, "年份", rangeMatch.Groups["start"].Value[..4]);
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"活期账号:\s*(?<account>\d+)\s+币种:\s*(?<currency>\S+)");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(accountMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var nameMatch = Regex.Match(text, @"户名:\s*(?<name>.+?)\s+开户行:\s*(?<branch>.+)$");
+            if (nameMatch.Success)
+            {
+                SetUserNamed(user, bank, "户名", nameMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "开户行", nameMatch.Groups["branch"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var group in GroupLinesByStart(lines, IsCibCorporateTextRecordStart, IsCibCorporateTextIgnoredLine))
+        {
+            if (TryParseCibCorporateTextRecord(group, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+            else if (GroupContainsMoney(group))
+            {
+                AddParseWarning(result, group, "该兴业对公流水行未能按专用模板解析。");
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseCmbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(120))
+        {
+            var text = CleanPdfValue(line.Text);
+            var branchMatch = Regex.Match(text, @"开户银行:\s*(?<branch>.+?)\s+账单所属期间:\s*(?<start>\d{8})\s+(?<end>\d{8})");
+            if (branchMatch.Success)
+            {
+                SetUserNamed(user, bank, "网点名称", branchMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "起始日期", FormatCompactDate(branchMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "截止日期", FormatCompactDate(branchMatch.Groups["end"].Value));
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"账号:\s*(?<account>\d+)\s+货币:\s*(?<currency>\S+)");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "户口号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "账号序号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(accountMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var nameMatch = Regex.Match(text, @"账户名称:\s*(?<name>.+?)\s+上页余额:\s*(?<balance>[+-]?\d[\d,]*\.\d{2})");
+            if (nameMatch.Success)
+            {
+                SetUserNamed(user, bank, "户口名称", nameMatch.Groups["name"].Value);
+                if (decimal.TryParse(nameMatch.Groups["balance"].Value.Replace(",", string.Empty, StringComparison.Ordinal), NumberStyles.Number, CultureInfo.InvariantCulture, out var openingBalance))
+                {
+                    user.OpeningBalance = openingBalance;
+                }
+
+                parsedUser = true;
+            }
+        }
+
+        foreach (var group in GroupCmbCorporateRecords(lines))
+        {
+            if (TryParseCmbCorporateRecord(group, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+            else if (GroupContainsMoney(group))
+            {
+                AddParseWarning(result, group, "该招行对公流水行未能按专用模板解析。");
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseBocCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(160))
+        {
+            var text = CleanPdfValue(line.Text);
+            var accountMatch = Regex.Match(text, @"账号\s+(?<account>\S+)\s+账户名称\s+(?<name>.+?)\s+开户行\s+(?<branch>.+?)\s+起始日期(?<start>\d{8})");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "账户名称", accountMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "开户行", accountMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "起始日期", FormatCompactDate(accountMatch.Groups["start"].Value));
+                parsedUser = true;
+            }
+
+            var endMatch = Regex.Match(text, @"截止日期\s+(?<end>\d{8})");
+            if (endMatch.Success)
+            {
+                SetUserNamed(user, bank, "截止日期", FormatCompactDate(endMatch.Groups["end"].Value));
+                parsedUser = true;
+            }
+
+            var currencyMatch = Regex.Match(text, @"币种\s+(?<currency>\S+)");
+            if (currencyMatch.Success)
+            {
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(currencyMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var openingBalanceMatch = Regex.Match(text, @"承前页余额\s+(?<balance>[+-]?\d[\d,]*\.\d{2})");
+            if (openingBalanceMatch.Success && decimal.TryParse(openingBalanceMatch.Groups["balance"].Value.Replace(",", string.Empty, StringComparison.Ordinal), NumberStyles.Number, CultureInfo.InvariantCulture, out var openingBalance))
+            {
+                user.OpeningBalance = openingBalance;
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildBocCorporateRows(lines))
+        {
+            if (TryParseBocCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseCiticCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(120))
+        {
+            var text = CleanPdfValue(line.Text);
+            var rangeMatch = Regex.Match(text, @"查询周期：(?<start>\d{4}-\d{2}-\d{2})\s+[—-]+\s+(?<end>\d{4}-\d{2}-\d{2})\s+币种：(?<currency>\S+)\s+查询时间：(?<print>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+            if (rangeMatch.Success)
+            {
+                SetUserNamed(user, bank, "起始日期", rangeMatch.Groups["start"].Value);
+                SetUserNamed(user, bank, "截止日期", rangeMatch.Groups["end"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(rangeMatch.Groups["currency"].Value));
+                SetUserNamed(user, bank, "制表日期", rangeMatch.Groups["print"].Value);
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"账户：(?<account>[^/]+)/(?<name>.+)$");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "户名", accountMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildPositionedRows(
+            document.Words,
+            CiticCorporateColumns,
+            IsCiticCorporateHeaderWord,
+            IsCiticCorporateFooterWord,
+            @"^\d{4}-\d{2}-\d{2}$",
+            90,
+            168))
+        {
+            if (TryParseCiticCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseIcbcCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(80))
+        {
+            var text = CleanPdfValue(line.Text);
+            var accountMatch = Regex.Match(text, @"账号：\s*(?<account>\S+)\s+币种：\s*(?<currency>\S+)");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(accountMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var userMatch = Regex.Match(text, @"本方账号户名：\s*(?<name>.+?)\s+本方账号开户行：\s*(?<branch>.+?)\s+时间范围：\s*(?<start>\d{8})\s*-\s*(?<end>\d{8})");
+            if (userMatch.Success)
+            {
+                SetUserNamed(user, bank, "户名", userMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "章内支行", userMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "开始日期", FormatCompactDate(userMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "结束日期", FormatCompactDate(userMatch.Groups["end"].Value));
+                SetUserNamed(user, bank, "交易日期", FormatCompactDate(userMatch.Groups["start"].Value));
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildPositionedRowsWithTopLead(
+            document.Words,
+            IcbcCorporateColumns,
+            IsIcbcCorporateHeaderWord,
+            IsIcbcCorporateFooterWord,
+            @"^\d{6,}$",
+            112,
+            65,
+            12))
+        {
+            if (TryParseIcbcCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseEverbrightCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(80))
+        {
+            var text = CleanPdfValue(line.Text);
+            var rangeMatch = Regex.Match(text, @"查询日期：(?<print>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+交易日期：(?<start>\d{8})-(?<end>\d{8})");
+            if (rangeMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印时间", rangeMatch.Groups["print"].Value);
+                SetUserNamed(user, bank, "起始日期", FormatCompactDate(rangeMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "结束日期", FormatCompactDate(rangeMatch.Groups["end"].Value));
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"账号：(?<account>\S+)\s+账户名称：(?<name>.+)$");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "账户名", accountMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var group in GroupEverbrightCorporateRecords(lines))
+        {
+            if (TryParseEverbrightCorporateRecord(group, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+            else if (GroupContainsMoney(group))
+            {
+                AddParseWarning(result, group, "该光大对公流水行未能按专用模板解析。");
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseCcbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(80))
+        {
+            var text = CleanPdfValue(line.Text);
+            var headerMatch = Regex.Match(text, @"本方户名：(?<name>.+?)\s+查询时间段：(?<start>\d{8})\s*-\s*(?<end>\d{8})\s+打印日期：(?<print>.+)$");
+            if (headerMatch.Success)
+            {
+                SetUserNamed(user, bank, "账户名称", headerMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "开始日期", FormatCompactDate(headerMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "结束日期", FormatCompactDate(headerMatch.Groups["end"].Value));
+                SetUserNamed(user, bank, "打印日期", headerMatch.Groups["print"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildPositionedRowsWithTopLead(
+            document.Words,
+            CcbCorporateColumns,
+            IsCcbCorporateHeaderWord,
+            IsCcbCorporateFooterWord,
+            @"^\d{8}$",
+            45,
+            98,
+            10))
+        {
+            if (TryParseCcbCorporateRecord(row, bank, user, out var record))
+            {
+                if (string.IsNullOrWhiteSpace(user.AccountNo) && !string.IsNullOrWhiteSpace(record.Account))
+                {
+                    SetUserNamed(user, bank, "账号", record.Account);
+                }
+
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseBocomCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        var bocomYear = string.Empty;
+        var bocomMonth = string.Empty;
+        for (var index = 0; index < Math.Min(lines.Count, 90); index++)
+        {
+            var line = lines[index];
+            var text = CleanPdfValue(line.Text);
+            var branchMatch = Regex.Match(text, @"开户机构：(?<branch>.+?)\s+币种：(?<currency>\S+)\s+年份：(?<year>\d{4})\s+月份：(?<month>\d{2})");
+            if (branchMatch.Success)
+            {
+                SetUserNamed(user, bank, "支行名称", branchMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "分行", branchMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "年份", branchMatch.Groups["year"].Value);
+                SetUserNamed(user, bank, "开始日期", $"{branchMatch.Groups["year"].Value}-{branchMatch.Groups["month"].Value}-01");
+                SetUserNamed(user, bank, "结束日期", $"{branchMatch.Groups["year"].Value}-{branchMatch.Groups["month"].Value}-01");
+                SetUserNamed(user, bank, "机构", "交通银行");
+                user.Currency = NormalizeCurrencyText(branchMatch.Groups["currency"].Value);
+                parsedUser = true;
+            }
+
+            if (text.StartsWith("开户机构：", StringComparison.Ordinal))
+            {
+                var branch = CleanPdfValue(text["开户机构：".Length..]);
+                SetUserNamed(user, bank, "支行名称", branch);
+                SetUserNamed(user, bank, "分行", branch);
+                user["开户机构"] = branch;
+                parsedUser = true;
+            }
+
+            var accountMatch = Regex.Match(text, @"账号：\s*(?<account>\S+)\s+户名：\s*(?<name>.+)$");
+            if (accountMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "单位名称", accountMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "存款人名称", accountMatch.Groups["name"].Value);
+                user.AccountNo = CleanPdfValue(accountMatch.Groups["account"].Value);
+                user.AccountName = CleanPdfValue(accountMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+
+            if (text == "账号：" && index + 1 < lines.Count)
+            {
+                for (var nextIndex = index + 1; nextIndex < Math.Min(lines.Count, index + 5); nextIndex++)
+                {
+                    var nextText = CleanPdfValue(lines[nextIndex].Text);
+                    var nextAccountMatch = Regex.Match(nextText, @"^(?<account>\d+)\s+(?<name>.+)$");
+                    if (!nextAccountMatch.Success)
+                    {
+                        continue;
+                    }
+
+                    SetUserNamed(user, bank, "账号", nextAccountMatch.Groups["account"].Value);
+                    SetUserNamed(user, bank, "单位名称", nextAccountMatch.Groups["name"].Value);
+                    SetUserNamed(user, bank, "存款人名称", nextAccountMatch.Groups["name"].Value);
+                    user.AccountNo = CleanPdfValue(nextAccountMatch.Groups["account"].Value);
+                    user.AccountName = CleanPdfValue(nextAccountMatch.Groups["name"].Value);
+                    parsedUser = true;
+                    break;
+                }
+            }
+
+            var yearMatch = Regex.Match(text, @"(?<year>20\d{2})\s*(?<currency>人民币|RMB)");
+            if (yearMatch.Success)
+            {
+                bocomYear = yearMatch.Groups["year"].Value;
+                SetUserNamed(user, bank, "年份", bocomYear);
+                user.Currency = NormalizeCurrencyText(yearMatch.Groups["currency"].Value);
+                parsedUser = true;
+            }
+
+            var monthMatch = Regex.Match(text, @"(?<month>\d{2})月份：?");
+            if (monthMatch.Success)
+            {
+                bocomMonth = monthMatch.Groups["month"].Value;
+                parsedUser = true;
+            }
+        }
+
+        if (Regex.IsMatch(bocomYear, @"^\d{4}$") && Regex.IsMatch(bocomMonth, @"^\d{2}$"))
+        {
+            var startText = $"{bocomYear}-{bocomMonth}-01";
+            SetUserNamed(user, bank, "开始日期", startText);
+            if (DateTime.TryParseExact(startText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate))
+            {
+                SetUserNamed(user, bank, "结束日期", startDate.AddMonths(1).AddDays(-1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            }
+        }
+
+        foreach (var row in BuildPositionedRowsWithTopLead(
+            document.Words,
+            BocomCorporateColumns,
+            IsBocomCorporateHeaderWord,
+            IsBocomCorporateFooterWord,
+            @"^\d+$",
+            42,
+            126,
+            8))
+        {
+            if (TryParseBocomCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseCmbcCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(90))
+        {
+            var text = CleanPdfValue(line.Text);
+            var printMatch = Regex.Match(text, @"打印渠道:(?<channel>\S+)\s+打印柜员:\s*(?<operator>\S*)\s+打印时间:(?<print>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+            if (printMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印日期", printMatch.Groups["print"].Value);
+                SetUserNamed(user, bank, "打印柜员", printMatch.Groups["operator"].Value);
+                user["打印渠道"] = CleanPdfValue(printMatch.Groups["channel"].Value);
+                parsedUser = true;
+            }
+
+            var customerMatch = Regex.Match(text, @"客户名称:\s*(?<name>.+?)\s+客户账号:(?<account>\S+)\s+币种:(?<currency>\S+)");
+            if (customerMatch.Success)
+            {
+                SetUserNamed(user, bank, "客户名称", customerMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "客户账号", customerMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "账户账号", customerMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(customerMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var branchMatch = Regex.Match(text, @"开户机构:\s*(?<branch>.+?)\s+起止日期:(?<start>\d{4}/\d{2}/\d{2})-(?<end>\d{4}/\d{2}/\d{2})");
+            if (branchMatch.Success)
+            {
+                SetUserNamed(user, bank, "开户机构", branchMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "起始日期", branchMatch.Groups["start"].Value);
+                SetUserNamed(user, bank, "终止日期", branchMatch.Groups["end"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildPositionedRowsWithTopLead(
+            document.Words,
+            CmbcCorporateColumns,
+            IsCmbcCorporateHeaderWord,
+            IsCmbcCorporateFooterWord,
+            @"^\d{4}/\d{2}/\d{2}$",
+            62,
+            104,
+            4))
+        {
+            if (TryParseCmbcCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ParseAbcCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        var lines = document.Lines.ToList();
+        foreach (var line in lines.Take(60))
+        {
+            var text = CleanPdfValue(line.Text);
+            var headerMatch = Regex.Match(text, @"账号:(?<account>\S+)\s+户名:(?<name>.+?)\s+币种:(?<currency>\S+)\s+起止日期:\s*(?<start>\d{4}年\d{2}月\d{2}日)\s*-\s*(?<end>\d{4}年\d{2}月\d{2}日)");
+            if (headerMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号", headerMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "户名", headerMatch.Groups["name"].Value);
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(headerMatch.Groups["currency"].Value));
+                SetUserNamed(user, bank, "起始日期", NormalizeChineseDate(headerMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "终止日期", NormalizeChineseDate(headerMatch.Groups["end"].Value));
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildPositionedRowsWithTopLead(
+            document.Words,
+            AbcCorporateColumns,
+            IsAbcCorporateHeaderWord,
+            IsAbcCorporateFooterWord,
+            @"^\d{4}-\d{2}-\d{2}$",
+            82,
+            72,
+            14))
+        {
+            if (TryParseAbcCorporateRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        return parsedUser;
+    }
+
+    private static bool TryParseIcbcCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var date = GetPositionedCell(row, "Date");
+        var time = GetPositionedCell(row, "Time");
+        var amountText = GetPositionedCell(row, "Amount");
+        var balanceText = GetPositionedCell(row, "Balance");
+        var direction = GetPositionedCell(row, "Direction");
+        if (!Regex.IsMatch(date, @"^\d{4}-\d{2}-\d{2}$")
+            || !Regex.IsMatch(time, @"^\d{2}:\d{2}:\d{2}$")
+            || string.IsNullOrWhiteSpace(amountText))
+        {
+            return false;
+        }
+
+        var summary = FirstNotBlank(GetPositionedCell(row, "Summary"), GetPositionedCell(row, "Usage"), GetPositionedCell(row, "Remark"));
+        var usage = GetPositionedCell(row, "Usage");
+        var remark = GetPositionedCell(row, "Remark");
+        var oppositeName = GetPositionedCell(row, "OppositeName");
+        var oppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        var oppositeBankNo = GetPositionedCell(row, "OppositeBankNo");
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull($"{date} {time}");
+        record.ProductType = summary;
+        record.ProductName = summary;
+        record.ProductBrief = summary;
+        record.Usage = usage;
+        record.Remark = remark;
+        record.TradeExplain = remark;
+        record.OppositeUsername = oppositeName;
+        record.OppositeAccount = oppositeAccount;
+        record.OppositeBank = oppositeBankNo;
+        record.NetNum = oppositeBankNo;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(
+            record,
+            direction.Contains("借", StringComparison.Ordinal) ? amountText : string.Empty,
+            direction.Contains("贷", StringComparison.Ordinal) ? amountText : string.Empty,
+            "借方发生额",
+            "贷方发生额",
+            direction);
+
+        SetFlowRaw(record, "日期", $"{date} {time}");
+        SetFlowRaw(record, "交易时间", $"{date} {time}");
+        SetFlowRaw(record, "借贷标志", direction);
+        SetFlowRaw(record, "业务产品种类", summary);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "记账信息", GetPositionedCell(row, "PostingDate"));
+        SetFlowRaw(record, "入账日期", GetPositionedCell(row, "PostingDate"));
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对方单位", oppositeName);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "对方行号", oppositeBankNo);
+        SetFlowRaw(record, "用途", usage);
+        SetFlowRaw(record, "附言", remark);
+        SetFlowRaw(record, "截止可用余额", GetPositionedCell(row, "AvailableBalance"));
+        return true;
+    }
+
+    private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupEverbrightCorporateRecords(IReadOnlyList<PdfTextLine> lines)
+    {
+        var result = new List<IReadOnlyList<PdfTextLine>>();
+        var current = new List<PdfTextLine>();
+        foreach (var line in lines)
+        {
+            var text = CleanPdfValue(line.Text);
+            if (IsEverbrightCorporateIgnoredLine(text))
+            {
+                continue;
+            }
+
+            if (Regex.IsMatch(text, @"^\d+\s+\d{8}\s+\d{6}\s+(?:借方|贷方)\s+[-+]?\d[\d,]*\.\d{2}\s+[-+]?\d[\d,]*\.\d{2}"))
+            {
+                if (current.Count > 0)
+                {
+                    result.Add(current);
+                }
+
+                current = [line];
+                continue;
+            }
+
+            if (current.Count > 0)
+            {
+                current.Add(line);
+            }
+        }
+
+        if (current.Count > 0)
+        {
+            result.Add(current);
+        }
+
+        return result;
+    }
+
+    private static bool TryParseEverbrightCorporateRecord(
+        IReadOnlyList<PdfTextLine> group,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        if (group.Count == 0)
+        {
+            return false;
+        }
+
+        var firstLine = CleanPdfValue(group[0].Text);
+        var match = Regex.Match(
+            firstLine,
+            @"^(?<index>\d+)\s+(?<date>\d{8})\s+(?<time>\d{6})\s+(?<direction>借方|贷方)\s+(?<amount>[-+]?\d[\d,]*\.\d{2})\s+(?<balance>[-+]?\d[\d,]*\.\d{2})(?:\s+(?<tail>.*))?$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var parts = new List<string>();
+        AddEverbrightCorporatePart(parts, match.Groups["tail"].Value);
+        parts.AddRange(group.Skip(1).Select(item => CleanPdfValue(item.Text)).Where(item => !string.IsNullOrWhiteSpace(item)));
+
+        var oppositeAccountParts = new List<string>();
+        while (parts.Count > 0 && TryTakeLeadingEverbrightNumber(parts[0], oppositeAccountParts.Count > 0, out var numberPart, out var remainder))
+        {
+            oppositeAccountParts.Add(numberPart);
+            parts.RemoveAt(0);
+            AddEverbrightCorporatePart(parts, remainder, insertAtStart: true);
+        }
+
+        var voucher = string.Empty;
+        var summary = string.Empty;
+        var serial = string.Empty;
+        var oppositeName = string.Empty;
+        var voucherIndex = parts.FindIndex(item => Regex.IsMatch(item, @"^\d{3}\s+.+\s+[0-9A-Za-z]{5,}$"));
+        if (voucherIndex >= 0)
+        {
+            var voucherLine = parts[voucherIndex];
+            var voucherMatch = Regex.Match(voucherLine, @"^(?<voucher>\d{3})\s+(?<summary>.+?)\s+(?<serial>[0-9A-Za-z]{5,})$");
+            if (voucherMatch.Success)
+            {
+                voucher = voucherMatch.Groups["voucher"].Value;
+                summary = voucherMatch.Groups["summary"].Value;
+                serial = voucherMatch.Groups["serial"].Value;
+            }
+
+            foreach (var tail in parts.Skip(voucherIndex + 1))
+            {
+                if (Regex.IsMatch(tail, @"^[0-9A-Za-z]{4,}$"))
+                {
+                    serial += tail;
+                }
+                else
+                {
+                    summary = AppendPdfCellText(summary, tail);
+                }
+            }
+
+            oppositeName = CollapseChineseSeparatedWords(string.Join(' ', parts.Take(voucherIndex)));
+        }
+        else
+        {
+            while (parts.Count > 0 && Regex.IsMatch(parts[^1], @"^[0-9A-Za-z]{4,}$"))
+            {
+                serial = string.Concat(parts[^1], serial);
+                parts.RemoveAt(parts.Count - 1);
+            }
+
+            var summaryLineIndex = parts.FindLastIndex(item => Regex.IsMatch(item, @"^.+\s+[0-9A-Za-z]{5,}$"));
+            if (summaryLineIndex >= 0)
+            {
+                var summaryLineMatch = Regex.Match(parts[summaryLineIndex], @"^(?<before>.+?)\s+(?<serial>[0-9A-Za-z]{5,})$");
+                if (summaryLineMatch.Success)
+                {
+                    serial = string.Concat(summaryLineMatch.Groups["serial"].Value, serial);
+                    var before = CleanPdfValue(summaryLineMatch.Groups["before"].Value);
+                    var nameParts = parts.Take(summaryLineIndex).ToList();
+                    if (nameParts.Count == 0)
+                    {
+                        var beforeTokens = SplitWords(before);
+                        if (beforeTokens.Count >= 2)
+                        {
+                            oppositeName = beforeTokens[0];
+                            summary = CollapseChineseSeparatedWords(string.Join(' ', beforeTokens.Skip(1)));
+                        }
+                        else
+                        {
+                            summary = before;
+                        }
+                    }
+                    else
+                    {
+                        oppositeName = CollapseChineseSeparatedWords(string.Join(' ', nameParts));
+                        summary = before;
+                    }
+
+                    parts = [];
+                }
+            }
+
+            if (parts.Count > 0)
+            {
+                oppositeName = parts[0];
+                summary = CollapseChineseSeparatedWords(string.Join(' ', parts.Skip(1)));
+            }
+        }
+
+        var date = FormatCompactDate(match.Groups["date"].Value);
+        var time = FormatCompactTime(match.Groups["time"].Value);
+        var direction = match.Groups["direction"].Value;
+        var amountText = match.Groups["amount"].Value;
+        var balanceText = match.Groups["balance"].Value;
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull($"{date} {time}");
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.Remark = summary;
+        record.TradeExplain = summary;
+        record.VoucherNum = voucher;
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.OppositeAccount = CleanPdfValue(string.Concat(oppositeAccountParts));
+        record.OppositeUsername = CollapseChineseSeparatedWords(oppositeName);
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(
+            record,
+            direction.Contains("借", StringComparison.Ordinal) ? amountText : string.Empty,
+            direction.Contains("贷", StringComparison.Ordinal) ? amountText : string.Empty,
+            "借方发生额",
+            "贷方发生额",
+            direction);
+
+        SetFlowRaw(record, "序号", match.Groups["index"].Value);
+        SetFlowRaw(record, "交易日期", date);
+        SetFlowRaw(record, "时间", time);
+        SetFlowRaw(record, "借/贷", direction);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "账户余额", balanceText);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "对方名称", record.OppositeUsername);
+        SetFlowRaw(record, "凭证号", voucher);
+        SetFlowRaw(record, "凭证序号", voucher);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "流水号", serial);
+        SetFlowRaw(record, "交易柜员号", serial);
+        return true;
+    }
+
+    private static bool TryParseCcbCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var account = GetPositionedCell(row, "Account");
+        var dateTime = NormalizeCompactDateTimeCell(GetPositionedCell(row, "DateTime"));
+        var debitText = GetPositionedCell(row, "Debit");
+        var creditText = GetPositionedCell(row, "Credit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (string.IsNullOrWhiteSpace(account)
+            || !Regex.IsMatch(dateTime, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$")
+            || (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText)))
+        {
+            return false;
+        }
+
+        var summary = GetPositionedCell(row, "Summary");
+        var remark = GetPositionedCell(row, "Remark");
+        var serial = GetPositionedCell(row, "Serial");
+        var voucherType = GetPositionedCell(row, "VoucherType");
+        var voucherNum = GetPositionedCell(row, "VoucherNum");
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = account;
+        record.AccountTime = ParseDateTimeOrNull(dateTime);
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.ProductType = summary;
+        record.Remark = remark;
+        record.TradeExplain = remark;
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.SequenceNum = serial;
+        record.VoucherType = voucherType;
+        record.VoucherNum = voucherNum;
+        record.Currency = NormalizeCurrencyText(FirstNotBlank(GetPositionedCell(row, "Currency"), user.Currency, "人民币"));
+        record.OppositeUsername = GetPositionedCell(row, "OppositeName");
+        record.OppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        record.OppositeBank = GetPositionedCell(row, "OppositeBank");
+        record.TradeChannel = GetPositionedCell(row, "Medium");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+
+        SetFlowRaw(record, "日期", dateTime);
+        SetFlowRaw(record, "交易时间", dateTime);
+        SetFlowRaw(record, "记账日期", GetPositionedCell(row, "PostingDate"));
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "备注", remark);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "交易流水号", serial);
+        SetFlowRaw(record, "账户明细编号-交易流水号", serial);
+        SetFlowRaw(record, "企业流水号", GetPositionedCell(row, "EnterpriseSerial"));
+        SetFlowRaw(record, "凭证种类", voucherType);
+        SetFlowRaw(record, "凭证号码", voucherNum);
+        SetFlowRaw(record, "凭证号", voucherNum);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方行名", record.OppositeBank);
+        SetFlowRaw(record, "对方开户机构", record.OppositeBank);
+        SetFlowRaw(record, "交易渠道", record.TradeChannel);
+        SetFlowRaw(record, "交易介质编号", record.TradeChannel);
+        return true;
+    }
+
+    private static bool TryParseBocomCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var index = GetPositionedCell(row, "Index");
+        var accountingDate = FormatCompactDate(GetPositionedCell(row, "AccountingDate"));
+        var tradeDate = FormatCompactDate(GetPositionedCell(row, "TradeDate"));
+        var debitText = GetPositionedCell(row, "Debit");
+        var creditText = GetPositionedCell(row, "Credit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(index, @"^\d+$")
+            || !Regex.IsMatch(tradeDate, @"^\d{4}-\d{2}-\d{2}$")
+            || (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText)))
+        {
+            return false;
+        }
+
+        var tradeName = GetPositionedCell(row, "TradeName");
+        var summary = GetPositionedCell(row, "Summary");
+        var serial = GetPositionedCell(row, "Serial");
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(tradeDate);
+        record.ProductName = tradeName;
+        record.ProductBrief = FirstNotBlank(summary, tradeName);
+        record.ProductType = tradeName;
+        record.VoucherType = GetPositionedCell(row, "VoucherType");
+        record.VoucherNum = GetPositionedCell(row, "VoucherNum");
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.OppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        record.OppositeUsername = GetPositionedCell(row, "OppositeName");
+        record.OppositeBank = GetPositionedCell(row, "OppositeBank");
+        record.AccountNum = GetPositionedCell(row, "CardNo");
+        record.TradePlace = GetPositionedCell(row, "TradePlace");
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+
+        SetFlowRaw(record, "序号", index);
+        SetFlowRaw(record, "日期", tradeDate);
+        SetFlowRaw(record, "会计日期", accountingDate);
+        SetFlowRaw(record, "交易日期", tradeDate);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "凭证种类", record.VoucherType);
+        SetFlowRaw(record, "凭证号码", record.VoucherNum);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "流水号", serial);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "交易名称", tradeName);
+        SetFlowRaw(record, "卡号", record.AccountNum);
+        SetFlowRaw(record, "交易地点", record.TradePlace);
+        SetFlowRaw(record, "对方行名", record.OppositeBank);
+        return true;
+    }
+
+    private static bool TryParseCmbcCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateTime = NormalizeSlashDateTimeCell(GetPositionedCell(row, "DateTime"));
+        var debitText = GetPositionedCell(row, "Debit");
+        var creditText = GetPositionedCell(row, "Credit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(dateTime, @"^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}$")
+            || (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText)))
+        {
+            return false;
+        }
+
+        var counterparty = GetPositionedCell(row, "Counterparty");
+        var (oppositeName, oppositeAccount) = SplitCounterpartyNameAndAccount(counterparty);
+        var summary = GetPositionedCell(row, "Summary");
+        var serial = GetPositionedCell(row, "Serial");
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(dateTime);
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.ProductType = summary;
+        record.VoucherType = GetPositionedCell(row, "VoucherType");
+        record.VoucherNum = GetPositionedCell(row, "VoucherNum");
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.OppositeUsername = oppositeName;
+        record.OppositeAccount = oppositeAccount;
+        record.OppositeBank = GetPositionedCell(row, "OppositeBank");
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方发生额", "贷方发生额");
+
+        SetFlowRaw(record, "交易日期", dateTime);
+        SetFlowRaw(record, "交易时间", dateTime);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "凭证类型", record.VoucherType);
+        SetFlowRaw(record, "凭证号码", record.VoucherNum);
+        SetFlowRaw(record, "交易金额", FormatMoney(Math.Abs(record.TradeMoney ?? 0)));
+        SetFlowRaw(record, "账户余额", balanceText);
+        SetFlowRaw(record, "流水号", serial);
+        SetFlowRaw(record, "对方帐号", oppositeAccount);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对方户名/账号", counterparty);
+        SetFlowRaw(record, "对方行名", record.OppositeBank);
+        return true;
+    }
+
+    private static bool TryParseAbcCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateTime = NormalizeDashDateTimeCell(GetPositionedCell(row, "DateTime"));
+        var incomeText = GetPositionedCell(row, "Income");
+        var expenseText = GetPositionedCell(row, "Expense");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(dateTime, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$")
+            || (string.IsNullOrWhiteSpace(incomeText) && string.IsNullOrWhiteSpace(expenseText)))
+        {
+            return false;
+        }
+
+        var summary = GetPositionedCell(row, "Summary");
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(dateTime);
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.ProductType = summary;
+        record.Remark = summary;
+        record.TradeExplain = summary;
+        record.OppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        record.OppositeUsername = GetPositionedCell(row, "OppositeName");
+        record.OppositeBank = GetPositionedCell(row, "OppositeBank");
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, expenseText, incomeText, "支出金额", "收入金额");
+
+        SetFlowRaw(record, "日期", dateTime);
+        SetFlowRaw(record, "交易时间", dateTime);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "交易金额", FormatMoney(Math.Abs(record.TradeMoney ?? 0)));
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "附言", summary);
+        SetFlowRaw(record, "对方名称", record.OppositeUsername);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "交易对手账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方开户行", record.OppositeBank);
+        return true;
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildPositionedRowsWithTopLead(
+        IReadOnlyList<PdfTextWord> words,
+        IReadOnlyList<PdfPositionedColumnSpec> columns,
+        Func<PdfTextWord, bool> isHeaderWord,
+        Func<string, bool> isFooterWord,
+        string rowStartPattern,
+        double rowStartLeftMax,
+        double defaultHeaderBottom,
+        double rowTopLead)
+    {
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = new List<PdfPositionedRow>();
+        foreach (var pageGroup in words.GroupBy(item => item.PageNumber).OrderBy(group => group.Key))
+        {
+            var pageWords = pageGroup
+                .Select(item => item with { Text = CleanPdfValue(item.Text) })
+                .Where(item => !string.IsNullOrWhiteSpace(item.Text))
+                .OrderBy(item => item.Top)
+                .ThenBy(item => item.Left)
+                .ToList();
+
+            var headerBottom = Math.Max(
+                defaultHeaderBottom,
+                pageWords
+                    .Where(isHeaderWord)
+                    .Select(item => item.Bottom)
+                    .DefaultIfEmpty(defaultHeaderBottom)
+                    .Max()) + 0.5;
+            var footerTop = pageWords
+                .Where(item => item.Top > headerBottom && isFooterWord(item.Text))
+                .Select(item => item.Top)
+                .DefaultIfEmpty(double.MaxValue)
+                .Min();
+            var rowStartWords = pageWords
+                .Where(item => item.Top > headerBottom
+                    && item.Top < footerTop
+                    && item.Left < rowStartLeftMax
+                    && Regex.IsMatch(item.Text, rowStartPattern))
+                .OrderBy(item => item.Top)
+                .ThenBy(item => item.Left)
+                .ToList();
+            var minimumStartGap = Math.Max(6d, rowTopLead * 1.5d);
+            rowStartWords = rowStartWords
+                .Aggregate(new List<PdfTextWord>(), (items, word) =>
+                {
+                    if (items.Count == 0 || word.Top - items[^1].Top >= minimumStartGap)
+                    {
+                        items.Add(word);
+                    }
+
+                    return items;
+                });
+
+            for (var index = 0; index < rowStartWords.Count; index++)
+            {
+                var currentStart = rowStartWords[index];
+                var bandTop = Math.Max(headerBottom, currentStart.Top - rowTopLead);
+                var bandBottom = index + 1 < rowStartWords.Count
+                    ? Math.Max(currentStart.Top, rowStartWords[index + 1].Top - rowTopLead)
+                    : footerTop;
+
+                var rowWords = pageWords
+                    .Where(item => item.Top >= bandTop && item.Top < bandBottom)
+                    .OrderBy(item => item.Top)
+                    .ThenBy(item => item.Left)
+                    .ToList();
+                var cells = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var column in columns)
+                {
+                    var columnWords = rowWords
+                        .Where(item => GetHorizontalCenter(item) >= column.Left && GetHorizontalCenter(item) < column.Right)
+                        .ToList();
+                    var value = JoinPositionedCellWords(columnWords);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        cells[column.Key] = value;
+                    }
+                }
+
+                rows.Add(new PdfPositionedRow(pageGroup.Key, currentStart.Top, cells));
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool IsIcbcCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "对方账号" or "交易时间" or "借贷标志" or "对方单位" or "对方行号" or "用途" or "摘要" or "附言" or "余额" or "发生额" or "入账日期" or "可用额度";
+    }
+
+    private static bool IsIcbcCorporateFooterWord(string text)
+    {
+        return text.StartsWith("重要提示", StringComparison.Ordinal)
+            || text.StartsWith("若与实际交易不符", StringComparison.Ordinal)
+            || text.StartsWith("第", StringComparison.Ordinal);
+    }
+
+    private static bool IsEverbrightCorporateIgnoredLine(string text)
+    {
+        var value = CleanPdfValue(text);
+        return IsCommonIgnoredLine(value)
+            || value.Contains("中国光大银行对公账户对账单", StringComparison.Ordinal)
+            || value.StartsWith("查询日期：", StringComparison.Ordinal)
+            || value.StartsWith("账号：", StringComparison.Ordinal)
+            || value.StartsWith("借方发生额：", StringComparison.Ordinal)
+            || value.StartsWith("借方笔数：", StringComparison.Ordinal)
+            || value.StartsWith("银行盖章", StringComparison.Ordinal)
+            || value.StartsWith("序号 交易日期", StringComparison.Ordinal)
+            || value.StartsWith("第", StringComparison.Ordinal);
+    }
+
+    private static bool IsCcbCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "账号" or "交易时" or "借方发" or "贷方发" or "余额" or "币种" or "对方户" or "对方账" or "对方开" or "记账日" or "摘要" or "备注" or "账户明" or "企业流" or "凭证种" or "凭证号" or "交易介";
+    }
+
+    private static bool IsCcbCorporateFooterWord(string text)
+    {
+        return text.StartsWith("第", StringComparison.Ordinal)
+            || text.StartsWith("中国建设银行", StringComparison.Ordinal)
+            || text.StartsWith("温馨提示", StringComparison.Ordinal);
+    }
+
+    private static bool IsBocomCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "序号" or "会计日期" or "交易日期" or "交易名称" or "凭证种类" or "凭证号码" or "借方发生额" or "贷方发生额" or "余额" or "卡号" or "交易地点" or "对方账号" or "对方户名" or "对方行名" or "摘要" or "流水号";
+    }
+
+    private static bool IsBocomCorporateFooterWord(string text)
+    {
+        return text.StartsWith("本月第", StringComparison.Ordinal)
+            || text.StartsWith("第", StringComparison.Ordinal)
+            || text.StartsWith("交通银行重庆市分行", StringComparison.Ordinal);
+    }
+
+    private static bool IsCmbcCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易时间" or "摘要" or "凭证类型" or "凭证号码" or "借方发生额" or "贷方发生额" or "账户余额" or "流水号" or "对方户名/账号" or "对方行名";
+    }
+
+    private static bool IsCmbcCorporateFooterWord(string text)
+    {
+        return text.StartsWith("打印渠道:", StringComparison.Ordinal)
+            || text.StartsWith("单位账户对账单", StringComparison.Ordinal)
+            || text.StartsWith("客户名称:", StringComparison.Ordinal)
+            || text.StartsWith("开户机构:", StringComparison.Ordinal)
+            || text.StartsWith("第", StringComparison.Ordinal)
+            || text.StartsWith("__", StringComparison.Ordinal);
+    }
+
+    private static bool IsAbcCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易时间" or "收入金额" or "支出金额" or "账户余额" or "对方账号" or "对方户名" or "对方开户行" or "摘要";
+    }
+
+    private static bool IsAbcCorporateFooterWord(string text)
+    {
+        return text.StartsWith("第", StringComparison.Ordinal)
+            || text.Contains("账户明细", StringComparison.Ordinal)
+            || text.StartsWith("账号:", StringComparison.Ordinal);
+    }
+
+    private static void AddEverbrightCorporatePart(IList<string> parts, string value, bool insertAtStart = false)
+    {
+        var cleaned = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return;
+        }
+
+        if (insertAtStart)
+        {
+            parts.Insert(0, cleaned);
+        }
+        else
+        {
+            parts.Add(cleaned);
+        }
+    }
+
+    private static bool TryTakeLeadingEverbrightNumber(string value, bool allowShortContinuation, out string numberPart, out string remainder)
+    {
+        numberPart = string.Empty;
+        remainder = string.Empty;
+        var text = CleanPdfValue(value);
+        var match = Regex.Match(text, @"^(?<number>\d+)(?:\s+(?<rest>.*))?$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (match.Groups["number"].Value.Length < 3 && !allowShortContinuation)
+        {
+            return false;
+        }
+
+        numberPart = match.Groups["number"].Value;
+        remainder = match.Groups["rest"].Value;
+        return true;
+    }
+
+    private static string FormatCompactTime(string value)
+    {
+        var digits = Regex.Replace(CleanPdfValue(value), @"\D", string.Empty);
+        return digits.Length >= 6
+            ? $"{digits[..2]}:{digits.Substring(2, 2)}:{digits.Substring(4, 2)}"
+            : CleanPdfValue(value);
+    }
+
+    private static string NormalizeCompactDateTimeCell(string value)
+    {
+        var text = CleanPdfValue(value);
+        var digits = Regex.Replace(text, @"[^\d]", string.Empty);
+        if (digits.Length < 14)
+        {
+            return text;
+        }
+
+        return $"{FormatCompactDate(digits[..8])} {FormatCompactTime(digits.Substring(8, 6))}";
+    }
+
+    private static string NormalizeSlashDateTimeCell(string value)
+    {
+        var text = CleanPdfValue(value);
+        var match = Regex.Match(text, @"(?<date>\d{4}/\d{2}/\d{2})(?<time>\d{2}:\d{2}:\d{2})");
+        return match.Success ? $"{match.Groups["date"].Value} {match.Groups["time"].Value}" : text;
+    }
+
+    private static string NormalizeDashDateTimeCell(string value)
+    {
+        var text = CleanPdfValue(value);
+        var match = Regex.Match(text, @"(?<date>\d{4}-\d{2}-\d{2})(?<time>\d{2}:\d{2}:\d{2})");
+        return match.Success ? $"{match.Groups["date"].Value} {match.Groups["time"].Value}" : text;
+    }
+
+    private static string NormalizeChineseDate(string value)
+    {
+        var text = CleanPdfValue(value);
+        return DateTime.TryParseExact(text, "yyyy年MM月dd日", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : text;
+    }
+
+    private static (string Name, string Account) SplitCounterpartyNameAndAccount(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var separatorIndex = text.LastIndexOf('/');
+        if (separatorIndex >= 0)
+        {
+            return (
+                CollapseChineseSeparatedWords(text[..separatorIndex]),
+                CleanPdfValue(text[(separatorIndex + 1)..]));
+        }
+
+        var accountMatch = Regex.Match(text, @"(?<account>\d{8,})$");
+        if (accountMatch.Success)
+        {
+            var account = accountMatch.Groups["account"].Value;
+            return (
+                CollapseChineseSeparatedWords(text[..^account.Length]),
+                account);
+        }
+
+        return (CollapseChineseSeparatedWords(text), string.Empty);
+    }
+
+    private static bool TryParseSpdbCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var date = GetPositionedCell(row, "Date");
+        var debitText = GetPositionedCell(row, "Debit");
+        var creditText = GetPositionedCell(row, "Credit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(date, @"^\d{4}/\d{2}/\d{2}$"))
+        {
+            return false;
+        }
+
+        var serial = GetPositionedCell(row, "Serial");
+        var summary = GetPositionedCell(row, "Summary");
+        var remark = GetPositionedCell(row, "Remark");
+        var oppositeBank = GetPositionedCell(row, "OppositeBank");
+        var oppositeName = GetPositionedCell(row, "OppositeName");
+        var fallbackAmountText = string.Empty;
+        if (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText))
+        {
+            fallbackAmountText = ExtractSpdbCorporateFallbackAmount(
+                ref summary,
+                ref remark,
+                ref oppositeName,
+                ref oppositeBank);
+            if (string.IsNullOrWhiteSpace(fallbackAmountText))
+            {
+                return false;
+            }
+        }
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.Remark = remark;
+        record.TradeExplain = remark;
+        record.OppositeUsername = oppositeName;
+        record.OppositeBank = oppositeBank;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        var signedAmount = ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+        if (!signedAmount.HasValue)
+        {
+            record.TradeMoney = ParseDoubleOrNull(fallbackAmountText);
+        }
+
+        SetFlowRaw(record, "日期", date);
+        SetFlowRaw(record, "柜员流水", serial);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "交易金额", fallbackAmountText);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对手机构", oppositeBank);
+        SetFlowRaw(record, "对方开户行", oppositeBank);
+        SetFlowRaw(record, "备注", remark);
+        SetFlowRaw(record, "业务产品种类", summary);
+        return true;
+    }
+
+    private static bool TryParseSpdbCorporateTextRecord(
+        IReadOnlyList<PdfTextLine> group,
+        Bank bank,
+        BankUser user,
+        double? previousBalance,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        if (group.Count == 0)
+        {
+            return false;
+        }
+
+        var firstLine = CleanPdfValue(group[0].Text);
+        var startMatch = Regex.Match(firstLine, @"^(?<date>\d{4}/\d{2}/\d{2})\s+(?<serial>[0-9A-Za-z]+)\s+(?<balance>[+\-−]?\d[\d,]*\.\d{2})(?:\s+(?<tail>.*))?$");
+        if (!startMatch.Success)
+        {
+            return false;
+        }
+
+        var detailText = CleanPdfValue(string.Join(' ', new[] { startMatch.Groups["tail"].Value }
+            .Concat(group.Skip(1).Select(item => item.Text))));
+        var balanceText = startMatch.Groups["balance"].Value.Replace('−', '-');
+        var balance = ParseDoubleOrNull(balanceText);
+        var amountText = SelectSpdbCorporateAmountText(detailText, previousBalance, balance);
+        if (string.IsNullOrWhiteSpace(amountText))
+        {
+            return false;
+        }
+
+        var detailWithoutAmount = RemoveLastMoneyToken(detailText, amountText);
+        var (oppositeBank, oppositeName, summary, remark) = SplitSpdbCorporateTextDetail(detailWithoutAmount);
+        var date = startMatch.Groups["date"].Value;
+        var serial = startMatch.Groups["serial"].Value;
+        var amount = ParseDoubleOrNull(amountText);
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.Remark = remark;
+        record.TradeExplain = remark;
+        record.OppositeUsername = oppositeName;
+        record.OppositeBank = oppositeBank;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.TradeMoney = amount.HasValue ? Math.Abs(amount.Value) : null;
+        record.Balance = balance;
+        record.BalanceAmount = record.Balance;
+
+        SetFlowRaw(record, "日期", date);
+        SetFlowRaw(record, "柜员流水", serial);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对手机构", oppositeBank);
+        SetFlowRaw(record, "对方开户行", oppositeBank);
+        SetFlowRaw(record, "备注", remark);
+        SetFlowRaw(record, "业务产品种类", summary);
+        return true;
+    }
+
+    private static bool IsSpdbCorporateTextRecordStart(string text)
+    {
+        return Regex.IsMatch(CleanPdfValue(text), @"^\d{4}/\d{2}/\d{2}\s+[0-9A-Za-z]+\s+[+\-−]?\d[\d,]*\.\d{2}");
+    }
+
+    private static bool IsSpdbCorporateTextIgnoredLine(string text)
+    {
+        var value = CleanPdfValue(text);
+        return IsCommonIgnoredLine(value)
+            || value.Contains("上海浦东发展银行电子对账单", StringComparison.Ordinal)
+            || value.Contains("Shanghai Pudong Development Bank", StringComparison.Ordinal)
+            || value.StartsWith("账单统计日期", StringComparison.Ordinal)
+            || value.StartsWith("客户名称", StringComparison.Ordinal)
+            || value.Contains("账户名称 Account Name", StringComparison.Ordinal)
+            || value.StartsWith("账号 Account Number", StringComparison.Ordinal)
+            || value.StartsWith("客户号 Customer Number", StringComparison.Ordinal)
+            || value.StartsWith("账单币种", StringComparison.Ordinal)
+            || value.StartsWith("金额单位", StringComparison.Ordinal)
+            || value.StartsWith("第", StringComparison.Ordinal)
+            || value.StartsWith("Page", StringComparison.Ordinal)
+            || value.StartsWith("期末余额", StringComparison.Ordinal)
+            || value.StartsWith("Ending Balance", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"^\d{4}/\d{2}/\d{2}$")
+            || value.Contains("Remarks:", StringComparison.Ordinal)
+            || value.Contains("To ensure", StringComparison.Ordinal)
+            || value.Contains("funds,please", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("transaction date", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("recorded by the bank", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("There is a possibility", StringComparison.Ordinal)
+            || value.Contains("reconciliation for daily", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("actual payment", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("query interval", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("transaction details within", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("years can be queried", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("95528", StringComparison.Ordinal)
+            || value.Contains("SPDB Enterprise", StringComparison.Ordinal)
+            || value.Contains("Statement Generation Date", StringComparison.Ordinal)
+            || value.Contains("http://cor.spdb", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("2U35CJLE", StringComparison.Ordinal)
+            || value.StartsWith("汇总", StringComparison.Ordinal)
+            || value.StartsWith("The Total", StringComparison.Ordinal)
+            || value.StartsWith("Total number", StringComparison.Ordinal)
+            || value is "交易日期" or "Transaction" or "Date" or "交易流水号" or "Serial Number" or "借方" or "Debit" or "发生额" or "Transaction Amount" or "贷方" or "Credit" or "账户余额" or "Account Balance" or "交易对手信息" or "Counterparty Information" or "对手机构" or "Counterparty" or "Institution" or "对手名称" or "Counterparty Name" or "摘要代码" or "Abstract Code" or "备注" or "Description";
+    }
+
+    private static (string OppositeBank, string OppositeName, string Summary, string Remark) SplitSpdbCorporateTextDetail(string detail)
+    {
+        var text = CleanPdfValue(detail);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, string.Empty, string.Empty, string.Empty);
+        }
+
+        var summaryCandidates = new[]
+        {
+            "跨行转账(手机同城)",
+            "电子渠道转账",
+            "互联汇出",
+            "互联汇入",
+            "缴税"
+        };
+        var summaryIndex = -1;
+        var summary = string.Empty;
+        foreach (var candidate in summaryCandidates)
+        {
+            var index = text.LastIndexOf(candidate, StringComparison.Ordinal);
+            if (index > summaryIndex)
+            {
+                summaryIndex = index;
+                summary = candidate;
+            }
+        }
+
+        var beforeSummary = text;
+        var remark = string.Empty;
+        if (summaryIndex >= 0)
+        {
+            beforeSummary = CleanPdfValue(text[..summaryIndex]);
+            var afterSummary = CleanPdfValue(text[(summaryIndex + summary.Length)..]);
+            if ((summary is "互联汇出" or "互联汇入") && !string.IsNullOrWhiteSpace(afterSummary))
+            {
+                var tokenMatch = Regex.Match(afterSummary, @"^(?<tail>\S+)(?:\s+(?<remark>.*))?$");
+                summary = string.Concat(summary, tokenMatch.Groups["tail"].Value);
+                remark = CleanPdfValue(tokenMatch.Groups["remark"].Value);
+            }
+            else
+            {
+                remark = afterSummary;
+            }
+        }
+        else
+        {
+            var tokens = SplitWords(text).ToList();
+            summary = tokens.Count > 0 ? tokens[^1] : string.Empty;
+            beforeSummary = tokens.Count > 1 ? CleanPdfValue(string.Join(' ', tokens.Take(tokens.Count - 1))) : string.Empty;
+        }
+
+        var (oppositeBank, oppositeName) = SplitSpdbCorporateTextCounterparty(beforeSummary);
+        return (oppositeBank, oppositeName, summary, remark);
+    }
+
+    private static (string OppositeBank, string OppositeName) SplitSpdbCorporateTextCounterparty(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var tokens = SplitWords(text).ToList();
+        if (tokens.Count <= 1)
+        {
+            return (string.Empty, text);
+        }
+
+        for (var index = 0; index < tokens.Count - 1; index++)
+        {
+            var prefix = CollapseChineseSeparatedWords(string.Join(' ', tokens.Take(index + 1)));
+            if (prefix.EndsWith("支行", StringComparison.Ordinal)
+                || prefix.EndsWith("分行营业部", StringComparison.Ordinal)
+                || prefix.EndsWith("营业部", StringComparison.Ordinal)
+                || prefix.EndsWith("有限公司", StringComparison.Ordinal)
+                || prefix.EndsWith("银行", StringComparison.Ordinal))
+            {
+                return (
+                    prefix,
+                    CollapseChineseSeparatedWords(string.Join(' ', tokens.Skip(index + 1))));
+            }
+        }
+
+        return (
+            CollapseChineseSeparatedWords(tokens[0]),
+            CollapseChineseSeparatedWords(string.Join(' ', tokens.Skip(1))));
+    }
+
+    private static void MergeSpdbCorporatePositionedRecords(IList<FlowRecord> targetRecords, IReadOnlyList<FlowRecord> positionedRecords)
+    {
+        var positionedByKey = positionedRecords
+            .GroupBy(CreateSpdbCorporateRecordKey, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => new Queue<FlowRecord>(group), StringComparer.Ordinal);
+
+        foreach (var target in targetRecords)
+        {
+            var key = CreateSpdbCorporateRecordKey(target);
+            if (!positionedByKey.TryGetValue(key, out var candidates) || candidates.Count == 0)
+            {
+                continue;
+            }
+
+            var source = candidates.Dequeue();
+            target.TradeMoney = source.TradeMoney ?? target.TradeMoney;
+            target.DebitAmount = source.DebitAmount ?? target.DebitAmount;
+            target.CreditAmount = source.CreditAmount ?? target.CreditAmount;
+            target.IncomeAttribute = FirstNotBlank(source.IncomeAttribute, target.IncomeAttribute);
+            target.IncomeFlag = FirstNotBlank(source.IncomeFlag, target.IncomeFlag);
+            target.ProductBrief = FirstNotBlank(source.ProductBrief, target.ProductBrief);
+            target.ProductName = FirstNotBlank(source.ProductName, target.ProductName);
+            target.OppositeUsername = FirstNotBlank(source.OppositeUsername, target.OppositeUsername);
+            target.OppositeBank = FirstNotBlank(source.OppositeBank, target.OppositeBank);
+            target.Remark = FirstNotBlank(source.Remark, target.Remark);
+            target.TradeExplain = FirstNotBlank(source.TradeExplain, target.TradeExplain);
+
+            foreach (var item in source.ExtraFields)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Value))
+                {
+                    target[item.Key] = item.Value;
+                }
+            }
+        }
+    }
+
+    private static string CreateSpdbCorporateRecordKey(FlowRecord record)
+    {
+        var date = record.AccountTime?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty;
+        var balance = record.Balance.HasValue ? FormatMoney(record.Balance.Value) : string.Empty;
+        var amount = record.TradeMoney.HasValue ? FormatMoney(Math.Abs(record.TradeMoney.Value)) : string.Empty;
+        return string.Join('|', date, record.SerialNum, balance, amount);
+    }
+
+    private static bool TryParseCibCorporateTextRecord(
+        IReadOnlyList<PdfTextLine> group,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var lines = group.Select(item => CleanPdfValue(item.Text))
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToList();
+        if (lines.Count < 2)
+        {
+            return false;
+        }
+
+        var startMatch = Regex.Match(lines[0], @"^(?<date>\d{4}-\d{2}-\d{2})\s+(?<hour>\d{2}):$");
+        var detailMatch = Regex.Match(lines[1], @"^(?<minuteSecond>\d{2}:\d{2})\s+(?<detail>.+)$");
+        if (!startMatch.Success || !detailMatch.Success)
+        {
+            return false;
+        }
+
+        var detailTokens = SplitWords(detailMatch.Groups["detail"].Value).ToList();
+        var moneyIndexes = detailTokens
+            .Select((value, index) => new { value, index })
+            .Where(item => IsPdfMoneyToken(item.value))
+            .Select(item => item.index)
+            .ToList();
+        if (moneyIndexes.Count < 3)
+        {
+            return false;
+        }
+
+        var debitIndex = moneyIndexes[0];
+        var creditIndex = moneyIndexes[1];
+        var balanceIndex = moneyIndexes[2];
+        var directionIndex = detailTokens.FindIndex(item => item is "支出" or "收入");
+        if (debitIndex <= 0 || directionIndex < creditIndex || directionIndex > balanceIndex)
+        {
+            return false;
+        }
+
+        var beforeAmount = detailTokens.Take(debitIndex).ToList();
+        var summary = CollapseChineseSeparatedWords(beforeAmount.Count > 0 ? beforeAmount[0] : string.Empty);
+        var voucher = beforeAmount.Count > 1 ? CleanPdfValue(string.Concat(beforeAmount.Skip(1))) : string.Empty;
+        var accountParts = new List<string>();
+        var nameParts = new List<string>();
+        foreach (var token in detailTokens.Skip(balanceIndex + 1))
+        {
+            if (Regex.IsMatch(token, @"^\d+$") && nameParts.Count == 0)
+            {
+                accountParts.Add(token);
+            }
+            else
+            {
+                nameParts.Add(token);
+            }
+        }
+
+        foreach (var line in lines.Skip(2))
+        {
+            if (Regex.IsMatch(line, @"^\d+$") && nameParts.Count == 0)
+            {
+                accountParts.Add(line);
+            }
+            else
+            {
+                nameParts.Add(line);
+            }
+        }
+
+        var date = startMatch.Groups["date"].Value;
+        var time = $"{startMatch.Groups["hour"].Value}:{detailMatch.Groups["minuteSecond"].Value}";
+        var debitText = detailTokens[debitIndex];
+        var creditText = detailTokens[creditIndex];
+        var direction = detailTokens[directionIndex];
+        var balanceText = detailTokens[balanceIndex];
+        var oppositeAccount = CleanPdfValue(string.Concat(accountParts));
+        var oppositeName = CollapseChineseSeparatedWords(string.Join(' ', nameParts));
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull($"{date} {time}");
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.VoucherNum = voucher;
+        record.SequenceNum = voucher;
+        record.OppositeAccount = oppositeAccount;
+        record.OppositeUsername = oppositeName;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方发生额", "贷方发生额", direction);
+
+        SetFlowRaw(record, "交易日期", record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? $"{date} {time}");
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "凭证号", voucher);
+        SetFlowRaw(record, "账户余额", balanceText);
+        SetFlowRaw(record, "交易对手名称", oppositeName);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "凭证种类", direction);
+        SetFlowRaw(record, "业务产品种类", summary);
+        return true;
+    }
+
+    private static bool TryParseCmbCorporateRecord(
+        IReadOnlyList<PdfTextLine> group,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var lines = group
+            .Select(item => CleanPdfValue(item.Text))
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToList();
+        var joinedText = JoinGroupText(group);
+        if (Regex.IsMatch(joinedText, @"^\d{8}\s+税款\s+", RegexOptions.CultureInvariant)
+            && TryParseCmbCorporateTaxRecord(joinedText, bank, user, out record))
+        {
+            return true;
+        }
+
+        if (TryParseCmbCorporateFlatRecord(joinedText, bank, user, out record))
+        {
+            return true;
+        }
+
+        var dateLineIndex = lines.FindIndex(item => Regex.IsMatch(item, @"^\d{8}\s+"));
+        if (dateLineIndex < 0)
+        {
+            return false;
+        }
+
+        var mainTokens = SplitWords(lines[dateLineIndex]).ToList();
+        if (mainTokens.Count < 5 || !Regex.IsMatch(mainTokens[0], @"^\d{8}$"))
+        {
+            return false;
+        }
+
+        var moneyIndexes = mainTokens
+            .Select((value, index) => new { value, index })
+            .Where(item => IsPdfMoneyToken(item.value))
+            .Select(item => item.index)
+            .ToList();
+        if (moneyIndexes.Count < 2)
+        {
+            return false;
+        }
+
+        var amountIndex = moneyIndexes[^2];
+        var balanceIndex = moneyIndexes[^1];
+        if (amountIndex < 2 || balanceIndex <= amountIndex)
+        {
+            return false;
+        }
+
+        var date = FormatCompactDate(mainTokens[0]);
+        var productType = mainTokens[1];
+        var beforeAmount = mainTokens.Skip(2).Take(amountIndex - 2).ToList();
+        var serial = string.Empty;
+        if (beforeAmount.Count > 0 && IsCorporateSerialToken(beforeAmount[0]))
+        {
+            serial = beforeAmount[0];
+            beforeAmount.RemoveAt(0);
+        }
+
+        var summary = beforeAmount.Count > 0
+            ? CollapseChineseSeparatedWords(string.Join(' ', beforeAmount))
+            : productType;
+        var amountText = mainTokens[amountIndex];
+        var amount = ParseDoubleOrNull(amountText);
+        var balanceText = mainTokens[balanceIndex];
+        var oppositeName = CollapseChineseSeparatedWords(string.Join(' ', mainTokens.Skip(balanceIndex + 1)));
+        var extraLines = lines.Take(dateLineIndex)
+            .Concat(lines.Skip(dateLineIndex + 1))
+            .ToList();
+        var remark = CleanPdfValue(string.Join(' ', extraLines));
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.ProductType = productType;
+        record.ProductName = productType;
+        record.ProductBrief = summary;
+        record.SerialNum = serial;
+        record.VoucherNum = serial;
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        record.OppositeUsername = oppositeName;
+        record.Remark = remark;
+        record.TradeExplain = remark;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "记帐日期", date);
+        SetFlowRaw(record, "帐户代码", record.Account);
+        SetFlowRaw(record, "货币", record.Currency);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "联机余额", balanceText);
+        SetFlowRaw(record, "交易流水号", serial);
+        SetFlowRaw(record, "摘要代码", summary);
+        SetFlowRaw(record, "对手户名", oppositeName);
+        SetFlowRaw(record, "记帐时间", date);
+        SetFlowRaw(record, "业务类型", productType);
+        SetFlowRaw(record, "备注", remark);
+        return true;
+    }
+
+    private static bool TryParseCmbCorporateTaxRecord(
+        string text,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var match = Regex.Match(
+            CleanPdfValue(text),
+            @"^(?<date>\d{8})\s+(?<type>税款)\s+(?<middle>.+?)\s+(?<amount>[+\-−]?\d[\d,]*\.\d{2})\s+(?<balance>[+\-−]?\d[\d,]*\.\d{2})(?:\s+(?<opposite>.+))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var middleTokens = SplitWords(match.Groups["middle"].Value).ToList();
+        var serialParts = new List<string>();
+        while (middleTokens.Count > 0 && Regex.IsMatch(middleTokens[0], @"^\d+$"))
+        {
+            serialParts.Add(middleTokens[0]);
+            middleTokens.RemoveAt(0);
+        }
+
+        var date = FormatCompactDate(match.Groups["date"].Value);
+        var productType = match.Groups["type"].Value;
+        var serial = CleanPdfValue(string.Concat(serialParts));
+        var summary = middleTokens.Count > 0
+            ? CollapseChineseSeparatedWords(string.Join(' ', middleTokens))
+            : productType;
+        var amountText = match.Groups["amount"].Value.Replace('−', '-');
+        var balanceText = match.Groups["balance"].Value.Replace('−', '-');
+        var amount = ParseDoubleOrNull(amountText);
+        var oppositeName = CleanPdfValue(match.Groups["opposite"].Value);
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.ProductType = productType;
+        record.ProductName = productType;
+        record.ProductBrief = summary;
+        record.SerialNum = serial;
+        record.VoucherNum = serial;
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        record.OppositeUsername = oppositeName;
+        record.Remark = summary;
+        record.TradeExplain = summary;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "记帐日期", date);
+        SetFlowRaw(record, "帐户代码", record.Account);
+        SetFlowRaw(record, "货币", record.Currency);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "联机余额", balanceText);
+        SetFlowRaw(record, "交易流水号", serial);
+        SetFlowRaw(record, "摘要代码", summary);
+        SetFlowRaw(record, "对手户名", oppositeName);
+        SetFlowRaw(record, "记帐时间", date);
+        SetFlowRaw(record, "业务类型", productType);
+        SetFlowRaw(record, "备注", summary);
+        return true;
+    }
+
+    private static bool TryParseCmbCorporateFlatRecord(
+        string text,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var match = Regex.Match(
+            CleanPdfValue(text),
+            @"^(?<date>\d{8})\s+(?<type>\S+)(?:\s+(?<middle>.*?))?\s+(?<amount>[+\-−]?\d[\d,]*\.\d{2})\s+(?<balance>[+\-−]?\d[\d,]*\.\d{2})(?:\s+(?<opposite>.+))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var middleTokens = SplitWords(match.Groups["middle"].Value).ToList();
+        var serial = string.Empty;
+        if (middleTokens.Count > 0 && IsCorporateSerialToken(middleTokens[0]))
+        {
+            serial = middleTokens[0];
+            middleTokens.RemoveAt(0);
+        }
+
+        var date = FormatCompactDate(match.Groups["date"].Value);
+        var productType = match.Groups["type"].Value;
+        var summary = middleTokens.Count > 0
+            ? CollapseChineseSeparatedWords(string.Join(' ', middleTokens))
+            : productType;
+        var amountText = match.Groups["amount"].Value.Replace('−', '-');
+        var balanceText = match.Groups["balance"].Value.Replace('−', '-');
+        var amount = ParseDoubleOrNull(amountText);
+        var oppositeName = CleanPdfValue(match.Groups["opposite"].Value);
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.ProductType = productType;
+        record.ProductName = productType;
+        record.ProductBrief = summary;
+        record.SerialNum = serial;
+        record.VoucherNum = serial;
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        record.OppositeUsername = oppositeName;
+        record.Remark = summary == productType ? string.Empty : summary;
+        record.TradeExplain = record.Remark;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "记帐日期", date);
+        SetFlowRaw(record, "帐户代码", record.Account);
+        SetFlowRaw(record, "货币", record.Currency);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "联机余额", balanceText);
+        SetFlowRaw(record, "交易流水号", serial);
+        SetFlowRaw(record, "摘要代码", summary);
+        SetFlowRaw(record, "对手户名", oppositeName);
+        SetFlowRaw(record, "记帐时间", date);
+        SetFlowRaw(record, "业务类型", productType);
+        SetFlowRaw(record, "备注", record.Remark);
+        return true;
+    }
+
+    private static bool TryParseBocCorporateRecord(
+        PdfTableRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var sequence = GetTableCell(row, 0);
+        var accountDate = FormatShortBankDate(GetTableCell(row, 1));
+        var interestDate = FormatShortBankDate(GetTableCell(row, 2));
+        var tradeType = GetTableCell(row, 3);
+        var voucher = GetTableCell(row, 4);
+        var detail = GetTableCell(row, 5);
+        var debitText = GetTableCell(row, 6);
+        var creditText = GetTableCell(row, 7);
+        var balanceText = GetTableCell(row, 8);
+        var reference = GetTableCell(row, 9);
+        var note = GetTableCell(row, 10);
+        if (!Regex.IsMatch(sequence, @"^\d+$") || !Regex.IsMatch(accountDate, @"^\d{4}-\d{2}-\d{2}$"))
+        {
+            return false;
+        }
+
+        var (oppositeName, oppositeBank) = SplitBocCorporateCounterparty(note);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(accountDate);
+        record.SequenceNum = sequence;
+        record.ProductType = tradeType;
+        record.ProductName = tradeType;
+        record.ProductBrief = detail;
+        record.VoucherType = voucher;
+        record.VoucherNum = voucher;
+        record.SerialNum = reference;
+        record.LogNum = reference;
+        record.Usage = detail;
+        record.Remark = note;
+        record.TradeExplain = note;
+        record.OppositeUsername = oppositeName;
+        record.OppositeBank = oppositeBank;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方发生额", "贷方发生额");
+
+        SetFlowRaw(record, "序号", sequence);
+        SetFlowRaw(record, "记账日", accountDate);
+        SetFlowRaw(record, "起息日", interestDate);
+        SetFlowRaw(record, "交易类型", tradeType);
+        SetFlowRaw(record, "凭证", voucher);
+        SetFlowRaw(record, "凭证号码业务编号用途摘要", detail);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "机构柜员流水", reference);
+        SetFlowRaw(record, "用途", detail);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对方开户行", oppositeBank);
+        SetFlowRaw(record, "备注", note);
+        return true;
+    }
+
+    private static bool TryParseCiticCorporateRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var date = GetPositionedCell(row, "Date");
+        var debitText = GetPositionedCell(row, "Debit");
+        var creditText = GetPositionedCell(row, "Credit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(date, @"^\d{4}-\d{2}-\d{2}$")
+            || (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText)))
+        {
+            return false;
+        }
+
+        var tellerSerial = GetPositionedCell(row, "TellerSerial");
+        var summary = GetPositionedCell(row, "Summary");
+        var oppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        var oppositeName = GetPositionedCell(row, "OppositeName");
+        var fundBook = GetPositionedCell(row, "FundBook");
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.SerialNum = tellerSerial;
+        record.LogNum = tellerSerial;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.OppositeAccount = oppositeAccount;
+        record.OppositeUsername = oppositeName;
+        record.ProductType = fundBook;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+
+        SetFlowRaw(record, "交易日期", date);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "柜员交易号", tellerSerial);
+        SetFlowRaw(record, "核心流水号", tellerSerial);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "动账资金分簿", fundBook);
+        return true;
+    }
+
     private static bool TryParseBocRecord(
         IReadOnlyList<PdfTextLine> group,
         Bank bank,
@@ -2495,6 +4801,638 @@ public sealed class PdfImportService : IPdfImportService
         SetFlowRaw(record, "收支", direction);
         SetFlowRaw(record, "支付宝分类", direction);
         return true;
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildPositionedRows(
+        IReadOnlyList<PdfTextWord> words,
+        IReadOnlyList<PdfPositionedColumnSpec> columns,
+        Func<PdfTextWord, bool> isHeaderWord,
+        Func<string, bool> isFooterWord,
+        string rowStartPattern,
+        double rowStartLeftMax,
+        double defaultHeaderBottom)
+    {
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = new List<PdfPositionedRow>();
+        foreach (var pageGroup in words.GroupBy(item => item.PageNumber).OrderBy(group => group.Key))
+        {
+            var pageWords = pageGroup
+                .Select(item => item with { Text = CleanPdfValue(item.Text) })
+                .Where(item => !string.IsNullOrWhiteSpace(item.Text))
+                .OrderBy(item => item.Top)
+                .ThenBy(item => item.Left)
+                .ToList();
+
+            var headerBottom = Math.Max(
+                defaultHeaderBottom,
+                pageWords
+                    .Where(isHeaderWord)
+                    .Select(item => item.Bottom)
+                    .DefaultIfEmpty(defaultHeaderBottom)
+                    .Max()) + 0.5;
+            var footerTop = pageWords
+                .Where(item => item.Top > headerBottom && isFooterWord(item.Text))
+                .Select(item => item.Top)
+                .DefaultIfEmpty(double.MaxValue)
+                .Min();
+            var rowStartWords = pageWords
+                .Where(item => item.Top > headerBottom
+                    && item.Top < footerTop
+                    && item.Left < rowStartLeftMax
+                    && Regex.IsMatch(item.Text, rowStartPattern))
+                .OrderBy(item => item.Top)
+                .ThenBy(item => item.Left)
+                .ToList();
+
+            for (var index = 0; index < rowStartWords.Count; index++)
+            {
+                var currentStart = rowStartWords[index];
+                var bandTop = index == 0
+                    ? headerBottom
+                    : (rowStartWords[index - 1].Top + currentStart.Top) / 2d;
+                var bandBottom = index + 1 < rowStartWords.Count
+                    ? (currentStart.Top + rowStartWords[index + 1].Top) / 2d
+                    : footerTop;
+
+                var rowWords = pageWords
+                    .Where(item => item.Top >= bandTop && item.Top < bandBottom)
+                    .OrderBy(item => item.Top)
+                    .ThenBy(item => item.Left)
+                    .ToList();
+                var cells = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var column in columns)
+                {
+                    var columnWords = rowWords
+                        .Where(item => GetHorizontalCenter(item) >= column.Left && GetHorizontalCenter(item) < column.Right)
+                        .ToList();
+                    var value = JoinPositionedCellWords(columnWords);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        cells[column.Key] = value;
+                    }
+                }
+
+                rows.Add(new PdfPositionedRow(pageGroup.Key, currentStart.Top, cells));
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool IsCibCorporateTextRecordStart(string text)
+    {
+        return Regex.IsMatch(CleanPdfValue(text), @"^\d{4}-\d{2}-\d{2}\s+\d{2}:$");
+    }
+
+    private static bool IsCibCorporateTextIgnoredLine(string text)
+    {
+        var value = CleanPdfValue(text);
+        return IsCommonIgnoredLine(value)
+            || value.StartsWith("页号:", StringComparison.Ordinal)
+            || value.Contains("兴业银行", StringComparison.Ordinal)
+            || value.Contains("交易明细对账单", StringComparison.Ordinal)
+            || value.StartsWith("打印日期:", StringComparison.Ordinal)
+            || value.StartsWith("活期账号:", StringComparison.Ordinal)
+            || value.StartsWith("户名:", StringComparison.Ordinal)
+            || value.StartsWith("期末账户余额:", StringComparison.Ordinal)
+            || value.StartsWith("交易时间 摘要", StringComparison.Ordinal)
+            || value.StartsWith("本期总笔数", StringComparison.Ordinal)
+            || value.StartsWith("本期总收入金额", StringComparison.Ordinal)
+            || value.StartsWith("本期总支出金额", StringComparison.Ordinal)
+            || value.StartsWith("重要提示", StringComparison.Ordinal)
+            || value.StartsWith("elect_sign", StringComparison.Ordinal);
+    }
+
+    private static string JoinPositionedCellWords(IEnumerable<PdfTextWord> words)
+    {
+        return CleanPdfValue(string.Concat(words
+            .OrderBy(item => item.Top)
+            .ThenBy(item => item.Left)
+            .Select(item => item.Text)));
+    }
+
+    private static string GetPositionedCell(PdfPositionedRow row, string key)
+    {
+        return row.Cells.TryGetValue(key, out var value) ? value : string.Empty;
+    }
+
+    private static bool IsSpdbCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易日期" or "Transaction" or "交易流水号" or "Teller's" or "借方" or "Debit" or "贷方" or "Credit" or "账户余额" or "Balance" or "对手机构" or "对手名称" or "摘要代码" or "备注";
+    }
+
+    private static bool IsSpdbCorporateFooterWord(string text)
+    {
+        return text.StartsWith("Page", StringComparison.Ordinal)
+            || text.StartsWith("本页小计", StringComparison.Ordinal)
+            || text.StartsWith("期末余额", StringComparison.Ordinal)
+            || text.StartsWith("Ending", StringComparison.Ordinal);
+    }
+
+    private static bool IsCiticCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易日期" or "柜员交易号" or "摘要信息" or "对方账号" or "对方账户名称" or "动账资金分簿" or "借方发生额" or "贷方发生额" or "余额";
+    }
+
+    private static bool IsCiticCorporateFooterWord(string text)
+    {
+        return text.StartsWith("打印时间", StringComparison.Ordinal)
+            || text.StartsWith("第", StringComparison.Ordinal)
+            || text.StartsWith("中信银行", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupCmbCorporateRecords(IReadOnlyList<PdfTextLine> lines)
+    {
+        var result = new List<IReadOnlyList<PdfTextLine>>();
+        var current = new List<PdfTextLine>();
+        var pendingPrefix = new List<PdfTextLine>();
+        var filtered = lines
+            .Where(line => !IsCmbCorporateIgnoredLine(line.Text))
+            .ToList();
+
+        for (var index = 0; index < filtered.Count; index++)
+        {
+            var line = filtered[index];
+            var text = CleanPdfValue(line.Text);
+            var nextText = index + 1 < filtered.Count ? CleanPdfValue(filtered[index + 1].Text) : string.Empty;
+            if (Regex.IsMatch(text, @"^\d{8}\s+"))
+            {
+                if (current.Count > 0)
+                {
+                    result.Add(current);
+                }
+
+                current = [];
+                if (pendingPrefix.Count > 0)
+                {
+                    current.AddRange(pendingPrefix);
+                    pendingPrefix = [];
+                }
+
+                current.Add(line);
+                continue;
+            }
+
+            if (IsCmbCorporateLeadingContinuation(text) && Regex.IsMatch(nextText, @"^\d{8}\s+"))
+            {
+                if (current.Count > 0)
+                {
+                    result.Add(current);
+                    current = [];
+                }
+
+                pendingPrefix = [line];
+                continue;
+            }
+
+            if (current.Count > 0)
+            {
+                current.Add(line);
+            }
+        }
+
+        if (current.Count > 0)
+        {
+            result.Add(current);
+        }
+
+        return result;
+    }
+
+    private static bool IsCmbCorporateIgnoredLine(string text)
+    {
+        var value = CleanPdfValue(text);
+        return IsCommonIgnoredLine(value)
+            || value.Contains("招商银行", StringComparison.Ordinal)
+            || value.Contains("账务明细清单", StringComparison.Ordinal)
+            || value.Contains("Statement Of Account", StringComparison.Ordinal)
+            || value.StartsWith("开户银行:", StringComparison.Ordinal)
+            || value.StartsWith("账号:", StringComparison.Ordinal)
+            || value.StartsWith("账户名称:", StringComparison.Ordinal)
+            || value.StartsWith("日期 业务类型", StringComparison.Ordinal)
+            || value.StartsWith("Date Business Type", StringComparison.Ordinal)
+            || value.StartsWith("--------------------------------------------------------------------------------", StringComparison.Ordinal);
+    }
+
+    private static bool IsCmbCorporateLeadingContinuation(string text)
+    {
+        var value = CleanPdfValue(text);
+        return Regex.IsMatch(value, @"^[A-Z0-9:._-]{12,}")
+            || value.Contains("TX:", StringComparison.Ordinal)
+            || value.Contains("实缴税", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<PdfTableRow> BuildBocCorporateRows(IReadOnlyList<PdfTextLine> lines)
+    {
+        var result = new List<PdfTableRow>();
+        Dictionary<int, string>? currentCells = null;
+        PdfTextLine? currentStartLine = null;
+
+        foreach (var line in lines)
+        {
+            var text = CleanPdfValue(line.Text);
+            if (!text.StartsWith('|'))
+            {
+                continue;
+            }
+
+            var cells = SplitPipeTableCells(text);
+            if (cells.Count < 8 || IsBocCorporateTableHeader(cells))
+            {
+                continue;
+            }
+
+            if (Regex.IsMatch(cells[0], @"^\d+$"))
+            {
+                if (currentCells is not null && currentStartLine is not null)
+                {
+                    result.Add(new PdfTableRow(currentStartLine.PageNumber, currentStartLine.LineNumber, string.Empty, currentCells));
+                }
+
+                currentCells = cells.Select((value, index) => new { value, index })
+                    .ToDictionary(item => item.index, item => item.value);
+                currentStartLine = line;
+                continue;
+            }
+
+            if (currentCells is not null)
+            {
+                for (var index = 0; index < cells.Count; index++)
+                {
+                    if (!string.IsNullOrWhiteSpace(cells[index]))
+                    {
+                        currentCells[index] = AppendPdfCellText(currentCells.TryGetValue(index, out var oldValue) ? oldValue : string.Empty, cells[index]);
+                    }
+                }
+            }
+        }
+
+        if (currentCells is not null && currentStartLine is not null)
+        {
+            result.Add(new PdfTableRow(currentStartLine.PageNumber, currentStartLine.LineNumber, string.Empty, currentCells));
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> SplitPipeTableCells(string text)
+    {
+        var value = CleanPdfValue(text).Trim();
+        if (value.StartsWith('|'))
+        {
+            value = value[1..];
+        }
+
+        if (value.EndsWith('|'))
+        {
+            value = value[..^1];
+        }
+
+        return value.Split('|')
+            .Select(CleanPdfValue)
+            .ToList();
+    }
+
+    private static bool IsBocCorporateTableHeader(IReadOnlyList<string> cells)
+    {
+        return cells.Count == 0
+            || cells[0] is "序号" or "No."
+            || cells.Any(item => item.Contains("借方发生额", StringComparison.Ordinal) || item.Contains("贷方发生额", StringComparison.Ordinal))
+            || cells.All(item => string.IsNullOrWhiteSpace(item) || Regex.IsMatch(item, @"^-+$"));
+    }
+
+    private static string AppendPdfCellText(string current, string value)
+    {
+        var left = CleanPdfValue(current);
+        var right = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(left))
+        {
+            return right;
+        }
+
+        if (string.IsNullOrWhiteSpace(right))
+        {
+            return left;
+        }
+
+        return CleanPdfValue(string.Concat(left, right));
+    }
+
+    private static string GetTableCell(PdfTableRow row, int index)
+    {
+        return row.Cells.TryGetValue(index, out var value) ? CleanPdfValue(value) : string.Empty;
+    }
+
+    private static double? ApplyCorporateDebitCredit(
+        FlowRecord record,
+        string debitText,
+        string creditText,
+        string debitColumnName,
+        string creditColumnName,
+        string direction = "")
+    {
+        var debit = ParseDoubleOrNull(debitText);
+        var credit = ParseDoubleOrNull(creditText);
+        double? signedAmount = null;
+        if (direction.Contains("支", StringComparison.Ordinal) && debit.HasValue)
+        {
+            signedAmount = 0 - Math.Abs(debit.Value);
+        }
+        else if (direction.Contains("收", StringComparison.Ordinal) && credit.HasValue)
+        {
+            signedAmount = Math.Abs(credit.Value);
+        }
+        else if (credit.HasValue && Math.Abs(credit.Value) > 0.005)
+        {
+            signedAmount = Math.Abs(credit.Value);
+        }
+        else if (debit.HasValue && Math.Abs(debit.Value) > 0.005)
+        {
+            signedAmount = 0 - Math.Abs(debit.Value);
+        }
+        else if (credit.HasValue && !debit.HasValue)
+        {
+            signedAmount = Math.Abs(credit.Value);
+        }
+        else if (debit.HasValue && !credit.HasValue)
+        {
+            signedAmount = 0 - Math.Abs(debit.Value);
+        }
+
+        record.TradeMoney = signedAmount;
+        ApplySignedAmountColumns(record, signedAmount);
+        SetFlowRaw(record, debitColumnName, debitText);
+        SetFlowRaw(record, creditColumnName, creditText);
+        return signedAmount;
+    }
+
+    private static void InferSpdbCorporateMoneyDirections(IList<FlowRecord> records)
+    {
+        double? previousBalance = null;
+        foreach (var record in records)
+        {
+            if (!record.TradeMoney.HasValue)
+            {
+                previousBalance = record.Balance ?? previousBalance;
+                continue;
+            }
+
+            if (record.DebitAmount.HasValue || record.CreditAmount.HasValue)
+            {
+                previousBalance = record.Balance ?? previousBalance;
+                continue;
+            }
+
+            var amount = Math.Abs(record.TradeMoney.Value);
+            var signedAmount = amount;
+            if (previousBalance.HasValue && record.Balance.HasValue)
+            {
+                var delta = Math.Round(record.Balance.Value - previousBalance.Value, 2, MidpointRounding.AwayFromZero);
+                if (Math.Abs(Math.Abs(delta) - amount) <= 0.02)
+                {
+                    signedAmount = delta;
+                }
+            }
+
+            record.TradeMoney = signedAmount;
+            ApplySignedAmountColumns(record, signedAmount);
+            SetFlowRaw(record, "借方", signedAmount < 0 ? FormatMoney(Math.Abs(signedAmount)) : string.Empty);
+            SetFlowRaw(record, "贷方", signedAmount > 0 ? FormatMoney(signedAmount) : string.Empty);
+            previousBalance = record.Balance ?? previousBalance;
+        }
+    }
+
+    private static string ExtractSpdbCorporateFallbackAmount(
+        ref string summary,
+        ref string remark,
+        ref string oppositeName,
+        ref string oppositeBank)
+    {
+        var fields = new[]
+        {
+            ("Remark", remark),
+            ("Summary", summary),
+            ("OppositeName", oppositeName),
+            ("OppositeBank", oppositeBank)
+        };
+
+        foreach (var (field, value) in fields)
+        {
+            var amount = ExtractLastMoneyToken(value);
+            if (string.IsNullOrWhiteSpace(amount))
+            {
+                continue;
+            }
+
+            var cleaned = RemoveLastMoneyToken(value, amount);
+            switch (field)
+            {
+                case "Remark":
+                    remark = cleaned;
+                    break;
+                case "Summary":
+                    summary = cleaned;
+                    break;
+                case "OppositeName":
+                    oppositeName = cleaned;
+                    break;
+                case "OppositeBank":
+                    oppositeBank = cleaned;
+                    break;
+            }
+
+            return amount;
+        }
+
+        return string.Empty;
+    }
+
+    private static string SelectSpdbCorporateAmountText(string value, double? previousBalance, double? balance)
+    {
+        var candidates = ExtractSpdbCorporateAmountCandidates(value);
+        if (candidates.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (previousBalance.HasValue && balance.HasValue)
+        {
+            var expectedAmount = Math.Abs(Math.Round(balance.Value - previousBalance.Value, 2, MidpointRounding.AwayFromZero));
+            var matched = candidates
+                .Select(item => new { Text = item, Amount = ParseDoubleOrNull(item) })
+                .Where(item => item.Amount.HasValue)
+                .FirstOrDefault(item => Math.Abs(Math.Abs(item.Amount!.Value) - expectedAmount) <= 0.02);
+            if (matched is not null)
+            {
+                return matched.Text;
+            }
+        }
+
+        return candidates[0];
+    }
+
+    private static IReadOnlyList<string> ExtractSpdbCorporateAmountCandidates(string value)
+    {
+        var result = new List<string>();
+        foreach (Match match in Regex.Matches(CleanPdfValue(value), @"[+\-−]?\d[\d,]*\.\d{2}"))
+        {
+            var text = match.Value.Replace('−', '-');
+            AddSpdbCorporateAmountCandidate(result, text);
+
+            var unsigned = text.TrimStart('+', '-');
+            var sign = text.StartsWith("-", StringComparison.Ordinal) ? "-" : string.Empty;
+            var decimalIndex = unsigned.LastIndexOf('.');
+            var commaIndex = unsigned.LastIndexOf(',');
+            if (decimalIndex < 0)
+            {
+                continue;
+            }
+
+            if (commaIndex <= 0 || commaIndex > decimalIndex)
+            {
+                AddSpdbCorporateUnseparatedAmountCandidates(result, sign, unsigned);
+                continue;
+            }
+
+            var beforeLastComma = unsigned[..commaIndex];
+            if (beforeLastComma.Contains(",", StringComparison.Ordinal) || beforeLastComma.Length <= 3)
+            {
+                AddSpdbCorporateUnseparatedAmountCandidates(result, sign, unsigned);
+                continue;
+            }
+
+            var afterLastComma = unsigned[commaIndex..];
+            for (var length = 1; length <= 3 && length <= beforeLastComma.Length; length++)
+            {
+                var prefix = beforeLastComma[^length..].TrimStart('0');
+                if (string.IsNullOrWhiteSpace(prefix))
+                {
+                    continue;
+                }
+
+                AddSpdbCorporateAmountCandidate(result, string.Concat(sign, prefix, afterLastComma));
+            }
+        }
+
+        return result;
+    }
+
+    private static void AddSpdbCorporateUnseparatedAmountCandidates(ICollection<string> result, string sign, string unsigned)
+    {
+        if (unsigned.Contains(",", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var decimalIndex = unsigned.LastIndexOf('.');
+        if (decimalIndex <= 0)
+        {
+            return;
+        }
+
+        var integerPart = unsigned[..decimalIndex];
+        if (integerPart.Length <= 4)
+        {
+            return;
+        }
+
+        var decimalPart = unsigned[decimalIndex..];
+        for (var length = 1; length <= 8 && length <= integerPart.Length; length++)
+        {
+            var prefix = integerPart[^length..].TrimStart('0');
+            if (string.IsNullOrWhiteSpace(prefix))
+            {
+                continue;
+            }
+
+            AddSpdbCorporateAmountCandidate(result, string.Concat(sign, prefix, decimalPart));
+        }
+    }
+
+    private static void AddSpdbCorporateAmountCandidate(ICollection<string> result, string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text) || result.Contains(text))
+        {
+            return;
+        }
+
+        result.Add(text);
+    }
+
+    private static string ExtractLastMoneyToken(string value)
+    {
+        var matches = Regex.Matches(CleanPdfValue(value), @"[+\-−]?\d[\d,]*\.\d{2}");
+        return matches.Count == 0 ? string.Empty : matches[^1].Value.Replace('−', '-');
+    }
+
+    private static string RemoveLastMoneyToken(string value, string amountText)
+    {
+        var text = CleanPdfValue(value);
+        var index = text.LastIndexOf(amountText, StringComparison.Ordinal);
+        if (index < 0 && amountText.Contains('-', StringComparison.Ordinal))
+        {
+            index = text.LastIndexOf(amountText.Replace('-', '−'), StringComparison.Ordinal);
+        }
+
+        return index < 0
+            ? text
+            : CleanPdfValue(text.Remove(index, amountText.Length));
+    }
+
+    private static string NormalizeCurrencyText(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (text.Contains("人民币", StringComparison.Ordinal) || text.Contains("CNY", StringComparison.OrdinalIgnoreCase))
+        {
+            return "人民币";
+        }
+
+        return text;
+    }
+
+    private static string FormatShortBankDate(string value)
+    {
+        var text = CleanPdfValue(value);
+        return DateTime.TryParseExact(text, "yyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : text;
+    }
+
+    private static bool IsCorporateSerialToken(string value)
+    {
+        var text = CleanPdfValue(value);
+        return text.Length >= 4
+            && Regex.IsMatch(text, @"^[0-9A-Za-z._:-]+$")
+            && !Regex.IsMatch(text, @"^[+-]?\d[\d,]*\.\d{2}$");
+    }
+
+    private static bool IsPdfMoneyToken(string value)
+    {
+        return Regex.IsMatch(CleanPdfValue(value), @"^[+-]?\d[\d,]*\.\d{2}$");
+    }
+
+    private static (string OppositeName, string OppositeBank) SplitBocCorporateCounterparty(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var separatorIndex = text.IndexOf('/');
+        if (separatorIndex > 0 && separatorIndex < text.Length - 1)
+        {
+            return (
+                CleanPdfValue(text[..separatorIndex]),
+                CleanPdfValue(text[(separatorIndex + 1)..]));
+        }
+
+        return (text, string.Empty);
     }
 
     private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupLinesByStart(
@@ -4970,6 +7908,10 @@ public sealed class PdfImportService : IPdfImportService
     private sealed record HuaxiaColumnSpec(string Key, double Left, double Right);
 
     private sealed record HuaxiaPositionedRow(int PageNumber, double Top, Dictionary<string, string> Cells);
+
+    private sealed record PdfPositionedColumnSpec(string Key, double Left, double Right);
+
+    private sealed record PdfPositionedRow(int PageNumber, double Top, Dictionary<string, string> Cells);
 
     private sealed record PdfTextLine(int PageNumber, int LineNumber, string Text);
 

@@ -94,7 +94,7 @@ public static class ExcelColumnFieldResolver
             "交易代码" or "交易码" => (nameof(FlowRecord.TradeCode), "Text"),
             "交易对方" or "对手信息" or "户名" or "对方户名" or "对方名称" or "对手户名" or "对手方户名" or "对方账户名" or "交易对手名称" or "对方姓名" or "对方名称" or "对方户名" => (nameof(FlowRecord.OppositeUsername), "Text"),
             "对方账号" or "对方账户" or "对手账号" or "交易对手账号" or "对方卡号账号" or "对手方账户" or "对方帐号" => (nameof(FlowRecord.OppositeAccount), "Text"),
-            "对方开户行" or "对方银行" or "对手银行" or "对方行名" or "对方开户行联行号" or "对手银行" or "对方开户行" => (nameof(FlowRecord.OppositeBank), "Text"),
+            "对方开户行" or "对方银行" or "对手银行" or "对方行名" or "对方开户行联行号" or "对手银行" or "对方开户行" or "对手机构" => (nameof(FlowRecord.OppositeBank), "Text"),
             "商家订单号" or "商户单号" or "商户名称" => (nameof(FlowRecord.MerchantName), "Text"),
             "支付宝分类" or "交易分类" or "收支其他" or "APP交易分类" => (nameof(FlowRecord.Usage), "Text"),
             "收入支出" or "收支" or "收支属性" => (nameof(FlowRecord.IncomeAttribute), "Text"),
