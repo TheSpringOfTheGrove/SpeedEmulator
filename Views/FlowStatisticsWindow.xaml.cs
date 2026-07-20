@@ -12,13 +12,14 @@ public partial class FlowStatisticsWindow : Window
     private const int DefaultVisibleMonths = 12;
     private const int MinimumVisibleMonths = 3;
     private const double LeftPadding = 54;
-    private const double RightPadding = 68;
+    private const double RightPadding = 24;
     private const double TopPadding = 36;
     private const double BottomPadding = 34;
     private static readonly Brush IncomeFill = new SolidColorBrush(Color.FromRgb(51, 139, 255));
     private static readonly Brush ExpenseFill = new SolidColorBrush(Color.FromRgb(255, 70, 70));
     private static readonly Brush BarStroke = new SolidColorBrush(Color.FromRgb(0, 54, 255));
     private static readonly Brush BalanceStroke = new SolidColorBrush(Color.FromRgb(0, 140, 114));
+    private static readonly Brush BalanceFill = new SolidColorBrush(Color.FromRgb(38, 181, 148));
     private static readonly Brush GridLineBrush = new SolidColorBrush(Color.FromRgb(232, 232, 232));
     private int visibleStart;
     private int visibleCount;
@@ -123,20 +124,18 @@ public partial class FlowStatisticsWindow : Window
             .Take(visibleCount)
             .ToList();
         var axisMaximum = CalculateAxisMaximum(visibleItems.Max(item => Math.Max(
-            showIncome ? item.Income : 0,
-            showExpense ? item.Expense : 0)));
-        var balanceRange = CalculateBalanceAxisRange(visibleItems);
+            Math.Max(
+                showIncome ? item.Income : 0,
+                showExpense ? item.Expense : 0),
+            showBalance ? Math.Max(0, item.Balance) : 0)));
+        var balanceRange = new BalanceAxisRange(0, axisMaximum);
 
-        DrawAxis(axisMaximum, plotWidth, plotHeight);
-        DrawBars(visibleItems, axisMaximum, plotWidth, plotHeight);
-        if (showBalance)
-        {
-            DrawBalanceAxis(balanceRange, plotWidth, plotHeight);
-            DrawBalanceSeries(visibleItems, balanceRange, plotWidth, plotHeight);
-        }
+        var showAmountAxis = showIncome || showExpense || showBalance;
+        DrawAxis(axisMaximum, plotWidth, plotHeight, showAmountAxis);
+        DrawBars(visibleItems, axisMaximum, balanceRange, plotWidth, plotHeight);
     }
 
-    private void DrawAxis(double axisMaximum, double plotWidth, double plotHeight)
+    private void DrawAxis(double axisMaximum, double plotWidth, double plotHeight, bool showValueLabels)
     {
         const int tickCount = 5;
         for (var i = 0; i <= tickCount; i++)
@@ -155,7 +154,7 @@ public partial class FlowStatisticsWindow : Window
             };
             ChartCanvas.Children.Add(line);
 
-            if (i == 0)
+            if (i == 0 || !showValueLabels)
             {
                 continue;
             }
@@ -174,9 +173,16 @@ public partial class FlowStatisticsWindow : Window
         }
     }
 
-    private void DrawBars(IReadOnlyList<FlowMonthlyStatistic> items, double axisMaximum, double plotWidth, double plotHeight)
+    private void DrawBars(
+        IReadOnlyList<FlowMonthlyStatistic> items,
+        double axisMaximum,
+        BalanceAxisRange balanceRange,
+        double plotWidth,
+        double plotHeight)
     {
-        var seriesCount = (showIncome ? 1 : 0) + (showExpense ? 1 : 0);
+        var seriesCount = (showIncome ? 1 : 0)
+            + (showExpense ? 1 : 0)
+            + (showBalance ? 1 : 0);
         if (seriesCount == 0)
         {
             DrawMonthLabels(items, plotWidth, plotHeight);
@@ -184,10 +190,10 @@ public partial class FlowStatisticsWindow : Window
         }
 
         var groupWidth = plotWidth / items.Count;
-        var barGap = seriesCount == 1 ? 0 : Math.Clamp(groupWidth * 0.08, 2, 8);
+        var barGap = seriesCount == 1 ? 0 : Math.Clamp(groupWidth * 0.06, 2, 6);
         var barWidth = seriesCount == 1
             ? Math.Clamp(groupWidth * 0.42, 5, 38)
-            : Math.Clamp((groupWidth - barGap - 8) / 2, 4, 34);
+            : Math.Clamp((groupWidth - ((seriesCount - 1) * barGap) - 8) / seriesCount, 3, 30);
         var monthStep = CalculateLabelStep(groupWidth, 58);
         var valueStep = CalculateLabelStep(groupWidth, 34);
 
@@ -195,10 +201,8 @@ public partial class FlowStatisticsWindow : Window
         {
             var item = items[i];
             var center = LeftPadding + groupWidth * i + groupWidth / 2;
-            var firstLeft = seriesCount == 1
-                ? center - barWidth / 2
-                : center - barWidth - barGap / 2;
-            var secondLeft = center + barGap / 2;
+            var barsWidth = (seriesCount * barWidth) + ((seriesCount - 1) * barGap);
+            var firstLeft = center - (barsWidth / 2);
             var drawIndex = 0;
             var shouldShowLabel = ShouldShowIndexedLabel(i, items.Count, valueStep);
             var compactValueLabels = seriesCount > 1 && groupWidth < 58;
@@ -207,7 +211,7 @@ public partial class FlowStatisticsWindow : Window
 
             if (showIncome)
             {
-                var left = drawIndex == 0 ? firstLeft : secondLeft;
+                var left = firstLeft + (drawIndex * (barWidth + barGap));
                 DrawBar(item.Income, axisMaximum, left, barWidth, plotHeight, IncomeFill);
                 if (shouldShowIncomeValue)
                 {
@@ -219,11 +223,23 @@ public partial class FlowStatisticsWindow : Window
 
             if (showExpense)
             {
-                var left = drawIndex == 0 ? firstLeft : secondLeft;
+                var left = firstLeft + (drawIndex * (barWidth + barGap));
                 DrawBar(item.Expense, axisMaximum, left, barWidth, plotHeight, ExpenseFill);
                 if (shouldShowExpenseValue)
                 {
                     DrawValueLabel(item.Expense, axisMaximum, left, barWidth, plotHeight);
+                }
+
+                drawIndex++;
+            }
+
+            if (showBalance)
+            {
+                var left = firstLeft + (drawIndex * (barWidth + barGap));
+                DrawBalanceBar(item, balanceRange, left, barWidth, plotHeight);
+                if (shouldShowLabel && (seriesCount == 1 || groupWidth >= 100))
+                {
+                    DrawBalanceValueLabel(item.Balance, balanceRange, left, barWidth, plotHeight);
                 }
             }
 
@@ -291,6 +307,57 @@ public partial class FlowStatisticsWindow : Window
             Canvas.SetTop(label, y - 9);
             ChartCanvas.Children.Add(label);
         }
+    }
+
+    private void DrawBalanceBar(
+        FlowMonthlyStatistic item,
+        BalanceAxisRange range,
+        double left,
+        double width,
+        double plotHeight)
+    {
+        var zeroY = GetBalanceY(0, range, plotHeight);
+        var valueY = GetBalanceY(item.Balance, range, plotHeight);
+        var top = Math.Min(zeroY, valueY);
+        var height = Math.Abs(zeroY - valueY);
+        var rect = new Rectangle
+        {
+            Width = width,
+            Height = height,
+            Fill = BalanceFill,
+            Stroke = BalanceStroke,
+            StrokeThickness = 1,
+            RadiusX = 3,
+            RadiusY = 3,
+            ToolTip = $"{item.Month}  余额 {item.Balance:N2}"
+        };
+        Panel.SetZIndex(rect, 2);
+        Canvas.SetLeft(rect, left);
+        Canvas.SetTop(rect, top);
+        ChartCanvas.Children.Add(rect);
+    }
+
+    private void DrawBalanceValueLabel(
+        double value,
+        BalanceAxisRange range,
+        double left,
+        double barWidth,
+        double plotHeight)
+    {
+        var zeroY = GetBalanceY(0, range, plotHeight);
+        var valueY = GetBalanceY(value, range, plotHeight);
+        var label = new TextBlock
+        {
+            Text = FormatNumber(value),
+            Foreground = BalanceStroke,
+            FontSize = 10,
+            Width = 68,
+            TextAlignment = TextAlignment.Center
+        };
+        Panel.SetZIndex(label, 4);
+        Canvas.SetLeft(label, left + (barWidth / 2) - (label.Width / 2));
+        Canvas.SetTop(label, value >= 0 ? valueY - 20 : Math.Max(zeroY, valueY) + 2);
+        ChartCanvas.Children.Add(label);
     }
 
     private void DrawBalanceSeries(

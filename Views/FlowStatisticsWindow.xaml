@@ -61,8 +61,8 @@
                 <Ellipse Width="14"
                          Height="14"
                          Stroke="#008C72"
-                         StrokeThickness="3"
-                         Fill="White"
+                         StrokeThickness="2"
+                         Fill="#26B594"
                          Margin="0,0,6,0" />
                 <TextBlock x:Name="BalanceLegendText"
                            Text="余额"
