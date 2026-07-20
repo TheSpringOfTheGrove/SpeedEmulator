@@ -14,15 +14,19 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
     private readonly object syncRoot = new();
     private readonly Dictionary<string, List<FlowRecord>> recordsByUser = [];
     private readonly string storagePath;
+    private readonly string storageDirectory;
     private long nextId = 1;
     private bool loaded;
 
-    public InMemoryFlowRecordRepository()
+    public InMemoryFlowRecordRepository(string? storagePath = null)
     {
-        storagePath = Path.Combine(
+        this.storagePath = storagePath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SpeedEmulator",
             "flow-records.json");
+        storageDirectory = Path.Combine(
+            Path.GetDirectoryName(this.storagePath) ?? string.Empty,
+            Path.GetFileNameWithoutExtension(this.storagePath));
     }
 
     public Task<IReadOnlyList<FlowRecord>> ListByUserAsync(long bankId, long bankUserId)
@@ -35,7 +39,7 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
             {
                 records = CreateSeed(bankId, bankUserId);
                 recordsByUser[key] = records;
-                Persist();
+                PersistUser(bankId, bankUserId, records);
             }
 
             return Task.FromResult<IReadOnlyList<FlowRecord>>(records.Select(item => item.Clone()).ToList());
@@ -61,7 +65,7 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
             }
 
             recordsByUser[CreateKey(bankId, bankUserId)] = normalized;
-            Persist();
+            PersistUser(bankId, bankUserId, normalized);
             return Task.CompletedTask;
         }
     }
@@ -99,6 +103,35 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
             }
         }
 
+        if (Directory.Exists(storageDirectory))
+        {
+            foreach (var shardPath in Directory.EnumerateFiles(storageDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                if (!TryParseShardKey(shardPath, out var key))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var json = File.ReadAllText(shardPath);
+                    var records = JsonSerializer.Deserialize<List<FlowRecord>>(json, JsonOptions);
+                    if (records is not null)
+                    {
+                        recordsByUser[key] = records;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Keep the legacy data when an individual shard is incomplete.
+                }
+                catch (IOException)
+                {
+                    // A concurrent atomic replacement can be retried on the next load.
+                }
+            }
+        }
+
         nextId = Math.Max(
             1,
             recordsByUser.Values
@@ -109,20 +142,49 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
         loaded = true;
     }
 
-    private void Persist()
+    private void PersistUser(long bankId, long bankUserId, IReadOnlyList<FlowRecord> records)
     {
-        var directory = Path.GetDirectoryName(storagePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        foreach (var record in recordsByUser.Values.SelectMany(item => item))
+        Directory.CreateDirectory(storageDirectory);
+        foreach (var record in records)
         {
             RemoveInternalFields(record);
         }
 
-        File.WriteAllText(storagePath, JsonSerializer.Serialize(recordsByUser, JsonOptions));
+        var shardPath = GetShardPath(bankId, bankUserId);
+        var temporaryPath = shardPath + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(records, JsonOptions));
+            File.Move(temporaryPath, shardPath, true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private string GetShardPath(long bankId, long bankUserId)
+    {
+        return Path.Combine(storageDirectory, $"{bankId}-{bankUserId}.json");
+    }
+
+    private static bool TryParseShardKey(string path, out string key)
+    {
+        key = string.Empty;
+        var name = Path.GetFileNameWithoutExtension(path);
+        var separatorIndex = name.IndexOf('-', StringComparison.Ordinal);
+        if (separatorIndex <= 0
+            || !long.TryParse(name[..separatorIndex], out var bankId)
+            || !long.TryParse(name[(separatorIndex + 1)..], out var bankUserId))
+        {
+            return false;
+        }
+
+        key = CreateKey(bankId, bankUserId);
+        return true;
     }
 
     private static void RemoveInternalFields(FlowRecord record)

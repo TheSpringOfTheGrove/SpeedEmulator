@@ -86,7 +86,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     public string WindowTitle => $"流水页-版本({AppVersion.DisplayVersion})-{Bank.Name}";
 
-    public ObservableCollection<FlowRecord> Records { get; } = [];
+    public BulkObservableCollection<FlowRecord> Records { get; } = [];
 
     public FlowRecord? SelectedRecord
     {
@@ -556,11 +556,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
             ? allRecords
             : allRecords.Where(MatchesActiveFilters).ToList();
 
-        Records.Clear();
-        foreach (var item in source)
-        {
-            Records.Add(item);
-        }
+        Records.ReplaceAll(source);
 
         Reindex();
         SelectedRecord = previous is not null && Records.Contains(previous)
