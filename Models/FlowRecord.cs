@@ -60,7 +60,7 @@ public sealed class FlowRecord : ObservableObject
     private double? balanceAmount;
     private string receiptNum = string.Empty;
     private string incomeFlag = string.Empty;
-    private Dictionary<string, string> extraFields = [];
+    private Dictionary<string, string> extraFields = new(16);
 
     public int Index { get => index; set => SetProperty(ref index, value); }
     public long Id { get => id; set => SetProperty(ref id, value); }
@@ -165,7 +165,7 @@ public sealed class FlowRecord : ObservableObject
     public FlowRecord Clone()
     {
         var copy = (FlowRecord)MemberwiseClone();
-        copy.extraFields = ExtraFields.ToDictionary(item => item.Key, item => item.Value);
+        copy.extraFields = new Dictionary<string, string>(ExtraFields);
         return copy;
     }
 }

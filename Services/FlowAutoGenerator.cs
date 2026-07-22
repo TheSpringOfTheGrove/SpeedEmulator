@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using SpeedEmulator.Models;
 using ColumnDefinition = SpeedEmulator.Models.ColumnDefinition;
 
@@ -48,9 +49,11 @@ public sealed class FlowAutoGenerator
     private const string AmountUnitField = "__GeneratedAmountUnit";
     private const string AmountMinField = "__GeneratedAmountMin";
     private const string AmountMaxField = "__GeneratedAmountMax";
+    private const string AmountPrecisionField = "__GeneratedAmountPrecision";
     private const string RequiredOccurrenceField = "__GeneratedRequiredOccurrence";
     private const string SourceKindField = "__GeneratedSourceKind";
     private const string SourceIndexField = "__GeneratedSourceIndex";
+    private const string AmountDistributionKeyField = "__GeneratedAmountDistributionKey";
     private const string SmallDiscreteAmountField = "__GeneratedSmallDiscreteAmount";
     private const string AgriculturalSmallExpenseField = "__GeneratedAgriculturalSmallExpense";
     private const string AvoidSyntheticFractionField = "__GeneratedAvoidSyntheticFraction";
@@ -82,10 +85,22 @@ public sealed class FlowAutoGenerator
     private const double MonthlyClosingBalanceCapRatio = 0.10d;
     private const double MonthlyClosingBalanceTolerance = 1d;
     private const double MonthlyIncomeCapMultiplier = 2d;
+    private const double MinimumPrecisionRepeatGapDays = 7d;
+    private const double PreferredPrecisionRepeatGapDays = 30d;
     private const int MaxRuleAmountPoolCacheEntries = 2048;
     private const string ExternalSystemFlowColumnName = "\u5916\u90e8\u7cfb\u7edf\u6d41\u6c34";
     private static readonly ConcurrentDictionary<Type, RulePropertyMapping[]> RulePropertyMappings = new();
     private static readonly ConcurrentDictionary<AmountBounds, double[]> RuleAmountPoolValues = new();
+    private static readonly ConcurrentDictionary<IReadOnlyList<ColumnDefinition>, NormalizedColumnDefinition[]> NormalizedColumnDefinitions = new();
+    private static readonly ConcurrentDictionary<(IReadOnlyList<ColumnDefinition> Rule, IReadOnlyList<ColumnDefinition> Flow), ColumnFieldMapping[]> ColumnFieldMappings = new();
+    private static readonly ConcurrentDictionary<string, string> NormalizedColumnAliases = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<(FlowRuleBase Rule, Bank Bank, long UserId, int Sign), FlowRecord> RuleRecordTemplates = new();
+    private static readonly ConcurrentDictionary<(Bank Bank, string Field), bool> BankFlowFieldPresence = new();
+    private static readonly ConditionalWeakTable<FlowRecord, CachedAmountBounds> RecordAmountBounds = new();
+    private static readonly IReadOnlyDictionary<string, PropertyInfo> FlowRecordProperties = typeof(FlowRecord)
+        .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        .Where(item => item.GetIndexParameters().Length == 0)
+        .ToDictionary(item => item.Name, StringComparer.Ordinal);
     private static readonly HashSet<string> InterestSettingProtectedFields = new(StringComparer.Ordinal)
     {
         nameof(FlowRecord.Index),
@@ -195,8 +210,14 @@ public sealed class FlowAutoGenerator
         nameof(GenerateConstRule.ReCnt)
     };
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public FlowAutoGenerationResult Generate(FlowAutoGenerationRequest request)
     {
+        NormalizedColumnDefinitions.Clear();
+        ColumnFieldMappings.Clear();
+        RuleRecordTemplates.Clear();
+        BankFlowFieldPresence.Clear();
+        RecordAmountBounds.Clear();
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
@@ -207,7 +228,10 @@ public sealed class FlowAutoGenerator
 
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateRunSeed(request, start, end));
-        var records = new List<FlowRecord>();
+        var estimatedRecordCapacity = IsWechatBank(request.Bank)
+            ? Math.Max(512, ((end.Date - start.Date).Days + 1) * 24)
+            : 512;
+        var records = new List<FlowRecord>(estimatedRecordCapacity);
         var perfTrace = FlowGenerationPerfTrace.Start();
 
         var scheduleState = NativeScheduleState.From(records);
@@ -219,15 +243,22 @@ public sealed class FlowAutoGenerator
         var monthlyPlan = CreateMonthlyAmountPlan(request, start, end, targetIncome, plannedExpense, random);
 
         GenerateNativeConstRecords(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base const", records);
         GenerateNativeRequiredReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base required", records);
         if (!IsWechatBank(request.Bank) && request.References.Count < 200)
         {
             EnsureNativeOptionalReferenceRuleCoverage(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
+            perfTrace.Mark("base early coverage", records);
         }
         GenerateNativeOptionalReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base optional", records);
         EnsureNativeOptionalReferenceRuleCoverage(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base coverage", records);
         CompleteNativeConfiguredTotals(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base complete totals", records);
         ExpandWechatReferenceVolume(request, start, end, random, records, scheduleState, amountUsage);
+        perfTrace.Mark("base wechat volume", records);
         RedistributeFirstMonthIncomeRecords(request, monthlyPlan, random, records, scheduleState);
         perfTrace.Mark("base generation", records);
 
@@ -350,9 +381,6 @@ public sealed class FlowAutoGenerator
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         if (!highVolumeAmountPostProcessing)
         {
-            NormalizeSmallDiscreteAmountDistribution(records, request, random);
-            NormalizeReferenceAmountDistribution(records, random);
-            RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
             NormalizeReferenceAmountDistribution(records, random);
             if (request.BankUser.AutoCalculateInterest)
             {
@@ -394,17 +422,39 @@ public sealed class FlowAutoGenerator
         NormalizeReferenceAmountDistribution(records, random);
         perfTrace.Mark("amount rebalance", records);
         ShapeBalanceHighLowWaves(records, request, start, end, openingBalance, random);
+        perfTrace.Mark("final balance waves", records);
         ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+        perfTrace.Mark("final balance nonnegative", records);
         RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
+        perfTrace.Mark("final balance restore 1", records);
         if (!highVolumeAmountPostProcessing)
         {
             NormalizeSmallDiscreteAmountDistribution(records, request, random);
             NormalizeReferenceAmountDistribution(records, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            AddSafeExpenseRecordsForPositiveFinalBalance(records, request, start, end, openingBalance, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
-            RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
+            perfTrace.Mark("final balance normalize", records);
+            var finalAmountChanged = ReducePositiveFinalBalanceSafely(records, request, openingBalance);
+            finalAmountChanged = AddSafeExpenseRecordsForPositiveFinalBalance(
+                records,
+                request,
+                start,
+                end,
+                openingBalance,
+                random) || finalAmountChanged;
+            finalAmountChanged = ReducePositiveFinalBalanceSafely(records, request, openingBalance)
+                || finalAmountChanged;
+            perfTrace.Mark("final balance expense", records);
+            finalAmountChanged = ForceNativeNonNegativeBalances(
+                records,
+                request,
+                openingBalance,
+                start,
+                end,
+                random) || finalAmountChanged;
+            if (finalAmountChanged)
+            {
+                RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
+            }
+            perfTrace.Mark("final balance restore 2", records);
         }
         else
         {
@@ -420,6 +470,7 @@ public sealed class FlowAutoGenerator
             ForceCloseExternalFinalBalance(request, records);
         }
         RestoreConfiguredIncomeWithMatchedExpense(records, request, start, end, openingBalance, random);
+        perfTrace.Mark("final balance income restore", records);
         RedistributeMonthlyIncomeRecords(
             request,
             monthlyPlan,
@@ -487,6 +538,7 @@ public sealed class FlowAutoGenerator
         {
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
+        FinalizeConfiguredPrecisionReferenceAmounts(records, openingBalance, random);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("monthly closing final", records);
@@ -545,7 +597,8 @@ public sealed class FlowAutoGenerator
                 return (
                     bounds.Min,
                     bounds.Max,
-                    bounds.Unit);
+                    bounds.Unit,
+                    bounds.Precision);
             })
             .Where(group => group.Key.Max >= 100_000d - 0.009d)
             .Where(group => group.Count() >= 3)
@@ -553,7 +606,7 @@ public sealed class FlowAutoGenerator
 
         foreach (var group in groups)
         {
-            var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit);
+            var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit, group.Key.Precision);
             var segments = CreateRuleAmountDistributionSegments(bounds);
             if (segments.Count < 3)
             {
@@ -630,14 +683,6 @@ public sealed class FlowAutoGenerator
                 }
 
                 ApplySignedAmount(target, -1d, desired);
-                ApplyBalances(records, openingBalance);
-                if (GetMinimumBalance(records, openingBalance) < -0.009d)
-                {
-                    RestoreRecordAmounts(snapshot);
-                    ApplyBalances(records, openingBalance);
-                    continue;
-                }
-
                 changed = true;
             }
         }
@@ -647,6 +692,17 @@ public sealed class FlowAutoGenerator
             RestoreRecordAmounts(amountSnapshot);
             ApplyBalances(records, openingBalance);
             return false;
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+            if (GetMinimumBalance(records, openingBalance) < -0.009d)
+            {
+                RestoreRecordAmounts(amountSnapshot);
+                ApplyBalances(records, openingBalance);
+                return false;
+            }
         }
 
         return changed;
@@ -687,7 +743,7 @@ public sealed class FlowAutoGenerator
                     var fallback = FindValidAmountAtOrAbove(
                         Math.Max(bounds.Min, current - remaining),
                         current - unit,
-                        unit);
+                        bounds);
                     if (!fallback.HasValue)
                     {
                         continue;
@@ -1021,6 +1077,7 @@ public sealed class FlowAutoGenerator
         ApplyBalances(records, openingBalance);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void ReconcileNativeGeneratedRecords(
         List<FlowRecord> records,
         FlowAutoGenerationRequest request,
@@ -4273,7 +4330,7 @@ public sealed class FlowAutoGenerator
                 break;
             }
 
-            var effectiveBounds = new AmountBounds(bounds.Min, upper, bounds.Unit);
+            var effectiveBounds = new AmountBounds(bounds.Min, upper, bounds.Unit, bounds.Precision);
             var amountToAdd = MoveAmountAwayFromEdges(upper, effectiveBounds, random);
             amountToAdd = ClampAmountToBounds(amountToAdd, effectiveBounds);
             if (amountToAdd <= 0.009d)
@@ -4678,6 +4735,7 @@ public sealed class FlowAutoGenerator
         bool requireNonNegativeBalance,
         IReadOnlyList<NativeMoveCandidate>? moveCandidates = null)
     {
+        var monthlyIncomeCounts = BuildMonthlyIncomeCounts(records);
         var candidates = (moveCandidates ?? BuildNativeMoveCandidates(records, request))
             .Where(item => (item.Record.TradeMoney ?? 0) > 0.009d)
             .Where(item => item.IsMovableGeneratedReference)
@@ -4690,7 +4748,7 @@ public sealed class FlowAutoGenerator
             })
             .Where(item => item.SourceDate == targetDate || dayCounts.GetValueOrDefault(item.SourceDate) > 1)
             .Where(item => IsNativeDateAllowedForRule(targetDate, item.Rule))
-            .Where(item => CanMoveIncomeRecordForRhythm(records, item.Record))
+            .Where(item => CanMoveIncomeRecordForRhythm(item.Record, monthlyIncomeCounts))
             .OrderByDescending(item => targetDate <= item.SourceDate)
             .ThenByDescending(item => IsSameMonth(item.SourceDate, targetDate))
             .ThenByDescending(item => dayCounts.GetValueOrDefault(item.SourceDate))
@@ -5193,7 +5251,7 @@ public sealed class FlowAutoGenerator
         var originalAmount = Math.Abs(record.TradeMoney ?? 0);
         var bounds = GetRecordAmountBounds(record);
         var splitAmount = requestedSplitAmount.HasValue
-            ? ClampAmountToBounds(requestedSplitAmount.Value, new AmountBounds(bounds.Min, Math.Min(bounds.Max, originalAmount - bounds.Min), bounds.Unit))
+            ? ClampAmountToBounds(requestedSplitAmount.Value, new AmountBounds(bounds.Min, Math.Min(bounds.Max, originalAmount - bounds.Min), bounds.Unit, bounds.Precision))
             : CalculateSplitAmount(originalAmount, bounds);
         var remainingAmount = ClampAmountToBounds(originalAmount - splitAmount, bounds);
         if (splitAmount < bounds.Min - 0.009d || remainingAmount < bounds.Min - 0.009d)
@@ -5332,7 +5390,27 @@ public sealed class FlowAutoGenerator
             && IsGeneratedReferenceRecord(record);
     }
 
-    private static bool CanMoveIncomeRecordForRhythm(IEnumerable<FlowRecord> records, FlowRecord record)
+    private static Dictionary<int, int> BuildMonthlyIncomeCounts(IEnumerable<FlowRecord> records)
+    {
+        var result = new Dictionary<int, int>();
+        foreach (var record in records)
+        {
+            if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
+            {
+                continue;
+            }
+
+            var month = record.AccountTime.Value;
+            var key = (month.Year * 100) + month.Month;
+            result[key] = result.GetValueOrDefault(key) + 1;
+        }
+
+        return result;
+    }
+
+    private static bool CanMoveIncomeRecordForRhythm(
+        FlowRecord record,
+        IReadOnlyDictionary<int, int> monthlyIncomeCounts)
     {
         if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
         {
@@ -5346,11 +5424,7 @@ public sealed class FlowAutoGenerator
         }
 
         var month = record.AccountTime.Value;
-        var sameMonthCount = records.Count(item =>
-            (item.TradeMoney ?? 0) > 0.009d
-            && item.AccountTime.HasValue
-            && item.AccountTime.Value.Year == month.Year
-            && item.AccountTime.Value.Month == month.Month);
+        var sameMonthCount = monthlyIncomeCounts.GetValueOrDefault((month.Year * 100) + month.Month);
         return sameMonthCount > 3;
     }
 
@@ -5670,12 +5744,22 @@ public sealed class FlowAutoGenerator
 
     private sealed class NativeScheduleState
     {
-        private readonly Dictionary<DateTime, int> totalByDay = [];
-        private readonly Dictionary<DateTime, int> incomeByDay = [];
-        private readonly Dictionary<DateTime, int> expenseByDay = [];
-        private readonly HashSet<DateTime> usedTimes = [];
-        private readonly Dictionary<string, DateTime[]> candidateDatesByRange = [];
+        private readonly Dictionary<DateTime, int> totalByDay;
+        private readonly Dictionary<DateTime, int> incomeByDay;
+        private readonly Dictionary<DateTime, int> expenseByDay;
+        private readonly HashSet<DateTime> usedTimes;
+        private readonly Dictionary<string, DateTime[]> candidateDatesByRange;
         private int sequence;
+
+        public NativeScheduleState(int expectedRecordCount = 0)
+        {
+            var expectedDayCount = Math.Min(2048, Math.Max(0, expectedRecordCount));
+            totalByDay = new Dictionary<DateTime, int>(expectedDayCount);
+            incomeByDay = new Dictionary<DateTime, int>(expectedDayCount);
+            expenseByDay = new Dictionary<DateTime, int>(expectedDayCount);
+            usedTimes = new HashSet<DateTime>(Math.Max(0, expectedRecordCount));
+            candidateDatesByRange = new Dictionary<string, DateTime[]>();
+        }
 
         public int NextSequence()
         {
@@ -5684,7 +5768,8 @@ public sealed class FlowAutoGenerator
 
         public static NativeScheduleState From(IEnumerable<FlowRecord> records)
         {
-            var state = new NativeScheduleState();
+            var expectedRecordCount = records.TryGetNonEnumeratedCount(out var count) ? count : 0;
+            var state = new NativeScheduleState(expectedRecordCount);
             foreach (var record in records)
             {
                 state.Register(record);
@@ -5792,6 +5877,8 @@ public sealed class FlowAutoGenerator
     private sealed class AmountUsageTracker
     {
         private readonly Dictionary<string, Dictionary<double, int>> usageByGroup = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<int, int>> tailUsageByGroup = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<int, int>> globalTailUsage = new(StringComparer.Ordinal);
 
         public static AmountUsageTracker From(IEnumerable<FlowRecord> records)
         {
@@ -5822,14 +5909,46 @@ public sealed class FlowAutoGenerator
 
             var amount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
             usage[amount] = usage.GetValueOrDefault(amount) + 1;
+
+            var precision = GetRecordAmountBounds(record).Precision;
+            if (precision is not > 0)
+            {
+                return;
+            }
+
+            var tail = GetConfiguredPrecisionTail(amount, precision.Value);
+            if (!tailUsageByGroup.TryGetValue(groupKey, out var tailUsage))
+            {
+                tailUsage = [];
+                tailUsageByGroup[groupKey] = tailUsage;
+            }
+
+            tailUsage[tail] = tailUsage.GetValueOrDefault(tail) + 1;
+            var globalKey = CreateGlobalTailKey(sign, precision.Value);
+            if (!globalTailUsage.TryGetValue(globalKey, out var globalUsage))
+            {
+                globalUsage = [];
+                globalTailUsage[globalKey] = globalUsage;
+            }
+
+            globalUsage[tail] = globalUsage.GetValueOrDefault(tail) + 1;
         }
 
-        public Dictionary<double, int> GetUsage(string sourceKey, int sign, AmountBounds bounds)
+        public IReadOnlyDictionary<double, int> GetUsage(
+            string sourceKey,
+            int sign,
+            AmountBounds bounds,
+            bool useFullSourceBounds)
         {
             if (!usageByGroup.TryGetValue(CreateGroupKey(sourceKey, sign), out var usage)
                 || usage.Count == 0)
             {
-                return [];
+                return EmptyAmountUsage;
+            }
+
+            if (useFullSourceBounds)
+            {
+                return usage;
             }
 
             var result = new Dictionary<double, int>();
@@ -5847,10 +5966,32 @@ public sealed class FlowAutoGenerator
             return result;
         }
 
+        public IReadOnlyDictionary<int, int> GetTailUsage(string sourceKey, int sign)
+        {
+            return tailUsageByGroup.TryGetValue(CreateGroupKey(sourceKey, sign), out var usage)
+                ? usage
+                : EmptyTailUsage;
+        }
+
+        public IReadOnlyDictionary<int, int> GetGlobalTailUsage(int sign, int precision)
+        {
+            return globalTailUsage.TryGetValue(CreateGlobalTailKey(sign, precision), out var usage)
+                ? usage
+                : EmptyTailUsage;
+        }
+
         private static string CreateGroupKey(string sourceKey, int sign)
         {
             return string.Create(CultureInfo.InvariantCulture, $"{sign}:{sourceKey}");
         }
+
+        private static string CreateGlobalTailKey(int sign, int precision)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{sign}:{precision}");
+        }
+
+        private static readonly IReadOnlyDictionary<int, int> EmptyTailUsage = new Dictionary<int, int>();
+        private static readonly IReadOnlyDictionary<double, int> EmptyAmountUsage = new Dictionary<double, int>();
     }
 
     private sealed class FlowGenerationPerfTrace
@@ -6678,6 +6819,1260 @@ public sealed class FlowAutoGenerator
         return false;
     }
 
+    private static void FinalizeConfiguredPrecisionReferenceAmounts(
+        List<FlowRecord> records,
+        double openingBalance,
+        Random random)
+    {
+        var perfTrace = FlowGenerationPerfTrace.Start();
+        var precisionRecords = records
+            .Where(IsGeneratedReferenceRecord)
+            .Where(item => !IsSystemInterestRecord(item))
+            .Where(item => Math.Abs(item.TradeMoney ?? 0) > 0.009d)
+            .Where(item => GetRecordAmountBounds(item).Precision is > 0)
+            .ToList();
+        if (precisionRecords.Count < 2)
+        {
+            return;
+        }
+
+        var tailSnapshot = CaptureRecordAmountSnapshot(precisionRecords);
+        BalanceConfiguredPrecisionTailUsage(precisionRecords, random, requireBalanceSafe: false);
+        perfTrace.Mark("precision tail balance", precisionRecords);
+        ApplyBalances(records, openingBalance);
+        if (GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            RestoreRecordAmounts(tailSnapshot);
+            BalanceConfiguredPrecisionTailUsage(precisionRecords, random, requireBalanceSafe: true);
+            ApplyBalances(records, openingBalance);
+        }
+        perfTrace.Mark("precision tail balance validation", precisionRecords);
+
+        var timelineSnapshot = CaptureRecordAmountSnapshot(precisionRecords);
+        if (SpreadConfiguredPrecisionAmountsAcrossTimeline(precisionRecords, random))
+        {
+            ApplyBalances(records, openingBalance);
+            if (GetMinimumBalance(records, openingBalance) < -0.009d)
+            {
+                RestoreRecordAmounts(timelineSnapshot);
+                ApplyBalances(records, openingBalance);
+            }
+        }
+        perfTrace.Mark("precision timeline spread", precisionRecords);
+
+        var spacingSnapshot = CaptureRecordAmountSnapshot(precisionRecords);
+        ImproveConfiguredPrecisionTailSpacing(precisionRecords, random, requireBalanceSafe: false);
+        perfTrace.Mark("precision tail spacing", precisionRecords);
+        ApplyBalances(records, openingBalance);
+        if (GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            RestoreRecordAmounts(spacingSnapshot);
+            ImproveConfiguredPrecisionTailSpacing(precisionRecords, random, requireBalanceSafe: true);
+            ApplyBalances(records, openingBalance);
+        }
+        perfTrace.Mark("precision tail spacing validation", precisionRecords);
+    }
+
+    private static bool BalanceConfiguredPrecisionTailUsage(
+        IReadOnlyList<FlowRecord> records,
+        Random random,
+        bool requireBalanceSafe)
+    {
+        var changed = false;
+        var groups = records
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                return (
+                    Sign: GetAmountSign(item.TradeMoney ?? 0),
+                    Precision: Math.Clamp(bounds.Precision ?? 0, 1, 2));
+            })
+            .Where(group => group.Key.Sign != 0)
+            .ToList();
+        var protectedTailOwnerSign = groups
+            .Where(group => group.Key.Precision == 2)
+            .OrderByDescending(group => group.Count())
+            .Select(group => group.Key.Sign)
+            .FirstOrDefault();
+
+        foreach (var group in groups)
+        {
+            var groupRecords = group
+                .OrderBy(item => item.AccountTime ?? DateTime.MinValue)
+                .ThenBy(item => item.Index)
+                .ToList();
+            var precision = group.Key.Precision;
+            var scale = precision == 1 ? 10 : 100;
+            var validTails = Enumerable.Range(1, scale - 1)
+                .Where(tail => tail % 10 != 0)
+                .ToArray();
+            var validTailLookup = new bool[scale];
+            foreach (var tail in validTails)
+            {
+                validTailLookup[tail] = true;
+            }
+
+            var targetTailUsage = CreateConfiguredPrecisionTailTargets(
+                groupRecords.Count,
+                precision,
+                validTails,
+                allowProtectedTails: precision != 2 || group.Key.Sign == protectedTailOwnerSign);
+            var targetUsage = new double[scale];
+            var maximumUsage = new int[scale];
+            foreach (var tail in validTails)
+            {
+                targetUsage[tail] = targetTailUsage.GetValueOrDefault(tail);
+                maximumUsage[tail] = GetConfiguredPrecisionTailMaximumUsage(targetUsage[tail]);
+            }
+
+            var amounts = new double[groupRecords.Count];
+            var bounds = new AmountBounds[groupRecords.Count];
+            var tails = new int[groupRecords.Count];
+            var usage = new int[scale];
+            for (var index = 0; index < groupRecords.Count; index++)
+            {
+                amounts[index] = RoundMoney(Math.Abs(groupRecords[index].TradeMoney ?? 0));
+                bounds[index] = GetRecordAmountBounds(groupRecords[index]);
+                tails[index] = GetConfiguredPrecisionTail(amounts[index], precision);
+                if (tails[index] >= 0 && tails[index] < scale)
+                {
+                    usage[tails[index]]++;
+                }
+            }
+
+            var maxMoves = Math.Max(32, groupRecords.Count * 3);
+            for (var move = 0; move < maxMoves; move++)
+            {
+                var overTail = -1;
+                var overAmount = 0d;
+                for (var tail = 0; tail < scale; tail++)
+                {
+                    var excess = usage[tail] - maximumUsage[tail];
+                    if ((!validTailLookup[tail] && usage[tail] > 0) || excess > overAmount)
+                    {
+                        overTail = tail;
+                        overAmount = !validTailLookup[tail] ? double.MaxValue : excess;
+                    }
+                }
+
+                if (overTail < 0)
+                {
+                    break;
+                }
+
+                var recordIndex = -1;
+                var recordStart = random.Next(groupRecords.Count);
+                for (var offset = 0; offset < groupRecords.Count; offset++)
+                {
+                    var candidateIndex = (recordStart + offset) % groupRecords.Count;
+                    if (tails[candidateIndex] == overTail)
+                    {
+                        recordIndex = candidateIndex;
+                        break;
+                    }
+                }
+
+                if (recordIndex < 0)
+                {
+                    break;
+                }
+
+                var bestPartnerIndex = -1;
+                var bestTargetTail = -1;
+                var bestPartnerTail = -1;
+                var bestRecordAmount = 0d;
+                var bestPartnerAmount = 0d;
+                var bestScore = 0d;
+                var targetStart = random.Next(validTails.Length);
+                for (var targetOffset = 0; targetOffset < validTails.Length; targetOffset++)
+                {
+                    var targetTail = validTails[(targetStart + targetOffset) % validTails.Length];
+                    if (usage[targetTail] >= maximumUsage[targetTail])
+                    {
+                        continue;
+                    }
+
+                    var positiveSteps = (targetTail - overTail + scale) % scale;
+                    if (positiveSteps == 0)
+                    {
+                        continue;
+                    }
+
+                    var partnerStart = random.Next(groupRecords.Count);
+                    for (var partnerOffset = 0; partnerOffset < groupRecords.Count; partnerOffset++)
+                    {
+                        var partnerIndex = (partnerStart + partnerOffset) % groupRecords.Count;
+                        if (partnerIndex == recordIndex)
+                        {
+                            continue;
+                        }
+
+                        for (var option = 0; option < 2; option++)
+                        {
+                            var deltaSteps = option == 0 ? positiveSteps : positiveSteps - scale;
+                            if (deltaSteps == 0)
+                            {
+                                continue;
+                            }
+
+                            var delta = deltaSteps / (double)scale;
+                            var nextRecordAmount = RoundMoney(amounts[recordIndex] + delta);
+                            var nextPartnerAmount = RoundMoney(amounts[partnerIndex] - delta);
+                            if (!IsAmountWithinPrecisionBounds(nextRecordAmount, bounds[recordIndex])
+                                || !IsAmountWithinPrecisionBounds(nextPartnerAmount, bounds[partnerIndex])
+                                || requireBalanceSafe && !IsConfiguredPrecisionPairBalanceSafe(
+                                    groupRecords[recordIndex],
+                                    groupRecords[partnerIndex],
+                                    group.Key.Sign,
+                                    delta))
+                            {
+                                continue;
+                            }
+
+                            var nextRecordTail = GetConfiguredPrecisionTail(nextRecordAmount, precision);
+                            var nextPartnerTail = GetConfiguredPrecisionTail(nextPartnerAmount, precision);
+                            if (nextRecordTail != targetTail
+                                || nextPartnerTail < 0
+                                || nextPartnerTail >= scale
+                                || !validTailLookup[nextPartnerTail])
+                            {
+                                continue;
+                            }
+
+                            var score = CalculatePrecisionTailArrayMoveScore(
+                                usage,
+                                targetUsage,
+                                overTail,
+                                tails[partnerIndex],
+                                nextRecordTail,
+                                nextPartnerTail);
+                            var recordTime = groupRecords[recordIndex].AccountTime;
+                            var partnerTime = groupRecords[partnerIndex].AccountTime;
+                            if (recordTime.HasValue && partnerTime.HasValue
+                                && (recordTime.Value.Year != partnerTime.Value.Year
+                                    || recordTime.Value.Month != partnerTime.Value.Month))
+                            {
+                                score += 0.05d;
+                            }
+
+                            if (bestPartnerIndex < 0 || score < bestScore - 0.0000001d)
+                            {
+                                bestPartnerIndex = partnerIndex;
+                                bestTargetTail = nextRecordTail;
+                                bestPartnerTail = nextPartnerTail;
+                                bestRecordAmount = nextRecordAmount;
+                                bestPartnerAmount = nextPartnerAmount;
+                                bestScore = score;
+                            }
+                        }
+                    }
+                }
+
+                if (bestPartnerIndex < 0 || bestScore >= -0.0000001d)
+                {
+                    break;
+                }
+
+                usage[tails[recordIndex]]--;
+                usage[tails[bestPartnerIndex]]--;
+                usage[bestTargetTail]++;
+                usage[bestPartnerTail]++;
+                tails[recordIndex] = bestTargetTail;
+                tails[bestPartnerIndex] = bestPartnerTail;
+                amounts[recordIndex] = bestRecordAmount;
+                amounts[bestPartnerIndex] = bestPartnerAmount;
+                ApplySignedAmount(groupRecords[recordIndex], group.Key.Sign, bestRecordAmount);
+                ApplySignedAmount(groupRecords[bestPartnerIndex], group.Key.Sign, bestPartnerAmount);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static double CalculatePrecisionTailArrayMoveScore(
+        IReadOnlyList<int> usage,
+        IReadOnlyList<double> targetUsage,
+        int oldFirstTail,
+        int oldSecondTail,
+        int newFirstTail,
+        int newSecondTail)
+    {
+        Span<int> affected = stackalloc int[4];
+        affected[0] = oldFirstTail;
+        affected[1] = oldSecondTail;
+        affected[2] = newFirstTail;
+        affected[3] = newSecondTail;
+        var before = 0d;
+        var after = 0d;
+        for (var index = 0; index < affected.Length; index++)
+        {
+            var tail = affected[index];
+            var duplicate = false;
+            for (var previous = 0; previous < index; previous++)
+            {
+                if (affected[previous] == tail)
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (duplicate)
+            {
+                continue;
+            }
+
+            var current = usage[tail];
+            var next = current;
+            if (tail == oldFirstTail)
+            {
+                next--;
+            }
+
+            if (tail == oldSecondTail)
+            {
+                next--;
+            }
+
+            if (tail == newFirstTail)
+            {
+                next++;
+            }
+
+            if (tail == newSecondTail)
+            {
+                next++;
+            }
+
+            before += Math.Pow(current - targetUsage[tail], 2d);
+            after += Math.Pow(next - targetUsage[tail], 2d);
+        }
+
+        return after - before;
+    }
+
+    private static bool TryFindConfiguredPrecisionPairMove(
+        FlowRecord record,
+        FlowRecord partner,
+        int sign,
+        int precision,
+        int targetTail,
+        IReadOnlyDictionary<int, int> tailUsage,
+        IReadOnlyDictionary<string, int> exactUsage,
+        IReadOnlyDictionary<int, double> targetTailUsage,
+        bool requireBalanceSafe,
+        out double nextRecordAmount,
+        out double nextPartnerAmount,
+        out double score)
+    {
+        nextRecordAmount = 0;
+        nextPartnerAmount = 0;
+        score = 0;
+        var scale = precision == 1 ? 10 : 100;
+        var recordAmount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+        var partnerAmount = RoundMoney(Math.Abs(partner.TradeMoney ?? 0));
+        var currentTail = GetConfiguredPrecisionTail(recordAmount, precision);
+        var positiveSteps = (targetTail - currentTail + scale) % scale;
+        if (positiveSteps == 0)
+        {
+            return false;
+        }
+
+        var recordBounds = GetRecordAmountBounds(record);
+        var partnerBounds = GetRecordAmountBounds(partner);
+        var bestScore = double.MaxValue;
+        foreach (var deltaSteps in new[] { positiveSteps, positiveSteps - scale })
+        {
+            if (deltaSteps == 0)
+            {
+                continue;
+            }
+
+            var delta = deltaSteps / (double)scale;
+            var candidateRecordAmount = RoundMoney(recordAmount + delta);
+            var candidatePartnerAmount = RoundMoney(partnerAmount - delta);
+            if (!IsAmountWithinPrecisionBounds(candidateRecordAmount, recordBounds)
+                || !IsAmountWithinPrecisionBounds(candidatePartnerAmount, partnerBounds)
+                || requireBalanceSafe && !IsConfiguredPrecisionPairBalanceSafe(record, partner, sign, delta))
+            {
+                continue;
+            }
+
+            var partnerTail = GetConfiguredPrecisionTail(partnerAmount, precision);
+            var nextRecordTail = GetConfiguredPrecisionTail(candidateRecordAmount, precision);
+            var nextPartnerTail = GetConfiguredPrecisionTail(candidatePartnerAmount, precision);
+            if (!tailUsage.ContainsKey(nextRecordTail) || !tailUsage.ContainsKey(nextPartnerTail))
+            {
+                continue;
+            }
+
+            var tailScore = CalculatePrecisionTailMoveScore(
+                tailUsage,
+                targetTailUsage,
+                currentTail,
+                partnerTail,
+                nextRecordTail,
+                nextPartnerTail);
+            var exactScore = CalculatePrecisionExactMoveScore(
+                exactUsage,
+                record,
+                partner,
+                recordAmount,
+                partnerAmount,
+                candidateRecordAmount,
+                candidatePartnerAmount);
+            var candidateScore = tailScore + (exactScore * 0.15d);
+            if (candidateScore < bestScore - 0.0000001d)
+            {
+                bestScore = candidateScore;
+                nextRecordAmount = candidateRecordAmount;
+                nextPartnerAmount = candidatePartnerAmount;
+            }
+        }
+
+        if (bestScore == double.MaxValue)
+        {
+            return false;
+        }
+
+        score = bestScore;
+        return true;
+    }
+
+    private static bool IsAmountWithinPrecisionBounds(double amount, AmountBounds bounds)
+    {
+        return amount >= bounds.Min - 0.009d
+            && amount <= bounds.Max + 0.009d
+            && HasRequiredNonZeroPrecisionDigit(amount, bounds);
+    }
+
+    private static bool IsConfiguredPrecisionPairBalanceSafe(
+        FlowRecord record,
+        FlowRecord partner,
+        int sign,
+        double recordDelta)
+    {
+        var recordIsEarlier = (record.AccountTime ?? DateTime.MinValue) <= (partner.AccountTime ?? DateTime.MinValue);
+        var earlierDelta = recordIsEarlier ? recordDelta : -recordDelta;
+        return sign > 0 ? earlierDelta >= -0.0000001d : earlierDelta <= 0.0000001d;
+    }
+
+    private static double CalculatePrecisionTailMoveScore(
+        IReadOnlyDictionary<int, int> usage,
+        IReadOnlyDictionary<int, double> targetUsage,
+        int oldFirstTail,
+        int oldSecondTail,
+        int newFirstTail,
+        int newSecondTail)
+    {
+        var affectedTails = new[] { oldFirstTail, oldSecondTail, newFirstTail, newSecondTail }
+            .Where(usage.ContainsKey)
+            .Distinct()
+            .ToArray();
+        var before = affectedTails.Sum(tail => Math.Pow(usage[tail] - targetUsage.GetValueOrDefault(tail), 2d));
+        var deltas = new Dictionary<int, int>();
+        if (usage.ContainsKey(oldFirstTail))
+        {
+            deltas[oldFirstTail] = deltas.GetValueOrDefault(oldFirstTail) - 1;
+        }
+
+        if (usage.ContainsKey(oldSecondTail))
+        {
+            deltas[oldSecondTail] = deltas.GetValueOrDefault(oldSecondTail) - 1;
+        }
+
+        deltas[newFirstTail] = deltas.GetValueOrDefault(newFirstTail) + 1;
+        deltas[newSecondTail] = deltas.GetValueOrDefault(newSecondTail) + 1;
+        var after = affectedTails.Sum(tail => Math.Pow(
+            usage[tail] + deltas.GetValueOrDefault(tail) - targetUsage.GetValueOrDefault(tail),
+            2d));
+        var invalidBefore = (usage.ContainsKey(oldFirstTail) ? 0 : 1) + (usage.ContainsKey(oldSecondTail) ? 0 : 1);
+        return after - before - (invalidBefore * 1000d);
+    }
+
+    private static IReadOnlyDictionary<int, double> CreateConfiguredPrecisionTailTargets(
+        int recordCount,
+        int precision,
+        IReadOnlyList<int> validTails,
+        bool allowProtectedTails)
+    {
+        var result = new Dictionary<int, double>();
+        if (validTails.Count == 0)
+        {
+            return result;
+        }
+
+        if (precision != 2)
+        {
+            var uniformTarget = recordCount / (double)validTails.Count;
+            foreach (var tail in validTails)
+            {
+                result[tail] = uniformTarget;
+            }
+
+            return result;
+        }
+
+        var protectedTails = validTails.Where(IsProtectedNinetiesPrecisionTail).ToHashSet();
+        var regularTails = validTails.Where(tail => !protectedTails.Contains(tail)).ToArray();
+        if (allowProtectedTails && recordCount <= validTails.Count)
+        {
+            var uniformTarget = recordCount / (double)validTails.Count;
+            foreach (var tail in validTails)
+            {
+                result[tail] = uniformTarget;
+            }
+
+            return result;
+        }
+
+        var protectedTotal = allowProtectedTails
+            ? Math.Min(recordCount, protectedTails.Count)
+            : 0;
+        var regularTarget = regularTails.Length == 0
+            ? 0d
+            : Math.Max(0, recordCount - protectedTotal) / (double)regularTails.Length;
+        foreach (var tail in validTails)
+        {
+            result[tail] = protectedTails.Contains(tail)
+                ? allowProtectedTails ? 1d : 0d
+                : regularTarget;
+        }
+
+        return result;
+    }
+
+    private static int GetConfiguredPrecisionTailMaximumUsage(double targetUsage)
+    {
+        return targetUsage <= 0.0000001d
+            ? 0
+            : Math.Max(1, (int)Math.Ceiling(targetUsage - 0.0000001d));
+    }
+
+    private static bool IsProtectedNinetiesPrecisionTail(int tail)
+    {
+        return tail is >= 91 and <= 99;
+    }
+
+    private static double CalculatePrecisionExactMoveScore(
+        IReadOnlyDictionary<string, int> usage,
+        FlowRecord first,
+        FlowRecord second,
+        double oldFirstAmount,
+        double oldSecondAmount,
+        double newFirstAmount,
+        double newSecondAmount)
+    {
+        var oldFirstKey = CreatePrecisionExactUsageKey(first, oldFirstAmount);
+        var oldSecondKey = CreatePrecisionExactUsageKey(second, oldSecondAmount);
+        var newFirstKey = CreatePrecisionExactUsageKey(first, newFirstAmount);
+        var newSecondKey = CreatePrecisionExactUsageKey(second, newSecondAmount);
+        var keys = new[] { oldFirstKey, oldSecondKey, newFirstKey, newSecondKey }
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var before = keys.Sum(key => CalculateDuplicatePairCount(usage.GetValueOrDefault(key)));
+        var deltas = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [oldFirstKey] = -1
+        };
+        deltas[oldSecondKey] = deltas.GetValueOrDefault(oldSecondKey) - 1;
+        deltas[newFirstKey] = deltas.GetValueOrDefault(newFirstKey) + 1;
+        deltas[newSecondKey] = deltas.GetValueOrDefault(newSecondKey) + 1;
+        var after = keys.Sum(key => CalculateDuplicatePairCount(usage.GetValueOrDefault(key) + deltas.GetValueOrDefault(key)));
+        return after - before;
+    }
+
+    private static double CalculateDuplicatePairCount(int count)
+    {
+        return count <= 1 ? 0d : count * (count - 1d) / 2d;
+    }
+
+    private static void UpdatePrecisionUsageBeforeMove(
+        FlowRecord first,
+        FlowRecord second,
+        int precision,
+        IDictionary<int, int> tailUsage,
+        IDictionary<string, int> exactUsage,
+        int delta)
+    {
+        foreach (var record in new[] { first, second })
+        {
+            var amount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+            var tail = GetConfiguredPrecisionTail(amount, precision);
+            if (tailUsage.ContainsKey(tail))
+            {
+                tailUsage[tail] += delta;
+            }
+
+            var exactKey = CreatePrecisionExactUsageKey(record, amount);
+            exactUsage.TryGetValue(exactKey, out var currentUsage);
+            exactUsage[exactKey] = currentUsage + delta;
+            if (exactUsage[exactKey] <= 0)
+            {
+                exactUsage.Remove(exactKey);
+            }
+        }
+    }
+
+    private static string CreatePrecisionExactUsageKey(FlowRecord record, double amount)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{GetGeneratedAmountDistributionKey(record)}:{RoundMoney(amount):0.00}");
+    }
+
+    private static bool SpreadConfiguredPrecisionAmountsAcrossTimeline(
+        IReadOnlyList<FlowRecord> records,
+        Random random)
+    {
+        var changed = false;
+        var exactTimes = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        var tailTimes = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        var timelineStart = records
+            .Where(item => item.AccountTime.HasValue)
+            .Select(item => item.AccountTime!.Value)
+            .DefaultIfEmpty(DateTime.Today)
+            .Min();
+        var timelineEnd = records
+            .Where(item => item.AccountTime.HasValue)
+            .Select(item => item.AccountTime!.Value)
+            .DefaultIfEmpty(timelineStart)
+            .Max();
+        var timelineSpanDays = Math.Max(1d, (timelineEnd - timelineStart).TotalDays);
+        var exactOccurrenceCounts = records
+            .Where(item => item.AccountTime.HasValue)
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                return CreatePrecisionTimelineExactKey(
+                    GetAmountSign(item.TradeMoney ?? 0),
+                    Math.Clamp(bounds.Precision ?? 0, 1, 2),
+                    Math.Abs(item.TradeMoney ?? 0));
+            })
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var tailOccurrenceCounts = records
+            .Where(item => item.AccountTime.HasValue)
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                var precision = Math.Clamp(bounds.Precision ?? 0, 1, 2);
+                var tail = GetConfiguredPrecisionTail(Math.Abs(item.TradeMoney ?? 0), precision);
+                return CreatePrecisionTimelineTailKey(GetAmountSign(item.TradeMoney ?? 0), precision, tail);
+            })
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var groups = records
+            .Where(item => item.AccountTime.HasValue)
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                var time = item.AccountTime!.Value;
+                return (
+                    Sign: GetAmountSign(item.TradeMoney ?? 0),
+                    Precision: Math.Clamp(bounds.Precision ?? 0, 1, 2),
+                    bounds.Min,
+                    bounds.Max,
+                    bounds.Unit,
+                    Month: new DateTime(time.Year, time.Month, 1));
+            })
+            .OrderBy(group => group.Key.Month)
+            .ThenBy(_ => random.Next())
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            var groupRecords = group
+                .OrderBy(item => item.AccountTime)
+                .ThenBy(item => item.Index)
+                .ToList();
+            if (groupRecords.Count == 0)
+            {
+                continue;
+            }
+
+            var remainingAmounts = groupRecords
+                .Select(item => RoundMoney(Math.Abs(item.TradeMoney ?? 0)))
+                .ToList();
+            foreach (var record in groupRecords)
+            {
+                var recordTime = record.AccountTime!.Value;
+                var originalAmount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+                var bestIndex = -1;
+                var bestScore = double.MaxValue;
+                for (var index = 0; index < remainingAmounts.Count; index++)
+                {
+                    var amount = remainingAmounts[index];
+                    if (!IsAmountWithinPrecisionBounds(amount, GetRecordAmountBounds(record)))
+                    {
+                        continue;
+                    }
+
+                    var exactKey = CreatePrecisionTimelineExactKey(group.Key.Sign, group.Key.Precision, amount);
+                    var tail = GetConfiguredPrecisionTail(amount, group.Key.Precision);
+                    var tailKey = CreatePrecisionTimelineTailKey(group.Key.Sign, group.Key.Precision, tail);
+                    var exactPreferredGap = CalculatePreferredPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        exactOccurrenceCounts.GetValueOrDefault(exactKey));
+                    var exactMinimumGap = CalculateMinimumPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        exactOccurrenceCounts.GetValueOrDefault(exactKey));
+                    var tailPreferredGap = CalculatePreferredPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        tailOccurrenceCounts.GetValueOrDefault(tailKey));
+                    var tailMinimumGap = CalculateMinimumPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        tailOccurrenceCounts.GetValueOrDefault(tailKey));
+                    var candidateScore = CalculatePrecisionTimelineCollisionPenalty(
+                            recordTime,
+                            exactTimes.GetValueOrDefault(exactKey),
+                            sameTimeWeight: 1_000_000d,
+                            sameDayWeight: 120_000d)
+                        + CalculatePrecisionTimelineCollisionPenalty(
+                            recordTime,
+                            tailTimes.GetValueOrDefault(tailKey),
+                            sameTimeWeight: 500_000d,
+                            sameDayWeight: 60_000d)
+                        + CalculatePrecisionTimelineSpacingPenalty(
+                            recordTime,
+                            exactTimes.GetValueOrDefault(exactKey),
+                            exactPreferredGap,
+                            1600d)
+                        + CalculatePrecisionTimelineSpacingPenalty(
+                            recordTime,
+                            exactTimes.GetValueOrDefault(exactKey),
+                            exactMinimumGap,
+                            8000d)
+                        + CalculatePrecisionTimelineSpacingPenalty(
+                            recordTime,
+                            tailTimes.GetValueOrDefault(tailKey),
+                            tailPreferredGap,
+                            260d)
+                        + CalculatePrecisionTimelineSpacingPenalty(
+                            recordTime,
+                            tailTimes.GetValueOrDefault(tailKey),
+                            tailMinimumGap,
+                            1800d)
+                        + (Math.Abs(amount - originalAmount) * 0.0001d)
+                        + (random.NextDouble() * 0.001d);
+                    if (candidateScore < bestScore - 0.0000001d)
+                    {
+                        bestIndex = index;
+                        bestScore = candidateScore;
+                    }
+                }
+
+                if (bestIndex < 0)
+                {
+                    continue;
+                }
+
+                var selectedAmount = remainingAmounts[bestIndex];
+                remainingAmounts.RemoveAt(bestIndex);
+                if (Math.Abs(selectedAmount - originalAmount) > 0.009d)
+                {
+                    ApplySignedAmount(record, group.Key.Sign, selectedAmount);
+                    changed = true;
+                }
+
+                var selectedExactKey = CreatePrecisionTimelineExactKey(group.Key.Sign, group.Key.Precision, selectedAmount);
+                var selectedTail = GetConfiguredPrecisionTail(selectedAmount, group.Key.Precision);
+                var selectedTailKey = CreatePrecisionTimelineTailKey(group.Key.Sign, group.Key.Precision, selectedTail);
+                AddPrecisionTimelineTime(exactTimes, selectedExactKey, recordTime);
+                AddPrecisionTimelineTime(tailTimes, selectedTailKey, recordTime);
+            }
+        }
+
+        return changed;
+    }
+
+    private static string CreatePrecisionTimelineExactKey(int sign, int precision, double amount)
+    {
+        return string.Create(CultureInfo.InvariantCulture, $"{sign}:{precision}:{RoundMoney(amount):0.00}");
+    }
+
+    private static string CreatePrecisionTimelineTailKey(int sign, int precision, int tail)
+    {
+        return string.Create(CultureInfo.InvariantCulture, $"{sign}:{precision}:{tail}");
+    }
+
+    private static double CalculatePreferredPrecisionRepeatGapDays(double timelineSpanDays, int occurrenceCount)
+    {
+        if (occurrenceCount <= 1)
+        {
+            return PreferredPrecisionRepeatGapDays;
+        }
+
+        var availableGap = timelineSpanDays / Math.Max(1, occurrenceCount - 1);
+        return Math.Min(PreferredPrecisionRepeatGapDays, Math.Max(0.25d, availableGap * 0.90d));
+    }
+
+    private static double CalculateMinimumPrecisionRepeatGapDays(double timelineSpanDays, int occurrenceCount)
+    {
+        if (occurrenceCount <= 1)
+        {
+            return MinimumPrecisionRepeatGapDays;
+        }
+
+        var availableGap = timelineSpanDays / Math.Max(1, occurrenceCount - 1);
+        return Math.Min(MinimumPrecisionRepeatGapDays, Math.Max(0.25d, availableGap * 0.75d));
+    }
+
+    private static double CalculatePrecisionTimelineCollisionPenalty(
+        DateTime time,
+        IReadOnlyList<DateTime>? existingTimes,
+        double sameTimeWeight,
+        double sameDayWeight)
+    {
+        if (existingTimes is null || existingTimes.Count == 0)
+        {
+            return 0d;
+        }
+
+        var penalty = 0d;
+        foreach (var existingTime in existingTimes)
+        {
+            if (Math.Abs((time - existingTime).TotalSeconds) < 1d)
+            {
+                penalty += sameTimeWeight;
+            }
+            else if (time.Date == existingTime.Date)
+            {
+                penalty += sameDayWeight;
+            }
+        }
+
+        return penalty;
+    }
+
+    private static double CalculatePrecisionTimelineSpacingPenalty(
+        DateTime time,
+        IReadOnlyList<DateTime>? existingTimes,
+        double preferredGapDays,
+        double weight)
+    {
+        if (existingTimes is null || existingTimes.Count == 0)
+        {
+            return 0d;
+        }
+
+        var nearestGap = existingTimes.Min(item => Math.Abs((time - item).TotalDays));
+        if (nearestGap >= preferredGapDays)
+        {
+            return 0d;
+        }
+
+        return (preferredGapDays - nearestGap + 1d) * weight;
+    }
+
+    private static void AddPrecisionTimelineTime(
+        IDictionary<string, List<DateTime>> values,
+        string key,
+        DateTime time)
+    {
+        if (!values.TryGetValue(key, out var times))
+        {
+            times = [];
+            values[key] = times;
+        }
+
+        times.Add(time);
+    }
+
+    private static bool ImproveConfiguredPrecisionTailSpacing(
+        IReadOnlyList<FlowRecord> records,
+        Random random,
+        bool requireBalanceSafe)
+    {
+        // The first pass is allowed to permute configured tails. If that result makes an
+        // already-tight balance negative, the caller restores the snapshot and invokes the
+        // balance-safe pass. Keeping the restored values is safer than running the old
+        // quadratic pair search again.
+        if (requireBalanceSafe)
+        {
+            return false;
+        }
+
+        var changed = false;
+        var groups = records
+            .Where(item => item.AccountTime.HasValue)
+            .GroupBy(item =>
+            {
+                var bounds = GetRecordAmountBounds(item);
+                return (
+                    Sign: GetAmountSign(item.TradeMoney ?? 0),
+                    Precision: Math.Clamp(bounds.Precision ?? 0, 1, 2));
+            })
+            .Where(group => group.Key.Sign != 0)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            var groupRecords = group
+                .OrderBy(item => item.AccountTime)
+                .ThenBy(item => item.Index)
+                .ToList();
+            if (groupRecords.Count < 2)
+            {
+                continue;
+            }
+
+            var precision = group.Key.Precision;
+            var scale = precision == 1 ? 10 : 100;
+            var validTails = Enumerable.Range(1, scale - 1)
+                .Where(tail => tail % 10 != 0)
+                .ToHashSet();
+            var states = groupRecords
+                .Select(record =>
+                {
+                    var amount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+                    var amountUnits = Convert.ToInt64(Math.Round(amount * scale, MidpointRounding.AwayFromZero));
+                    return new
+                    {
+                        Record = record,
+                        Bounds = GetRecordAmountBounds(record),
+                        Amount = amount,
+                        AmountUnits = amountUnits,
+                        WholeUnits = amountUnits - Math.Abs(amountUnits % scale),
+                        Tail = GetConfiguredPrecisionTail(amount, precision),
+                        SourceKey = GetGeneratedAmountDistributionKey(record),
+                        Time = record.AccountTime!.Value
+                    };
+                })
+                .ToList();
+            if (states.Any(state => !validTails.Contains(state.Tail)))
+            {
+                continue;
+            }
+
+            var remainingTailCounts = states
+                .GroupBy(state => state.Tail)
+                .ToDictionary(items => items.Key, items => items.Count());
+            var totalTailCounts = remainingTailCounts.ToDictionary(item => item.Key, item => item.Value);
+            var assignedTailCounts = totalTailCounts.Keys.ToDictionary(tail => tail, _ => 0);
+            var lastTailTime = new Dictionary<int, DateTime>();
+            var exactUsage = new Dictionary<(string SourceKey, long Cents), int>();
+            var lastExactTime = new Dictionary<(string SourceKey, long Cents), DateTime>();
+            var timelineStart = states[0].Time;
+            var timelineEnd = states[^1].Time;
+            var timelineSpanDays = Math.Max(
+                1d,
+                (timelineEnd - timelineStart).TotalDays);
+            var assignments = new List<(FlowRecord Record, double Amount)>(states.Count);
+            var complete = true;
+            foreach (var state in states)
+            {
+                var bestTail = -1;
+                var bestAmount = 0d;
+                var bestScore = double.MaxValue;
+                foreach (var pair in remainingTailCounts)
+                {
+                    var tail = pair.Key;
+                    if (pair.Value <= 0)
+                    {
+                        continue;
+                    }
+
+                    var candidateUnits = state.WholeUnits + tail;
+                    var candidateAmount = RoundMoney(candidateUnits / (double)scale);
+                    if (!IsAmountWithinPrecisionBounds(candidateAmount, state.Bounds))
+                    {
+                        continue;
+                    }
+
+                    var totalOccurrences = totalTailCounts[tail];
+                    var occurrenceIndex = assignedTailCounts[tail] + 1;
+                    var idealTime = timelineStart.AddDays(
+                        timelineSpanDays * occurrenceIndex / Math.Max(1d, totalOccurrences + 1d));
+                    var preferredGap = CalculatePreferredPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        totalOccurrences);
+                    var minimumGap = CalculateMinimumPrecisionRepeatGapDays(
+                        timelineSpanDays,
+                        totalOccurrences);
+                    var score = Math.Abs((state.Time - idealTime).TotalDays) * 4d;
+                    if (lastTailTime.TryGetValue(tail, out var previousTailTime))
+                    {
+                        var gap = (state.Time - previousTailTime).TotalDays;
+                        if (state.Time.Date == previousTailTime.Date)
+                        {
+                            score += 500_000d;
+                        }
+
+                        if (gap < minimumGap)
+                        {
+                            score += (minimumGap - gap + 1d) * 12_000d;
+                        }
+                        else if (gap < preferredGap)
+                        {
+                            score += (preferredGap - gap + 1d) * 1800d;
+                        }
+                    }
+
+                    var cents = Convert.ToInt64(Math.Round(candidateAmount * 100d, MidpointRounding.AwayFromZero));
+                    var exactKey = (state.SourceKey, cents);
+                    var existingExactUsage = exactUsage.GetValueOrDefault(exactKey);
+                    score += CalculateDuplicatePairCount(existingExactUsage + 1) * 6000d;
+                    if (lastExactTime.TryGetValue(exactKey, out var previousExactTime))
+                    {
+                        var exactGap = (state.Time - previousExactTime).TotalDays;
+                        if (state.Time.Date == previousExactTime.Date)
+                        {
+                            score += 1_000_000d;
+                        }
+
+                        if (exactGap < MinimumPrecisionRepeatGapDays)
+                        {
+                            score += (MinimumPrecisionRepeatGapDays - exactGap + 1d) * 20_000d;
+                        }
+                    }
+
+                    score += Math.Abs(candidateAmount - state.Amount) * 0.001d;
+                    score -= pair.Value / (double)totalOccurrences;
+                    score += random.NextDouble() * 0.001d;
+                    if (score < bestScore - 0.0000001d)
+                    {
+                        bestTail = tail;
+                        bestAmount = candidateAmount;
+                        bestScore = score;
+                    }
+                }
+
+                if (bestTail < 0)
+                {
+                    complete = false;
+                    break;
+                }
+
+                assignments.Add((state.Record, bestAmount));
+                remainingTailCounts[bestTail]--;
+                assignedTailCounts[bestTail]++;
+                lastTailTime[bestTail] = state.Time;
+                var bestCents = Convert.ToInt64(Math.Round(bestAmount * 100d, MidpointRounding.AwayFromZero));
+                var bestExactKey = (state.SourceKey, bestCents);
+                exactUsage[bestExactKey] = exactUsage.GetValueOrDefault(bestExactKey) + 1;
+                lastExactTime[bestExactKey] = state.Time;
+            }
+
+            if (!complete || remainingTailCounts.Values.Any(count => count != 0))
+            {
+                continue;
+            }
+
+            var originalTotal = RoundMoney(states.Sum(state => state.Amount));
+            var assignedTotal = RoundMoney(assignments.Sum(item => item.Amount));
+            if (Math.Abs(originalTotal - assignedTotal) > 0.009d)
+            {
+                continue;
+            }
+
+            foreach (var assignment in assignments)
+            {
+                var originalAmount = RoundMoney(Math.Abs(assignment.Record.TradeMoney ?? 0));
+                if (Math.Abs(originalAmount - assignment.Amount) <= 0.009d)
+                {
+                    continue;
+                }
+
+                ApplySignedAmount(assignment.Record, group.Key.Sign, assignment.Amount);
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool TryFindConfiguredPrecisionTailSwap(
+        FlowRecord record,
+        FlowRecord partner,
+        int sign,
+        int precision,
+        int scale,
+        IReadOnlyDictionary<int, List<DateTime>> tailTimes,
+        IReadOnlyDictionary<string, int> exactUsage,
+        double timelineSpanDays,
+        bool requireBalanceSafe,
+        out double nextRecordAmount,
+        out double nextPartnerAmount,
+        out double score)
+    {
+        nextRecordAmount = 0d;
+        nextPartnerAmount = 0d;
+        score = 0d;
+        var recordAmount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+        var partnerAmount = RoundMoney(Math.Abs(partner.TradeMoney ?? 0));
+        var recordTail = GetConfiguredPrecisionTail(recordAmount, precision);
+        var partnerTail = GetConfiguredPrecisionTail(partnerAmount, precision);
+        if (recordTail == partnerTail)
+        {
+            return false;
+        }
+
+        var recordBounds = GetRecordAmountBounds(record);
+        var partnerBounds = GetRecordAmountBounds(partner);
+        var currentTemporalScore = CalculatePrecisionTailTemporalScore(
+                tailTimes.GetValueOrDefault(recordTail) ?? [],
+                timelineSpanDays)
+            + CalculatePrecisionTailTemporalScore(
+                tailTimes.GetValueOrDefault(partnerTail) ?? [],
+                timelineSpanDays);
+        var positiveSteps = (partnerTail - recordTail + scale) % scale;
+        var bestScore = double.MaxValue;
+        foreach (var deltaSteps in new[] { positiveSteps, positiveSteps - scale })
+        {
+            if (deltaSteps == 0)
+            {
+                continue;
+            }
+
+            var delta = deltaSteps / (double)scale;
+            var candidateRecordAmount = RoundMoney(recordAmount + delta);
+            var candidatePartnerAmount = RoundMoney(partnerAmount - delta);
+            if (!IsAmountWithinPrecisionBounds(candidateRecordAmount, recordBounds)
+                || !IsAmountWithinPrecisionBounds(candidatePartnerAmount, partnerBounds)
+                || GetConfiguredPrecisionTail(candidateRecordAmount, precision) != partnerTail
+                || GetConfiguredPrecisionTail(candidatePartnerAmount, precision) != recordTail
+                || requireBalanceSafe && !IsConfiguredPrecisionPairBalanceSafe(record, partner, sign, delta))
+            {
+                continue;
+            }
+
+            var nextRecordTailTimes = CreateMovedPrecisionTailTimes(
+                tailTimes.GetValueOrDefault(recordTail) ?? [],
+                record.AccountTime!.Value,
+                partner.AccountTime!.Value);
+            var nextPartnerTailTimes = CreateMovedPrecisionTailTimes(
+                tailTimes.GetValueOrDefault(partnerTail) ?? [],
+                partner.AccountTime!.Value,
+                record.AccountTime!.Value);
+            var nextTemporalScore = CalculatePrecisionTailTemporalScore(nextRecordTailTimes, timelineSpanDays)
+                + CalculatePrecisionTailTemporalScore(nextPartnerTailTimes, timelineSpanDays);
+            var exactScore = CalculatePrecisionExactMoveScore(
+                exactUsage,
+                record,
+                partner,
+                recordAmount,
+                partnerAmount,
+                candidateRecordAmount,
+                candidatePartnerAmount);
+            var candidateScore = nextTemporalScore - currentTemporalScore + (exactScore * 250d);
+            if (candidateScore < bestScore - 0.0000001d)
+            {
+                bestScore = candidateScore;
+                nextRecordAmount = candidateRecordAmount;
+                nextPartnerAmount = candidatePartnerAmount;
+            }
+        }
+
+        if (bestScore == double.MaxValue)
+        {
+            return false;
+        }
+
+        score = bestScore;
+        return true;
+    }
+
+    private static double CalculateNearestOtherPrecisionTimeGap(
+        DateTime time,
+        IReadOnlyList<DateTime> times)
+    {
+        var skippedSelf = false;
+        var nearestGap = double.MaxValue;
+        foreach (var candidate in times)
+        {
+            if (!skippedSelf && candidate == time)
+            {
+                skippedSelf = true;
+                continue;
+            }
+
+            nearestGap = Math.Min(nearestGap, Math.Abs((time - candidate).TotalDays));
+        }
+
+        return nearestGap;
+    }
+
+    private static double CalculatePrecisionTailTemporalScore(
+        IReadOnlyList<DateTime> times,
+        double timelineSpanDays)
+    {
+        if (times.Count < 2)
+        {
+            return 0d;
+        }
+
+        var ordered = times.OrderBy(item => item).ToArray();
+        var preferredGap = CalculatePreferredPrecisionRepeatGapDays(timelineSpanDays, ordered.Length);
+        var minimumGap = CalculateMinimumPrecisionRepeatGapDays(timelineSpanDays, ordered.Length);
+        var score = 0d;
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            var previous = ordered[index - 1];
+            var current = ordered[index];
+            score += CalculatePrecisionTimelineCollisionPenalty(
+                current,
+                [previous],
+                sameTimeWeight: 1_000_000d,
+                sameDayWeight: 120_000d);
+            score += CalculatePrecisionTimelineSpacingPenalty(current, [previous], preferredGap, 1600d);
+            score += CalculatePrecisionTimelineSpacingPenalty(
+                current,
+                [previous],
+                minimumGap,
+                8000d);
+        }
+
+        return score;
+    }
+
+    private static List<DateTime> CreateMovedPrecisionTailTimes(
+        IReadOnlyList<DateTime> times,
+        DateTime remove,
+        DateTime add)
+    {
+        var result = times.ToList();
+        result.Remove(remove);
+        result.Add(add);
+        result.Sort();
+        return result;
+    }
+
+    private static void MovePrecisionTailTime(
+        IDictionary<int, List<DateTime>> tailTimes,
+        int oldTail,
+        int newTail,
+        DateTime time)
+    {
+        tailTimes[oldTail].Remove(time);
+        if (!tailTimes.TryGetValue(newTail, out var targetTimes))
+        {
+            targetTimes = [];
+            tailTimes[newTail] = targetTimes;
+        }
+
+        targetTimes.Add(time);
+        targetTimes.Sort();
+    }
+
+    private static void UpdatePrecisionExactUsage(
+        FlowRecord first,
+        FlowRecord second,
+        IDictionary<string, int> exactUsage,
+        int delta)
+    {
+        foreach (var record in new[] { first, second })
+        {
+            var amount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+            var key = CreatePrecisionExactUsageKey(record, amount);
+            exactUsage.TryGetValue(key, out var currentUsage);
+            exactUsage[key] = currentUsage + delta;
+            if (exactUsage[key] <= 0)
+            {
+                exactUsage.Remove(key);
+            }
+        }
+    }
+
     private static double CalculateReducibleSignedCapacity(IEnumerable<FlowRecord> records)
     {
         var capacity = 0d;
@@ -6787,6 +8182,7 @@ public sealed class FlowAutoGenerator
         PruneZeroAmountRecords(records);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void ExpandWechatDirectionVolume(
         FlowAutoGenerationRequest request,
         DateTime start,
@@ -8192,12 +9588,13 @@ public sealed class FlowAutoGenerator
                     SourceKey: GetGeneratedAmountDistributionKey(item),
                     bounds.Min,
                     bounds.Max,
-                    bounds.Unit);
+                    bounds.Unit,
+                    bounds.Precision);
             })
             .Select(group =>
             {
                 var groupRecords = group.ToList();
-                var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit);
+                var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit, group.Key.Precision);
                 var current = RoundMoney(groupRecords.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
                 var expected = RoundMoney(EstimateBalancedRangeAverage(bounds) * groupRecords.Count);
                 return new
@@ -8617,6 +10014,35 @@ public sealed class FlowAutoGenerator
     {
         var result = new List<DailyNaturalConsumptionSlot>();
         var normalizedEnd = NormalizeEndDate(monthEnd);
+        var allSlices = rules
+            .Select(rule => TryCreateDailyNaturalConsumptionSlice(rule, out var slice) ? slice : null)
+            .Where(rule => rule is not null)
+            .Cast<GenerateReferenceRule>()
+            .ToArray();
+        if (allSlices.Length == 0)
+        {
+            return result;
+        }
+
+        var weekendSlices = allSlices
+            .Where(rule => rule.TradeWeekend != false)
+            .ToArray();
+        var existingCountsByDay = new Dictionary<DateTime, int>();
+        foreach (var record in records)
+        {
+            if (!record.AccountTime.HasValue
+                || (record.TradeMoney ?? 0) >= -0.009d
+                || Math.Abs(record.TradeMoney ?? 0) < 10d - 0.009d
+                || Math.Abs(record.TradeMoney ?? 0) >= 30d - 0.009d
+                || !IsReferenceGeneratedRecord(record))
+            {
+                continue;
+            }
+
+            var recordDate = record.AccountTime.Value.Date;
+            existingCountsByDay[recordDate] = existingCountsByDay.GetValueOrDefault(recordDate) + 1;
+        }
+
         for (var date = monthStart.Date; date <= normalizedEnd.Date; date = date.AddDays(1))
         {
             var dayStart = date == monthStart.Date ? monthStart : date;
@@ -8626,26 +10052,15 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            var slices = rules
-                .Where(rule => rule.TradeWeekend != false
-                    || date.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
-                .Select(rule => TryCreateDailyNaturalConsumptionSlice(rule, out var slice) ? slice : null)
-                .Where(rule => rule is not null)
-                .Cast<GenerateReferenceRule>()
-                .OrderBy(_ => random.Next())
-                .ToList();
+            IReadOnlyList<GenerateReferenceRule> slices = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+                ? weekendSlices
+                : allSlices;
             if (slices.Count == 0)
             {
                 continue;
             }
 
-            var existingCount = records.Count(item =>
-                item.AccountTime?.Date == date
-                && item.TradeMoney < -0.009d
-                && Math.Abs(item.TradeMoney ?? 0) >= 10d - 0.009d
-                && Math.Abs(item.TradeMoney ?? 0) < 30d - 0.009d
-                && IsReferenceGeneratedRecord(item));
-            if (existingCount > 0)
+            if (existingCountsByDay.GetValueOrDefault(date) > 0)
             {
                 continue;
             }
@@ -9056,8 +10471,8 @@ public sealed class FlowAutoGenerator
 
         var ratio = CreateAmountBucketRatio(random);
         var raw = bounds.Min + ((max - bounds.Min) * ratio);
-        amount = ClampAmountToBounds(raw, new AmountBounds(bounds.Min, max, bounds.Unit));
-        amount = MoveAmountAwayFromEdges(amount, new AmountBounds(bounds.Min, max, bounds.Unit), random);
+        amount = ClampAmountToBounds(raw, new AmountBounds(bounds.Min, max, bounds.Unit, bounds.Precision));
+        amount = MoveAmountAwayFromEdges(amount, new AmountBounds(bounds.Min, max, bounds.Unit, bounds.Precision), random);
 
         return amount >= bounds.Min - 0.009d && amount <= max + 0.009d;
     }
@@ -9093,13 +10508,14 @@ public sealed class FlowAutoGenerator
 
         amount = MakeAmountDistinctWithinBounds(
             amount,
-            new AmountBounds(bounds.Min, max, bounds.Unit),
+            new AmountBounds(bounds.Min, max, bounds.Unit, bounds.Precision),
             existingRecords,
             isIncome,
             random);
         return amount >= bounds.Min - 0.009d && amount <= max + 0.009d;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool TryPickLeastUsedRuleAmount(
         FlowRuleBase rule,
         double budget,
@@ -9119,7 +10535,7 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var effectiveBounds = new AmountBounds(bounds.Min, max, bounds.Unit);
+        var effectiveBounds = new AmountBounds(bounds.Min, max, bounds.Unit, bounds.Precision);
         IReadOnlyList<double> values = CreateRuleAmountPoolValues(effectiveBounds);
         if (values.Count == 0)
         {
@@ -9128,7 +10544,11 @@ public sealed class FlowAutoGenerator
 
         var sourceKey = GetRuleAmountDistributionKey(rule);
         var sign = isIncome ? 1 : -1;
-        var usage = amountUsage?.GetUsage(sourceKey, sign, effectiveBounds)
+        var usage = amountUsage?.GetUsage(
+                sourceKey,
+                sign,
+                effectiveBounds,
+                max >= bounds.Max - 0.009d)
             ?? existingRecords
                 .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
                 .Where(item => string.Equals(GetGeneratedAmountDistributionKey(item), sourceKey, StringComparison.Ordinal))
@@ -9136,28 +10556,83 @@ public sealed class FlowAutoGenerator
                 .Where(item => item >= effectiveBounds.Min - 0.009d && item <= effectiveBounds.Max + 0.009d)
                 .GroupBy(item => item)
                 .ToDictionary(group => group.Key, group => group.Count());
+        var tailUsage = effectiveBounds.Precision is > 0
+            ? amountUsage?.GetTailUsage(sourceKey, sign)
+                ?? existingRecords
+                    .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
+                    .Where(item => string.Equals(GetGeneratedAmountDistributionKey(item), sourceKey, StringComparison.Ordinal))
+                    .Select(item => GetConfiguredPrecisionTail(
+                        Math.Abs(item.TradeMoney ?? 0),
+                        effectiveBounds.Precision.Value))
+                    .GroupBy(item => item)
+                    .ToDictionary(group => group.Key, group => group.Count())
+            : null;
+        var globalTailUsage = effectiveBounds.Precision is > 0
+            ? amountUsage?.GetGlobalTailUsage(sign, effectiveBounds.Precision.Value)
+                ?? existingRecords
+                    .Where(item => GetAmountSign(item.TradeMoney ?? 0) == sign)
+                    .Where(item => GetRecordAmountBounds(item).Precision == effectiveBounds.Precision)
+                    .Select(item => GetConfiguredPrecisionTail(
+                        Math.Abs(item.TradeMoney ?? 0),
+                        effectiveBounds.Precision.Value))
+                    .GroupBy(item => item)
+                    .ToDictionary(group => group.Key, group => group.Count())
+            : null;
 
+        AmountSegment? selectedDistributionSegment = null;
         var distributionSegments = CreateRuleAmountDistributionSegments(effectiveBounds);
         if (distributionSegments.Count > 1 && values.Count > 1)
         {
-            var valuesBySegment = values
-                .GroupBy(value => GetAmountSegmentIndex(value, distributionSegments))
-                .Where(group => group.Key >= 0)
-                .ToDictionary(group => group.Key, group => group.ToList());
-            if (valuesBySegment.Count > 1)
+            var segmentUsage = new int[distributionSegments.Count];
+            var segmentHasValues = new bool[distributionSegments.Count];
+            foreach (var value in values)
             {
-                var selectedSegment = distributionSegments
-                    .Where(segment => valuesBySegment.ContainsKey(segment.Index))
-                    .OrderBy(segment => usage
-                        .Where(item => item.Key >= segment.Min - 0.009d && item.Key <= segment.Max + 0.009d)
-                        .Sum(item => item.Value))
-                    .ThenBy(_ => random.Next())
-                    .First();
-                values = valuesBySegment[selectedSegment.Index];
+                var segmentIndex = GetAmountSegmentIndex(value, distributionSegments);
+                if (segmentIndex >= 0)
+                {
+                    segmentHasValues[segmentIndex] = true;
+                }
+            }
+
+            foreach (var item in usage)
+            {
+                var segmentIndex = GetAmountSegmentIndex(item.Key, distributionSegments);
+                if (segmentIndex >= 0)
+                {
+                    segmentUsage[segmentIndex] += item.Value;
+                }
+            }
+
+            var bestSegmentUsage = int.MaxValue;
+            var tiedSegments = 0;
+            foreach (var segment in distributionSegments)
+            {
+                if (!segmentHasValues[segment.Index])
+                {
+                    continue;
+                }
+
+                var currentUsage = segmentUsage[segment.Index];
+                if (currentUsage < bestSegmentUsage)
+                {
+                    selectedDistributionSegment = segment;
+                    bestSegmentUsage = currentUsage;
+                    tiedSegments = 1;
+                }
+                else if (currentUsage == bestSegmentUsage)
+                {
+                    tiedSegments++;
+                    if (random.Next(tiedSegments) == 0)
+                    {
+                        selectedDistributionSegment = segment;
+                    }
+                }
             }
         }
 
-        if (ShouldPreferFractionalAmount(effectiveBounds) && values.Count > 1)
+        if (ShouldPreferFractionalAmount(effectiveBounds)
+            && effectiveBounds.Precision is not > 0
+            && values.Count > 1)
         {
             var wholeValues = values.Where(IsWholeAmount).ToList();
             var fractionalValues = values.Where(value => !IsWholeAmount(value)).ToList();
@@ -9175,22 +10650,53 @@ public sealed class FlowAutoGenerator
         }
 
         var selectedAmount = values[0];
+        var bestProtectedTailRank = int.MaxValue;
+        var bestGlobalTailUsage = int.MaxValue;
+        var bestSourceTailUsage = int.MaxValue;
         var bestUsage = int.MaxValue;
         var bestEdge = int.MaxValue;
         var tiedValues = 0;
         foreach (var value in values)
         {
+            if (selectedDistributionSegment.HasValue
+                && (value < selectedDistributionSegment.Value.Min - 0.009d
+                    || value > selectedDistributionSegment.Value.Max + 0.009d))
+            {
+                continue;
+            }
+
+            var tail = effectiveBounds.Precision is > 0
+                ? GetConfiguredPrecisionTail(value, effectiveBounds.Precision.Value)
+                : -1;
+            var valueGlobalTailUsage = tail >= 0 ? globalTailUsage?.GetValueOrDefault(tail) ?? 0 : 0;
+            var valueSourceTailUsage = tail >= 0 ? tailUsage?.GetValueOrDefault(tail) ?? 0 : 0;
+            var protectedTailRank = effectiveBounds.Precision == 2
+                && IsProtectedNinetiesPrecisionTail(tail)
+                && valueGlobalTailUsage > 0
+                    ? tail == 99 ? 2 : 1
+                    : 0;
             var isEdge = IsReferenceEdgeValue(value, effectiveBounds.Min, effectiveBounds.Max);
             var valueUsage = usage.GetValueOrDefault(value) + (isEdge ? 1 : 0);
             var edgeRank = isEdge ? 1 : 0;
-            if (valueUsage < bestUsage || valueUsage == bestUsage && edgeRank < bestEdge)
+            if (protectedTailRank < bestProtectedTailRank
+                || protectedTailRank == bestProtectedTailRank && valueGlobalTailUsage < bestGlobalTailUsage
+                || protectedTailRank == bestProtectedTailRank && valueGlobalTailUsage == bestGlobalTailUsage && valueSourceTailUsage < bestSourceTailUsage
+                || protectedTailRank == bestProtectedTailRank && valueGlobalTailUsage == bestGlobalTailUsage && valueSourceTailUsage == bestSourceTailUsage && valueUsage < bestUsage
+                || protectedTailRank == bestProtectedTailRank && valueGlobalTailUsage == bestGlobalTailUsage && valueSourceTailUsage == bestSourceTailUsage && valueUsage == bestUsage && edgeRank < bestEdge)
             {
                 selectedAmount = value;
+                bestProtectedTailRank = protectedTailRank;
+                bestGlobalTailUsage = valueGlobalTailUsage;
+                bestSourceTailUsage = valueSourceTailUsage;
                 bestUsage = valueUsage;
                 bestEdge = edgeRank;
                 tiedValues = 1;
             }
-            else if (valueUsage == bestUsage && edgeRank == bestEdge)
+            else if (protectedTailRank == bestProtectedTailRank
+                && valueGlobalTailUsage == bestGlobalTailUsage
+                && valueSourceTailUsage == bestSourceTailUsage
+                && valueUsage == bestUsage
+                && edgeRank == bestEdge)
             {
                 tiedValues++;
                 if (random.Next(tiedValues) == 0)
@@ -9268,7 +10774,7 @@ public sealed class FlowAutoGenerator
             }
         }
 
-        if (unit < 1d - 0.0000001d)
+        if (unit < 1d - 0.0000001d && bounds.Precision is not > 0)
         {
             var firstWhole = (long)Math.Ceiling(bounds.Min - 0.0000001d);
             var lastWhole = (long)Math.Floor(bounds.Max + 0.0000001d);
@@ -9287,7 +10793,38 @@ public sealed class FlowAutoGenerator
             }
         }
 
+        if (bounds.Precision is > 0)
+        {
+            var precision = Math.Min(bounds.Precision.Value, 2);
+            var scale = precision == 1 ? 10 : 100;
+            var midpointWhole = (long)Math.Floor((bounds.Min + bounds.Max) / 2d);
+            for (var tail = 1; tail < scale; tail++)
+            {
+                if (tail % 10 == 0)
+                {
+                    continue;
+                }
+
+                var candidate = midpointWhole + tail / (double)scale;
+                if (candidate < bounds.Min - 0.009d)
+                {
+                    candidate = Math.Floor(bounds.Min) + tail / (double)scale;
+                }
+
+                if (candidate > bounds.Max + 0.009d)
+                {
+                    candidate = Math.Floor(bounds.Max) + tail / (double)scale;
+                }
+
+                if (candidate >= bounds.Min - 0.009d && candidate <= bounds.Max + 0.009d)
+                {
+                    result.Add(ClampAmountToBounds(candidate, bounds));
+                }
+            }
+        }
+
         return result
+            .Where(item => HasRequiredNonZeroPrecisionDigit(item, bounds))
             .Distinct()
             .OrderBy(item => item)
             .ToArray();
@@ -9392,10 +10929,11 @@ public sealed class FlowAutoGenerator
 
             var minimum = CeilAmountToUnit(bounds.Min + (startStep * unit), unit);
             var maximum = FloorAmountToUnit(bounds.Min + (Math.Max(startStep, endStep) * unit), unit);
-            if (RequiresNonZeroPrecisionDigit(unit))
+            var segmentBounds = new AmountBounds(minimum, maximum, unit, bounds.Precision);
+            if (RequiresNonZeroPrecisionDigit(segmentBounds))
             {
-                var validMinimum = FindValidAmountAtOrAbove(minimum, maximum, unit);
-                var validMaximum = FindValidAmountAtOrBelow(maximum, minimum, unit);
+                var validMinimum = FindValidAmountAtOrAbove(minimum, maximum, segmentBounds);
+                var validMaximum = FindValidAmountAtOrBelow(maximum, minimum, segmentBounds);
                 if (!validMinimum.HasValue || !validMaximum.HasValue || validMinimum.Value > validMaximum.Value + 0.009d)
                 {
                     continue;
@@ -9515,6 +11053,12 @@ public sealed class FlowAutoGenerator
 
     private static string GetGeneratedAmountDistributionKey(FlowRecord record)
     {
+        if (record.ExtraFields.TryGetValue(AmountDistributionKeyField, out var cachedKey)
+            && !string.IsNullOrWhiteSpace(cachedKey))
+        {
+            return cachedKey;
+        }
+
         var sourceKind = record.ExtraFields.GetValueOrDefault(SourceKindField) ?? string.Empty;
         var sourceIndex = record.ExtraFields.GetValueOrDefault(SourceIndexField) ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(sourceKind)
@@ -9534,6 +11078,7 @@ public sealed class FlowAutoGenerator
         return $"{GetSmallDiscreteAmountTradeTypeKey(record)}:{bounds.Min:0.##}:{bounds.Max:0.##}:{bounds.Unit:0.##}";
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool NormalizeSmallDiscreteAmountDistribution(
         List<FlowRecord> records,
         FlowAutoGenerationRequest request,
@@ -9559,7 +11104,8 @@ public sealed class FlowAutoGenerator
                     Sign: GetAmountSign(item.TradeMoney ?? 0),
                     bounds.Min,
                     bounds.Max,
-                    bounds.Unit);
+                    bounds.Unit,
+                    bounds.Precision);
             })
             .Where(group => group.Key.Sign != 0)
             .ToList();
@@ -9609,7 +11155,8 @@ public sealed class FlowAutoGenerator
                     Sign: GetAmountSign(item.TradeMoney ?? 0),
                     bounds.Min,
                     bounds.Max,
-                    bounds.Unit);
+                    bounds.Unit,
+                    bounds.Precision);
             })
             .Where(group => group.Key.Sign != 0)
             .OrderByDescending(group => group.Sum(item => Math.Abs(item.TradeMoney ?? 0)))
@@ -10465,7 +12012,8 @@ public sealed class FlowAutoGenerator
                     Sign: GetAmountSign(item.TradeMoney ?? 0),
                     bounds.Min,
                     bounds.Max,
-                    bounds.Unit);
+                    bounds.Unit,
+                    bounds.Precision);
             })
             .Where(group => group.Key.Sign != 0)
             .Where(group => group.Key.Max <= 1000d + 0.009d)
@@ -10476,7 +12024,7 @@ public sealed class FlowAutoGenerator
         foreach (var group in groups)
         {
             var groupRecords = group.ToList();
-            var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit);
+            var bounds = new AmountBounds(group.Key.Min, group.Key.Max, group.Key.Unit, group.Key.Precision);
             if (CreateRuleAmountSegments(bounds).Count <= 1)
             {
                 continue;
@@ -10709,7 +12257,7 @@ public sealed class FlowAutoGenerator
                 var ratio = positions.Count == 1
                     ? 0.5d
                     : (position + 1d) / (positions.Count + 1d);
-                var segmentBounds = new AmountBounds(segment.Min, segment.Max, unit);
+                var segmentBounds = new AmountBounds(segment.Min, segment.Max, unit, bounds.Precision);
                 var raw = segment.Min + ((segment.Max - segment.Min) * ratio);
                 amounts[positions[position]] = ClampAmountToBounds(
                     RoundAmountToUnit(raw, unit),
@@ -12169,7 +13717,7 @@ public sealed class FlowAutoGenerator
             .Where(item => isIncome ? item.TradeMoney > 0.009d : item.TradeMoney < -0.009d)
             .Select(item => RoundAmountToUnit(Math.Abs(item.TradeMoney ?? 0), unit))
             .ToHashSet();
-        var preferFractional = false;
+        var preferFractional = bounds.Precision is > 0;
         if ((!usedAmounts.Contains(amount) && !preferFractional) || usedAmounts.Count >= totalSteps)
         {
             return amount;
@@ -13504,6 +15052,7 @@ public sealed class FlowAutoGenerator
             || bank.Name.Contains("农业", StringComparison.Ordinal);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static FlowRecord CreateRecordFromRule(
         FlowAutoGenerationRequest request,
         FlowRuleBase rule,
@@ -13514,18 +15063,43 @@ public sealed class FlowAutoGenerator
         var amountBounds = GetRuleAmountBounds(rule);
         var amountSign = amount < -0.009d ? -1d : 1d;
         amount = amountSign * ClampAmountToBounds(Math.Abs(amount), amountBounds);
-        var record = CreateBaseRecord(request, accountTime, amount);
+        var sign = amountSign > 0 ? 1 : -1;
+        var template = RuleRecordTemplates.GetOrAdd(
+            (rule, request.Bank, request.BankUser.Id, sign),
+            _ => CreateRecordTemplate(request, rule, ruleColumns, amountBounds, sign));
+        var record = template.Clone();
+
+        record.AccountTime = accountTime;
+        record.TradeMoney = amount;
+        record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
+        record.CreditAmount = amount > 0 ? amount : null;
+        record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
+        record.IncomeFlag = amount >= 0 ? "C" : "D";
+        RecordAmountBounds.Add(record, new CachedAmountBounds(amountBounds));
+
+        ApplyAutoGeneratedSystemFields(request, record);
+        return record;
+    }
+
+    private static FlowRecord CreateRecordTemplate(
+        FlowAutoGenerationRequest request,
+        FlowRuleBase rule,
+        IReadOnlyList<ColumnDefinition> ruleColumns,
+        AmountBounds amountBounds,
+        int sign)
+    {
+        var record = CreateBaseRecord(request, DateTime.MinValue, sign);
         CopyMatchingProperties(rule, record);
         CopyByMatchingColumnNames(rule, ruleColumns, request.Bank.FlowColumns, record);
         ApplyRuleColumnAliases(request.Bank, ruleColumns, rule, record);
 
-        record.AccountTime = accountTime;
-        record.TradeMoney = amount;
         record.ExtraFields[AmountUnitField] = FormatInvariant(GetAmountUnit(rule.FloutLength));
         record.ExtraFields[AmountMinField] = FormatInvariant(amountBounds.Min);
         record.ExtraFields[AmountMaxField] = FormatInvariant(amountBounds.Max);
+        record.ExtraFields[AmountPrecisionField] = (rule.FloutLength ?? 0).ToString(CultureInfo.InvariantCulture);
         record.ExtraFields[SourceKindField] = rule is GenerateConstRule ? ConstSourceKind : ReferenceSourceKind;
         record.ExtraFields[SourceIndexField] = rule.Index.ToString(CultureInfo.InvariantCulture);
+        record.ExtraFields[AmountDistributionKeyField] = GetRuleAmountDistributionKey(rule);
         record.ExtraFields[RequiredOccurrenceField] = IsRequiredRule(rule) ? "true" : "false";
         if (IsSmallDiscreteAmountRule(request.Bank, rule, amountBounds))
         {
@@ -13541,11 +15115,6 @@ public sealed class FlowAutoGenerator
         {
             record.ExtraFields[AvoidSyntheticFractionField] = bool.TrueString;
         }
-
-        record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
-        record.CreditAmount = amount > 0 ? amount : null;
-        record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
-        record.IncomeFlag = amount >= 0 ? "C" : "D";
 
         if (string.IsNullOrWhiteSpace(record.ProductBrief))
         {
@@ -13572,7 +15141,6 @@ public sealed class FlowAutoGenerator
         ApplyUserAccountToRecord(request, record);
 
         ApplyRecordColumnAliasBackfill(request.Bank, record);
-        ApplyAutoGeneratedSystemFields(request, record);
         return record;
     }
 
@@ -14788,6 +16356,7 @@ public sealed class FlowAutoGenerator
         RebalanceSignedRecords(signedRecords, targetTotal);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void RebalanceSignedRecords(IReadOnlyList<FlowRecord> signedRecords, double targetTotal)
     {
         if (signedRecords.Count == 0)
@@ -14845,7 +16414,10 @@ public sealed class FlowAutoGenerator
         var boundedTarget = Math.Clamp(targetTotal, minTotal, maxTotal);
         foreach (var index in activeIndexes.ToList())
         {
-            amounts[index] = ClampAmountToBounds(amounts[index], new AmountBounds(mins[index], maxs[index], units[index]));
+            var precision = GetRecordAmountBounds(signedRecords[index]).Precision;
+            amounts[index] = ClampAmountToBounds(
+                amounts[index],
+                new AmountBounds(mins[index], maxs[index], units[index], precision));
         }
 
         var currentTotal = RoundMoney(activeIndexes.Sum(index => amounts[index]));
@@ -14952,99 +16524,146 @@ public sealed class FlowAutoGenerator
         List<int> activeIndexes,
         double targetTotal)
     {
-        while (activeIndexes.Count > 0 && activeIndexes.Sum(index => mins[index]) > targetTotal + 0.009d)
+        if (activeIndexes.Count == 0)
         {
-            var removableIndex = activeIndexes
-                .Where(index => !IsRequiredGeneratedRecord(signedRecords[index]))
-                .Where(index => CanRemoveOptionalRecordForTarget(signedRecords, activeIndexes, index))
-                .OrderByDescending(index => amounts[index])
-                .ThenByDescending(index => mins[index])
-                .FirstOrDefault(-1);
+            return;
+        }
+
+        var active = new bool[signedRecords.Count];
+        var activeCount = activeIndexes.Count;
+        var activeMinTotal = 0d;
+        var activeMaxTotal = 0d;
+        var currentTotal = 0d;
+        var monthlyIncomeCounts = new Dictionary<int, int>();
+        foreach (var index in activeIndexes)
+        {
+            active[index] = true;
+            activeMinTotal += mins[index];
+            activeMaxTotal += maxs[index];
+            currentTotal += amounts[index];
+            var record = signedRecords[index];
+            if ((record.TradeMoney ?? 0) > 0.009d && record.AccountTime.HasValue)
+            {
+                var month = record.AccountTime.Value;
+                var monthKey = (month.Year * 100) + month.Month;
+                monthlyIncomeCounts[monthKey] = monthlyIncomeCounts.GetValueOrDefault(monthKey) + 1;
+            }
+        }
+
+        activeMinTotal = RoundMoney(activeMinTotal);
+        activeMaxTotal = RoundMoney(activeMaxTotal);
+        currentTotal = RoundMoney(currentTotal);
+        var removalOrder = activeIndexes
+            .Where(index => !IsRequiredGeneratedRecord(signedRecords[index]))
+            .OrderByDescending(index => amounts[index])
+            .ThenByDescending(index => mins[index])
+            .ToArray();
+
+        bool CanRemove(int index)
+        {
+            if (!active[index])
+            {
+                return false;
+            }
+
+            var record = signedRecords[index];
+            if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
+            {
+                return true;
+            }
+
+            var bounds = GetRecordAmountBounds(record);
+            if (bounds.Min < 1000d || bounds.Max <= bounds.Min * 4d)
+            {
+                return true;
+            }
+
+            var month = record.AccountTime.Value;
+            return monthlyIncomeCounts.GetValueOrDefault((month.Year * 100) + month.Month) > 3;
+        }
+
+        void Remove(int index)
+        {
+            active[index] = false;
+            activeCount--;
+            activeMinTotal = RoundMoney(activeMinTotal - mins[index]);
+            activeMaxTotal = RoundMoney(activeMaxTotal - maxs[index]);
+            currentTotal = RoundMoney(currentTotal - amounts[index]);
+            var record = signedRecords[index];
+            if ((record.TradeMoney ?? 0) > 0.009d && record.AccountTime.HasValue)
+            {
+                var month = record.AccountTime.Value;
+                var monthKey = (month.Year * 100) + month.Month;
+                monthlyIncomeCounts[monthKey] = Math.Max(
+                    0,
+                    monthlyIncomeCounts.GetValueOrDefault(monthKey) - 1);
+            }
+
+            amounts[index] = 0;
+        }
+
+        var removalCursor = 0;
+        while (activeCount > 0 && activeMinTotal > targetTotal + 0.009d)
+        {
+            while (removalCursor < removalOrder.Length && !CanRemove(removalOrder[removalCursor]))
+            {
+                removalCursor++;
+            }
+
+            if (removalCursor >= removalOrder.Length)
+            {
+                break;
+            }
+
+            Remove(removalOrder[removalCursor++]);
+        }
+
+        for (var attempt = 0; attempt < signedRecords.Count; attempt++)
+        {
+            var excess = RoundMoney(currentTotal - targetTotal);
+            if (excess <= 0.009d)
+            {
+                break;
+            }
+
+            var removableIndex = -1;
+            foreach (var index in removalOrder)
+            {
+                if (!CanRemove(index))
+                {
+                    continue;
+                }
+
+                if (activeCount > 1)
+                {
+                    var nextMinTotal = RoundMoney(activeMinTotal - mins[index]);
+                    var nextMaxTotal = RoundMoney(activeMaxTotal - maxs[index]);
+                    if (targetTotal < nextMinTotal - 0.009d || targetTotal > nextMaxTotal + 0.009d)
+                    {
+                        continue;
+                    }
+                }
+
+                var amount = amounts[index];
+                var nextExcess = Math.Abs(RoundMoney(currentTotal - amount - targetTotal));
+                if (amount <= excess * 1.15d
+                    || excess > targetTotal * 0.25d
+                    || nextExcess < Math.Abs(excess))
+                {
+                    removableIndex = index;
+                    break;
+                }
+            }
+
             if (removableIndex < 0)
             {
                 break;
             }
 
-            amounts[removableIndex] = 0;
-            activeIndexes.Remove(removableIndex);
+            Remove(removableIndex);
         }
 
-        for (var attempt = 0; attempt < signedRecords.Count; attempt++)
-        {
-            var currentTotal = RoundMoney(activeIndexes.Sum(index => amounts[index]));
-            var excess = RoundMoney(currentTotal - targetTotal);
-            if (excess <= 0.009d)
-            {
-                return;
-            }
-
-            var removableIndex = activeIndexes
-                .Where(index => !IsRequiredGeneratedRecord(signedRecords[index]))
-                .Where(index => CanRemoveOptionalRecordForTarget(signedRecords, activeIndexes, index))
-                .OrderByDescending(index => amounts[index])
-                .ThenByDescending(index => mins[index])
-                .Where(index =>
-                {
-                    var nextActiveIndexes = activeIndexes.Where(item => item != index).ToList();
-                    if (nextActiveIndexes.Count == 0)
-                    {
-                        return true;
-                    }
-
-                    var nextMinTotal = RoundMoney(nextActiveIndexes.Sum(item => mins[item]));
-                    var nextMaxTotal = RoundMoney(nextActiveIndexes.Sum(item => maxs[item]));
-                    if (targetTotal < nextMinTotal - 0.009d || targetTotal > nextMaxTotal + 0.009d)
-                    {
-                        return false;
-                    }
-
-                    var amount = amounts[index];
-                    var nextExcess = Math.Abs(RoundMoney(currentTotal - amount - targetTotal));
-                    var currentExcess = Math.Abs(excess);
-                    return amount <= excess * 1.15d
-                        || excess > targetTotal * 0.25d
-                        || nextExcess < currentExcess;
-                })
-                .DefaultIfEmpty(-1)
-                .First();
-            if (removableIndex < 0)
-            {
-                return;
-            }
-
-            amounts[removableIndex] = 0;
-            activeIndexes.Remove(removableIndex);
-        }
-    }
-
-    private static bool CanRemoveOptionalRecordForTarget(
-        IReadOnlyList<FlowRecord> signedRecords,
-        IReadOnlyList<int> activeIndexes,
-        int candidateIndex)
-    {
-        var record = signedRecords[candidateIndex];
-        if ((record.TradeMoney ?? 0) <= 0.009d || !record.AccountTime.HasValue)
-        {
-            return true;
-        }
-
-        var bounds = GetRecordAmountBounds(record);
-        if (bounds.Min < 1000d || bounds.Max <= bounds.Min * 4d)
-        {
-            return true;
-        }
-
-        var monthKey = (Year: record.AccountTime.Value.Year, Month: record.AccountTime.Value.Month);
-        var sameMonthIncomeCount = activeIndexes.Count(index =>
-        {
-            var item = signedRecords[index];
-            return (item.TradeMoney ?? 0) > 0.009d
-                && item.AccountTime.HasValue
-                && item.AccountTime.Value.Year == monthKey.Year
-                && item.AccountTime.Value.Month == monthKey.Month;
-        });
-
-        return sameMonthIncomeCount > 3;
+        activeIndexes.RemoveAll(index => !active[index]);
     }
 
     private static void MoveAmountsTowardTarget(
@@ -15186,8 +16805,10 @@ public sealed class FlowAutoGenerator
             }
 
             var bounds = GetRecordAmountBounds(record);
-            var preferFractional = false;
-            if (!usedAmounts.Contains(amount) && !preferFractional)
+            var preferFractional = bounds.Precision is > 0;
+            var requiresPrecisionCorrection = preferFractional
+                && !HasRequiredNonZeroPrecisionDigit(amount, bounds);
+            if (!usedAmounts.Contains(amount) && !requiresPrecisionCorrection)
             {
                 usedAmounts.Add(amount);
                 continue;
@@ -15248,12 +16869,9 @@ public sealed class FlowAutoGenerator
                 return;
             }
 
-            if (!allowWholeAmount && IsWholeAmount(candidate))
-            {
-                return;
-            }
-
-            if (!allowWholeAmount && HasUnnaturalFractionTail(candidate))
+            if (!allowWholeAmount
+                && (!HasRequiredNonZeroPrecisionDigit(candidate, bounds)
+                    || HasUnnaturalFractionTail(candidate)))
             {
                 return;
             }
@@ -15271,7 +16889,7 @@ public sealed class FlowAutoGenerator
             }
         }
 
-        var preferNonWhole = preferFractional && HasNonWholeAmountCandidate(bounds, usedAmounts);
+        var preferNonWhole = preferFractional;
         for (var pass = 0; pass < (preferNonWhole ? 2 : 1) && !bestAmount.HasValue; pass++)
         {
             var allowWholeAmount = pass > 0 || !preferNonWhole;
@@ -15361,6 +16979,14 @@ public sealed class FlowAutoGenerator
     {
         var cents = (int)Math.Round(Math.Abs(RoundMoney(amount)) * 100d, MidpointRounding.AwayFromZero) % 100;
         return cents;
+    }
+
+    private static int GetConfiguredPrecisionTail(double amount, int precision)
+    {
+        precision = Math.Clamp(precision, 1, 2);
+        var scale = precision == 1 ? 10d : 100d;
+        return (int)Math.Round(Math.Abs(RoundMoney(amount)) * scale, MidpointRounding.AwayFromZero)
+            % (int)scale;
     }
 
     private static bool HasNonWholeAmountCandidate(AmountBounds bounds, ISet<double> usedAmounts)
@@ -15740,7 +17366,7 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            var effectiveBounds = new AmountBounds(bounds.Min, Math.Min(bounds.Max, maxAcceptable), bounds.Unit);
+            var effectiveBounds = new AmountBounds(bounds.Min, Math.Min(bounds.Max, maxAcceptable), bounds.Unit, bounds.Precision);
             amount = ClampAmountToBounds(amount, effectiveBounds);
             amount = MoveAmountAwayFromEdges(amount, effectiveBounds, random);
             if (amount <= 0.009d || amount > maxAcceptable + 0.009d)
@@ -15902,6 +17528,9 @@ public sealed class FlowAutoGenerator
             .ThenByDescending(item => Math.Abs(item.TradeMoney ?? 0))
             .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
             .ToList();
+        var monthlyIncomeCounts = isIncome && allowDropOptional
+            ? BuildMonthlyIncomeCounts(candidates)
+            : null;
 
         foreach (var record in candidates)
         {
@@ -15921,7 +17550,8 @@ public sealed class FlowAutoGenerator
             var isRequired = IsRequiredGeneratedRecord(record);
             if (!isRequired && allowDropOptional)
             {
-                var canDropRecord = !isIncome || CanDropOptionalIncomeRecord(candidates, record);
+                var canDropRecord = !isIncome
+                    || CanDropOptionalIncomeRecord(record, monthlyIncomeCounts!);
                 var partialNext = RoundMoney(absolute - remaining);
                 if (partialNext >= bounds.Min - 0.009d)
                 {
@@ -15939,6 +17569,15 @@ public sealed class FlowAutoGenerator
                 if (canDropRecord)
                 {
                     ApplySignedAmount(record, sign, 0);
+                    if (isIncome && record.AccountTime.HasValue)
+                    {
+                        var month = record.AccountTime.Value;
+                        var monthKey = (month.Year * 100) + month.Month;
+                        monthlyIncomeCounts![monthKey] = Math.Max(
+                            0,
+                            monthlyIncomeCounts.GetValueOrDefault(monthKey) - 1);
+                    }
+
                     remaining = RoundMoney(remaining - absolute);
                     continue;
                 }
@@ -15975,7 +17614,9 @@ public sealed class FlowAutoGenerator
         return remaining <= 0.009d;
     }
 
-    private static bool CanDropOptionalIncomeRecord(IEnumerable<FlowRecord> records, FlowRecord candidate)
+    private static bool CanDropOptionalIncomeRecord(
+        FlowRecord candidate,
+        IReadOnlyDictionary<int, int> monthlyIncomeCounts)
     {
         if (!candidate.AccountTime.HasValue)
         {
@@ -15989,11 +17630,7 @@ public sealed class FlowAutoGenerator
         }
 
         var month = candidate.AccountTime.Value;
-        var sameMonthCount = records.Count(item =>
-            (item.TradeMoney ?? 0) > 0.009d
-            && item.AccountTime.HasValue
-            && item.AccountTime.Value.Year == month.Year
-            && item.AccountTime.Value.Month == month.Month);
+        var sameMonthCount = monthlyIncomeCounts.GetValueOrDefault((month.Year * 100) + month.Month);
         return sameMonthCount > 3;
     }
 
@@ -16058,6 +17695,7 @@ public sealed class FlowAutoGenerator
         return remaining <= 0.009d;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void ApplyBalances(List<FlowRecord> records, double openingBalance)
     {
         if (!AreRecordsInBalanceOrder(records))
@@ -16985,7 +18623,16 @@ public sealed class FlowAutoGenerator
 
     private readonly record struct RulePropertyMapping(PropertyInfo Source, PropertyInfo? Target);
 
-    private readonly record struct AmountBounds(double Min, double Max, double Unit);
+    private readonly record struct NormalizedColumnDefinition(string Name, string Field);
+
+    private readonly record struct ColumnFieldMapping(string SourceField, string TargetField);
+
+    private sealed class CachedAmountBounds(AmountBounds value)
+    {
+        public AmountBounds Value { get; } = value;
+    }
+
+    private readonly record struct AmountBounds(double Min, double Max, double Unit, int? Precision = null);
 
     private readonly record struct AmountSegment(double Min, double Max, int Index);
 
@@ -17107,10 +18754,12 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        if (RequiresNonZeroPrecisionDigit(unit))
+        var precision = rule.FloutLength ?? 0;
+        var candidateBounds = new AmountBounds(roundedMin, roundedMax, unit, precision);
+        if (RequiresNonZeroPrecisionDigit(candidateBounds))
         {
-            var firstValid = FindValidAmountAtOrAbove(roundedMin, roundedMax, unit);
-            var lastValid = FindValidAmountAtOrBelow(roundedMax, roundedMin, unit);
+            var firstValid = FindValidAmountAtOrAbove(roundedMin, roundedMax, candidateBounds);
+            var lastValid = FindValidAmountAtOrBelow(roundedMax, roundedMin, candidateBounds);
             if (!firstValid.HasValue || !lastValid.HasValue || firstValid.Value > lastValid.Value + 0.009d)
             {
                 bounds = default;
@@ -17121,25 +18770,32 @@ public sealed class FlowAutoGenerator
             roundedMax = lastValid.Value;
         }
 
-        bounds = new AmountBounds(RoundMoney(roundedMin), RoundMoney(roundedMax), unit);
+        bounds = new AmountBounds(RoundMoney(roundedMin), RoundMoney(roundedMax), unit, precision);
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static AmountBounds GetRecordAmountBounds(FlowRecord record)
     {
-        var unit = GetRecordAmountUnit(record);
-        var min = record.ExtraFields.TryGetValue(AmountMinField, out var minValue) && TryParseDouble(minValue, out var parsedMin)
-            ? parsedMin
-            : 0d;
-        var max = record.ExtraFields.TryGetValue(AmountMaxField, out var maxValue) && TryParseDouble(maxValue, out var parsedMax)
-            ? parsedMax
-            : double.MaxValue;
+        return RecordAmountBounds.GetValue(record, static item =>
+        {
+            var unit = GetRecordAmountUnit(item);
+            var min = item.ExtraFields.TryGetValue(AmountMinField, out var minValue) && TryParseDouble(minValue, out var parsedMin)
+                ? parsedMin
+                : 0d;
+            var max = item.ExtraFields.TryGetValue(AmountMaxField, out var maxValue) && TryParseDouble(maxValue, out var parsedMax)
+                ? parsedMax
+                : double.MaxValue;
+            var precision = item.ExtraFields.TryGetValue(AmountPrecisionField, out var precisionValue)
+                ? ParseInt(precisionValue)
+                : null;
 
-        min = Math.Max(0, RoundAmountToUnit(min, unit));
-        max = double.IsInfinity(max) || max >= double.MaxValue / 2
-            ? double.MaxValue
-            : Math.Max(min, RoundAmountToUnit(max, unit));
-        return new AmountBounds(min, max, unit);
+            min = Math.Max(0, RoundAmountToUnit(min, unit));
+            max = double.IsInfinity(max) || max >= double.MaxValue / 2
+                ? double.MaxValue
+                : Math.Max(min, RoundAmountToUnit(max, unit));
+            return new CachedAmountBounds(new AmountBounds(min, max, unit, precision));
+        }).Value;
     }
 
     private static double ClampAmountToBounds(double amount, AmountBounds bounds)
@@ -17160,10 +18816,10 @@ public sealed class FlowAutoGenerator
             bounded = bounds.Max;
         }
 
-        if (!HasRequiredNonZeroPrecisionDigit(bounded, bounds.Unit))
+        if (!HasRequiredNonZeroPrecisionDigit(bounded, bounds))
         {
-            var lower = FindValidAmountAtOrBelow(bounded, bounds.Min, bounds.Unit);
-            var upper = FindValidAmountAtOrAbove(bounded, bounds.Max, bounds.Unit);
+            var lower = FindValidAmountAtOrBelow(bounded, bounds.Min, bounds);
+            var upper = FindValidAmountAtOrAbove(bounded, bounds.Max, bounds);
             bounded = (lower, upper) switch
             {
                 ({ } lowerValue, { } upperValue) =>
@@ -17178,29 +18834,37 @@ public sealed class FlowAutoGenerator
         return RoundMoney(bounded);
     }
 
-    private static bool RequiresNonZeroPrecisionDigit(double unit)
+    private static bool RequiresNonZeroPrecisionDigit(AmountBounds bounds)
     {
-        return unit >= 10d - 0.0000001d;
+        return bounds.Precision is > 0 || bounds.Unit >= 10d - 0.0000001d;
     }
 
-    private static bool HasRequiredNonZeroPrecisionDigit(double amount, double unit)
+    private static bool HasRequiredNonZeroPrecisionDigit(double amount, AmountBounds bounds)
     {
-        if (!RequiresNonZeroPrecisionDigit(unit))
+        if (!RequiresNonZeroPrecisionDigit(bounds))
         {
             return true;
         }
 
-        var precisionPlaceValue = Math.Floor((Math.Abs(amount) + 0.0000001d) / unit);
+        if (bounds.Precision is > 0)
+        {
+            var precision = Math.Min(bounds.Precision.Value, 2);
+            var scale = precision == 1 ? 10d : 100d;
+            var scaled = (long)Math.Round(Math.Abs(RoundMoney(amount)) * scale, MidpointRounding.AwayFromZero);
+            return scaled % 10L != 0L;
+        }
+
+        var precisionPlaceValue = Math.Floor((Math.Abs(amount) + 0.0000001d) / bounds.Unit);
         var digit = (int)(precisionPlaceValue % 10d);
         return digit is >= 1 and <= 9;
     }
 
-    private static double? FindValidAmountAtOrAbove(double start, double maximum, double unit)
+    private static double? FindValidAmountAtOrAbove(double start, double maximum, AmountBounds bounds)
     {
-        var candidate = CeilAmountToUnit(start, unit);
-        for (var offset = 0; offset <= 10 && candidate <= maximum + 0.009d; offset++, candidate = RoundMoney(candidate + unit))
+        var candidate = CeilAmountToUnit(start, bounds.Unit);
+        for (var offset = 0; offset <= 10 && candidate <= maximum + 0.009d; offset++, candidate = RoundMoney(candidate + bounds.Unit))
         {
-            if (HasRequiredNonZeroPrecisionDigit(candidate, unit))
+            if (HasRequiredNonZeroPrecisionDigit(candidate, bounds))
             {
                 return candidate;
             }
@@ -17209,12 +18873,12 @@ public sealed class FlowAutoGenerator
         return null;
     }
 
-    private static double? FindValidAmountAtOrBelow(double start, double minimum, double unit)
+    private static double? FindValidAmountAtOrBelow(double start, double minimum, AmountBounds bounds)
     {
-        var candidate = FloorAmountToUnit(start, unit);
-        for (var offset = 0; offset <= 10 && candidate >= minimum - 0.009d; offset++, candidate = RoundMoney(candidate - unit))
+        var candidate = FloorAmountToUnit(start, bounds.Unit);
+        for (var offset = 0; offset <= 10 && candidate >= minimum - 0.009d; offset++, candidate = RoundMoney(candidate - bounds.Unit))
         {
-            if (HasRequiredNonZeroPrecisionDigit(candidate, unit))
+            if (HasRequiredNonZeroPrecisionDigit(candidate, bounds))
             {
                 return candidate;
             }
@@ -17407,25 +19071,35 @@ public sealed class FlowAutoGenerator
         IReadOnlyList<ColumnDefinition> flowColumns,
         FlowRecord record)
     {
-        var ruleColumnsByName = ruleColumns
-            .Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Field))
-            .GroupBy(item => NormalizeName(item.Name!), StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-
-        foreach (var flowColumn in flowColumns.Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Field)))
+        var mappings = ColumnFieldMappings.GetOrAdd((ruleColumns, flowColumns), static key =>
         {
-            if (!ruleColumnsByName.TryGetValue(NormalizeName(flowColumn.Name!), out var sourceColumn))
+            var ruleColumnsByName = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var column in GetNormalizedColumnDefinitions(key.Rule))
             {
-                continue;
+                ruleColumnsByName.TryAdd(column.Name, column.Field);
             }
 
-            var value = GetRuleValue(rule, sourceColumn.Field!);
+            var result = new List<ColumnFieldMapping>();
+            foreach (var flowColumn in GetNormalizedColumnDefinitions(key.Flow))
+            {
+                if (ruleColumnsByName.TryGetValue(flowColumn.Name, out var sourceField))
+                {
+                    result.Add(new ColumnFieldMapping(sourceField, flowColumn.Field));
+                }
+            }
+
+            return result.ToArray();
+        });
+
+        foreach (var mapping in mappings)
+        {
+            var value = GetRuleValue(rule, mapping.SourceField);
             if (value is null || string.IsNullOrWhiteSpace(Convert.ToString(value, CultureInfo.CurrentCulture)))
             {
                 continue;
             }
 
-            SetRecordValue(record, flowColumn.Field!, value);
+            SetRecordValue(record, mapping.TargetField, value);
         }
     }
 
@@ -17489,21 +19163,15 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var normalizedNames = columnNames
-            .Select(NormalizeName)
-            .ToHashSet(StringComparer.Ordinal);
-
-        foreach (var column in bank.FlowColumns.Where(item =>
-                     !string.IsNullOrWhiteSpace(item.Name)
-                     && !string.IsNullOrWhiteSpace(item.Field)
-                     && normalizedNames.Contains(NormalizeName(item.Name!))))
+        foreach (var column in GetNormalizedColumnDefinitions(bank.FlowColumns))
         {
-            if (!string.IsNullOrWhiteSpace(GetRecordStringValue(record, column.Field!)))
+            if (!MatchesAnyColumnName(column.Name, columnNames)
+                || !string.IsNullOrWhiteSpace(GetRecordStringValue(record, column.Field)))
             {
                 continue;
             }
 
-            SetRecordValue(record, column.Field!, value);
+            SetRecordValue(record, column.Field, value);
         }
     }
 
@@ -17512,16 +19180,14 @@ public sealed class FlowAutoGenerator
         IReadOnlyList<ColumnDefinition> ruleColumns,
         params string[] columnNames)
     {
-        var normalizedNames = columnNames
-            .Select(NormalizeName)
-            .ToHashSet(StringComparer.Ordinal);
-
-        foreach (var column in ruleColumns.Where(item =>
-                     !string.IsNullOrWhiteSpace(item.Name)
-                     && !string.IsNullOrWhiteSpace(item.Field)
-                     && normalizedNames.Contains(NormalizeName(item.Name!))))
+        foreach (var column in GetNormalizedColumnDefinitions(ruleColumns))
         {
-            var value = GetRuleValue(rule, column.Field!);
+            if (!MatchesAnyColumnName(column.Name, columnNames))
+            {
+                continue;
+            }
+
+            var value = GetRuleValue(rule, column.Field);
             var text = Convert.ToString(value, CultureInfo.CurrentCulture);
             if (!string.IsNullOrWhiteSpace(text))
             {
@@ -17530,6 +19196,29 @@ public sealed class FlowAutoGenerator
         }
 
         return null;
+    }
+
+    private static NormalizedColumnDefinition[] GetNormalizedColumnDefinitions(
+        IReadOnlyList<ColumnDefinition> columns)
+    {
+        return NormalizedColumnDefinitions.GetOrAdd(columns, static source => source
+            .Where(item => !string.IsNullOrWhiteSpace(item.Name) && !string.IsNullOrWhiteSpace(item.Field))
+            .Select(item => new NormalizedColumnDefinition(NormalizeName(item.Name!), item.Field!))
+            .ToArray());
+    }
+
+    private static bool MatchesAnyColumnName(string normalizedName, IReadOnlyList<string> columnNames)
+    {
+        foreach (var columnName in columnNames)
+        {
+            var normalizedAlias = NormalizedColumnAliases.GetOrAdd(columnName, static name => NormalizeName(name));
+            if (string.Equals(normalizedName, normalizedAlias, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ApplyInterestFields(FlowRecord record, BankInterestSetting setting)
@@ -17664,7 +19353,9 @@ public sealed class FlowAutoGenerator
 
     private static bool HasFlowRecordField(Bank bank, string field)
     {
-        return bank.FlowColumns.Any(item => string.Equals(item.Field, field, StringComparison.Ordinal));
+        return BankFlowFieldPresence.GetOrAdd(
+            (bank, field),
+            static key => key.Bank.FlowColumns.Any(item => string.Equals(item.Field, key.Field, StringComparison.Ordinal)));
     }
 
     private static bool HasFlowColumnName(Bank bank, string field, params string[] names)
@@ -17681,8 +19372,7 @@ public sealed class FlowAutoGenerator
             return record[indexerField];
         }
 
-        var property = typeof(FlowRecord).GetProperty(field, BindingFlags.Instance | BindingFlags.Public);
-        if (property is null)
+        if (!FlowRecordProperties.TryGetValue(field, out var property))
         {
             return record[field];
         }
@@ -18234,8 +19924,7 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var property = typeof(FlowRecord).GetProperty(field, BindingFlags.Instance | BindingFlags.Public);
-        if (property is null || !property.CanWrite)
+        if (!FlowRecordProperties.TryGetValue(field, out var property) || !property.CanWrite)
         {
             record[field] = Convert.ToString(value, CultureInfo.CurrentCulture) ?? string.Empty;
             return;
@@ -18449,6 +20138,15 @@ public sealed class FlowAutoGenerator
 
     private static int CreateRunSeed(FlowAutoGenerationRequest request, DateTime start, DateTime end, int salt = 0)
     {
+        if (int.TryParse(
+                Environment.GetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED"),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var testSeed))
+        {
+            return unchecked((testSeed * 397) ^ salt);
+        }
+
         return HashCode.Combine(
             CreateSeed(request, start, end),
             Environment.TickCount,
@@ -18460,7 +20158,13 @@ public sealed class FlowAutoGenerator
     private static string RandomDigits(int seed, int length)
     {
         var random = new Random(seed);
-        return string.Concat(Enumerable.Range(0, length).Select(_ => random.Next(0, 10).ToString()));
+        return string.Create(length, random, static (span, source) =>
+        {
+            for (var index = 0; index < span.Length; index++)
+            {
+                span[index] = (char)('0' + source.Next(0, 10));
+            }
+        });
     }
 
     private static string FirstNonEmpty(params string?[] values)
