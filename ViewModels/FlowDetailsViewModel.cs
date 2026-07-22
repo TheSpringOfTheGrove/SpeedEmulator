@@ -345,70 +345,34 @@ public sealed class FlowDetailsViewModel : ObservableObject
         try
         {
             BankUser.AutoCalculateInterest = AutoCalculateInterest;
+            var currentOpeningBalance = RoundMoney(OpeningBalance);
+            OpeningBalance = currentOpeningBalance;
+            BankUser.OpeningBalance = (decimal)currentOpeningBalance;
 
-            var originalOpeningBalance = RoundMoney(OpeningBalance);
-            var previewBalance = originalOpeningBalance;
-            var minimumBalance = previewBalance;
-            FlowRecord? firstNegativeRecord = null;
-            var firstNegativeIndex = -1;
-            for (var i = 0; i < allRecords.Count; i++)
+            RecalculateRecordBalances(currentOpeningBalance);
+            var negativeBalance = FindFirstNegativeBalance();
+            NegativeBalanceRepairResult? repairResult = null;
+            if (negativeBalance is not null)
             {
-                var record = allRecords[i];
-                if (!record.TradeMoney.HasValue)
-                {
-                    continue;
-                }
+                var choice = MessageBox.Show(
+                    $"检测到第 {negativeBalance.Value.Index + 1} 行余额存在负值 " +
+                    $"{negativeBalance.Value.Balance:N2}，是否自动处理？\n\n" +
+                    "确定：保持期初余额不变，自动调整其它流出流水。\n" +
+                    "取消：只重新计算，保留负余额。",
+                    "提示",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Information);
 
-                previewBalance = RoundMoney(previewBalance + RoundMoney(record.TradeMoney.Value));
-                if (previewBalance < minimumBalance)
+                if (choice == MessageBoxResult.OK)
                 {
-                    minimumBalance = previewBalance;
-                }
-
-                if (previewBalance < -0.009d && firstNegativeRecord is null)
-                {
-                    firstNegativeRecord = record;
-                    firstNegativeIndex = i;
+                    repairResult = RepairNegativeBalancesByAdjustingOutflows(currentOpeningBalance);
+                    RecalculateRecordBalances(currentOpeningBalance);
                 }
             }
 
-            var adjustedOpeningBalance = false;
-            if (minimumBalance < -0.009d)
-            {
-                OpeningBalance = RoundMoney(originalOpeningBalance - minimumBalance + 1d);
-                adjustedOpeningBalance = true;
-            }
-            else
-            {
-                OpeningBalance = originalOpeningBalance;
-            }
-
-            BankUser.OpeningBalance = (decimal)OpeningBalance;
-
-            var balance = RoundMoney(OpeningBalance);
-            foreach (var record in allRecords)
-            {
-                if (!record.TradeMoney.HasValue)
-                {
-                    continue;
-                }
-
-                var amount = RoundMoney(record.TradeMoney.Value);
-                record.TradeMoney = amount;
-                balance = RoundMoney(balance + amount);
-                record.Balance = balance;
-                record.BalanceAmount = balance;
-                record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
-                record.CreditAmount = amount > 0 ? amount : null;
-                record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
-                record.IncomeFlag = amount >= 0 ? "收入" : "支出";
-            }
-
-            var selected = SelectedRecord;
-            if (adjustedOpeningBalance && firstNegativeRecord is not null)
-            {
-                selected = firstNegativeRecord;
-            }
+            var selected = repairResult is not null
+                ? repairResult.Value.LastAdjustedRecord ?? SelectedRecord
+                : negativeBalance?.Record ?? SelectedRecord;
 
             ReindexAllRecords();
             await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
@@ -418,19 +382,34 @@ public sealed class FlowDetailsViewModel : ObservableObject
             }
 
             RefreshDisplay(selected);
-            if (adjustedOpeningBalance)
+            if (repairResult is not null)
             {
-                if (firstNegativeRecord is not null)
+                if (repairResult.Value.LastAdjustedRecord is not null)
                 {
-                    RequestScrollToRecord?.Invoke(firstNegativeRecord);
+                    RequestScrollToRecord?.Invoke(repairResult.Value.LastAdjustedRecord);
                 }
 
-                StatusMessage = $"重新计算成功，已将期初余额从 {originalOpeningBalance:N2} 调整为 {OpeningBalance:N2}";
+                StatusMessage =
+                    $"重新计算成功，期初余额保持 {currentOpeningBalance:N2}，" +
+                    $"已调整 {repairResult.Value.AdjustedCount} 条流出流水";
                 MessageBox.Show(
-                    $"重新计算成功\n\n检测到第 {firstNegativeIndex + 1} 行起出现负余额，已将期初余额从 {originalOpeningBalance:N2} 调整为 {OpeningBalance:N2}，所有余额已重算为非负。",
+                    $"负余额已自动处理。\n\n" +
+                    $"期初余额保持为 {currentOpeningBalance:N2}，未作修改。\n" +
+                    $"共调整 {repairResult.Value.AdjustedCount} 条流出流水，" +
+                    $"流出合计减少 {repairResult.Value.ReducedAmount:N2}。",
                     "提示",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
+            }
+            else if (negativeBalance is not null)
+            {
+                if (negativeBalance.Value.Record is not null)
+                {
+                    RequestScrollToRecord?.Invoke(negativeBalance.Value.Record);
+                }
+
+                StatusMessage =
+                    $"重新计算完成，第 {negativeBalance.Value.Index + 1} 行负余额已保留";
             }
             else
             {
@@ -448,6 +427,141 @@ public sealed class FlowDetailsViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    private NegativeBalanceRepairResult RepairNegativeBalancesByAdjustingOutflows(double openingBalance)
+    {
+        var runningBalance = RoundMoney(openingBalance);
+        var adjustedRecords = new HashSet<FlowRecord>();
+        var recordsToRemove = new HashSet<FlowRecord>();
+        var reducedAmount = 0d;
+        FlowRecord? lastAdjustedRecord = null;
+
+        for (var index = 0; index < allRecords.Count; index++)
+        {
+            var record = allRecords[index];
+            var amount = RoundMoney(record.TradeMoney ?? 0);
+            runningBalance = RoundMoney(runningBalance + amount);
+            if (runningBalance >= -0.009d)
+            {
+                continue;
+            }
+
+            var needed = RoundMoney(Math.Abs(runningBalance) + 0.01d);
+            var candidates = allRecords
+                .Take(index + 1)
+                .Where(item => !recordsToRemove.Contains(item) && (item.TradeMoney ?? 0) < -0.009d)
+                .OrderBy(IsInterestRecord)
+                .ThenByDescending(item => Math.Abs(item.TradeMoney ?? 0))
+                .ThenByDescending(item => item.Index)
+                .ToList();
+
+            foreach (var candidate in candidates)
+            {
+                if (needed <= 0.009d)
+                {
+                    break;
+                }
+
+                var expense = RoundMoney(Math.Abs(candidate.TradeMoney ?? 0));
+                if (expense <= 0.009d)
+                {
+                    continue;
+                }
+
+                var reducibleWhileKeepingRecord = RoundMoney(Math.Max(0, expense - 0.01d));
+                if (needed <= reducibleWhileKeepingRecord + 0.009d)
+                {
+                    var reduction = Math.Min(needed, reducibleWhileKeepingRecord);
+                    SetSignedAmount(candidate, -RoundMoney(expense - reduction));
+                    runningBalance = RoundMoney(runningBalance + reduction);
+                    reducedAmount = RoundMoney(reducedAmount + reduction);
+                    adjustedRecords.Add(candidate);
+                    lastAdjustedRecord = candidate;
+                    needed = RoundMoney(needed - reduction);
+                    continue;
+                }
+
+                SetSignedAmount(candidate, 0);
+                recordsToRemove.Add(candidate);
+                runningBalance = RoundMoney(runningBalance + expense);
+                reducedAmount = RoundMoney(reducedAmount + expense);
+                adjustedRecords.Add(candidate);
+                lastAdjustedRecord = candidate;
+                needed = RoundMoney(Math.Max(0, needed - expense));
+            }
+        }
+
+        if (recordsToRemove.Count > 0)
+        {
+            allRecords.RemoveAll(recordsToRemove.Contains);
+            if (lastAdjustedRecord is not null && recordsToRemove.Contains(lastAdjustedRecord))
+            {
+                lastAdjustedRecord = allRecords.LastOrDefault();
+            }
+        }
+
+        return new NegativeBalanceRepairResult(adjustedRecords.Count, reducedAmount, lastAdjustedRecord);
+    }
+
+    private void RecalculateRecordBalances(double openingBalance)
+    {
+        var balance = RoundMoney(openingBalance);
+        foreach (var record in allRecords)
+        {
+            if (record.TradeMoney.HasValue)
+            {
+                var amount = RoundMoney(record.TradeMoney.Value);
+                SetSignedAmount(record, amount);
+                balance = RoundMoney(balance + amount);
+            }
+
+            record.Balance = balance;
+            record.BalanceAmount = balance;
+        }
+    }
+
+    private NegativeBalanceInfo? FindFirstNegativeBalance()
+    {
+        for (var index = 0; index < allRecords.Count; index++)
+        {
+            var record = allRecords[index];
+            if ((record.Balance ?? 0) < -0.009d)
+            {
+                return new NegativeBalanceInfo(index, record.Balance ?? 0, record);
+            }
+        }
+
+        return null;
+    }
+
+    private static void SetSignedAmount(FlowRecord record, double amount)
+    {
+        var rounded = RoundMoney(amount);
+        record.TradeMoney = rounded;
+        record.IncomeAttribute = rounded >= 0 ? "收入" : "支出";
+        record.CreditAmount = rounded > 0 ? rounded : null;
+        record.DebitAmount = rounded < 0 ? Math.Abs(rounded) : null;
+        record.IncomeFlag = rounded >= 0 ? "收入" : "支出";
+    }
+
+    private static bool IsInterestRecord(FlowRecord record)
+    {
+        return new[]
+        {
+            record.ProductBrief,
+            record.Remark,
+            record.TradeExplain,
+            record.Usage
+        }.Any(value => value?.Contains("利息", StringComparison.Ordinal) == true
+                       || value?.Contains("结息", StringComparison.Ordinal) == true);
+    }
+
+    private readonly record struct NegativeBalanceInfo(int Index, double Balance, FlowRecord Record);
+
+    private readonly record struct NegativeBalanceRepairResult(
+        int AdjustedCount,
+        double ReducedAmount,
+        FlowRecord? LastAdjustedRecord);
 
     private void InsertAfterSelected(FlowRecord record)
     {
