@@ -14395,8 +14395,9 @@ public sealed class FlowAutoGenerator
         }
 
         var previousClosing = RoundMoney(Math.Max(0, openingBalance));
-        var cyclePosition = 0;
+        var buildPosition = 0;
         var buildLength = random.Next(1, 4);
+        var drawdownNext = false;
         for (var index = 0; index < monthCount; index++)
         {
             var available = RoundMoney(previousClosing + Math.Max(0, incomeTargets[index]));
@@ -14406,24 +14407,37 @@ public sealed class FlowAutoGenerator
                 break;
             }
 
-            double targetRatio;
-            if (cyclePosition < buildLength)
+            var lower = Math.Min(closingBalanceCap, minimumRequired[index]);
+            var upper = Math.Min(closingBalanceCap, available);
+            if (upper <= 0.009d)
             {
-                var progress = (cyclePosition + 1d) / buildLength;
-                var lowerRatio = 0.24d + (progress * 0.38d);
-                var upperRatio = 0.52d + (progress * 0.44d);
-                targetRatio = lowerRatio + (random.NextDouble() * (upperRatio - lowerRatio));
-                cyclePosition++;
+                targets[index] = 0;
+                previousClosing = targets[index];
+                continue;
+            }
+
+            // Build a few monthly highs, then deliberately consume back to a low balance.
+            // The backward minimum is still honored when the final-balance target requires it.
+            double targetRatio;
+            if (drawdownNext)
+            {
+                targetRatio = 0.015d + (random.NextDouble() * 0.135d);
+                drawdownNext = false;
+                buildPosition = 0;
+                buildLength = random.Next(1, 4);
             }
             else
             {
-                targetRatio = 0.005d + (random.NextDouble() * 0.075d);
-                cyclePosition = 0;
-                buildLength = random.Next(1, 4);
+                var progress = (buildPosition + 1d) / buildLength;
+                var centerRatio = 0.34d + (progress * 0.48d);
+                targetRatio = Math.Clamp(
+                    centerRatio + ((random.NextDouble() - 0.5d) * 0.14d),
+                    0.28d,
+                    0.96d);
+                buildPosition++;
+                drawdownNext = buildPosition >= buildLength;
             }
 
-            var lower = Math.Min(closingBalanceCap, minimumRequired[index]);
-            var upper = Math.Min(closingBalanceCap, available);
             var desired = RoundMoney(closingBalanceCap * targetRatio);
             targets[index] = RoundMoney(Math.Clamp(desired, Math.Min(lower, upper), upper));
             previousClosing = targets[index];

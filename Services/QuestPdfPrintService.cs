@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -49,6 +50,271 @@ public sealed class QuestPdfPrintService : IPrintPdfService
         {
             UseShellExecute = true
         });
+    }
+
+    public static void ExportWeChatTransferCertificate(PrintRenderContext context, string path)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        var records = context.Records.ToList();
+        Document.Create(document =>
+        {
+            document.Page(page =>
+            {
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(28);
+                page.DefaultTextStyle(style => style.FontFamily("Microsoft YaHei").FontSize(8));
+                page.Header().Column(header =>
+                {
+                    header.Item().AlignCenter().Text("\u5FAE\u4FE1\u652F\u4ED8\u8F6C\u8D26\u7535\u5B50\u51ED\u8BC1").FontSize(16).SemiBold();
+                    header.Item().PaddingTop(10).Row(row =>
+                    {
+                        row.RelativeItem().Text($"\u7533\u8BF7\u65B9\u59D3\u540D\uFF1A{context.BankUser.AccountName}");
+                        row.RelativeItem().Text($"\u7533\u8BF7\u65B9\u5FAE\u4FE1\u53F7\uFF1A{context.BankUser.AccountNo}");
+                        row.RelativeItem().Text($"\u7533\u8BF7\u65F6\u95F4\uFF1A{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                    });
+                    header.Item().PaddingTop(5).Text(
+                        $"\u8F6C\u8D26\u660E\u7EC6\u5BF9\u5E94\u65F6\u95F4\u6BB5\uFF1A{context.BankUser.StartDate:yyyy-MM-dd HH:mm:ss}\u81F3{context.BankUser.EndDate:yyyy-MM-dd HH:mm:ss}");
+                    header.Item().PaddingTop(8).AlignCenter().Text("\u5177\u4F53\u4EA4\u6613\u8BB0\u5F55\u660E\u7EC6").FontSize(10).SemiBold();
+                });
+                page.Content().PaddingTop(5).Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.RelativeColumn(2.4f);
+                        columns.RelativeColumn(1.1f);
+                        columns.RelativeColumn(0.8f);
+                        columns.RelativeColumn(0.9f);
+                        columns.RelativeColumn(1f);
+                        columns.RelativeColumn(1.4f);
+                        columns.RelativeColumn(1.8f);
+                        columns.RelativeColumn(1f);
+                    });
+                    table.Header(header =>
+                    {
+                        foreach (var title in new[] { "\u4EA4\u6613\u5355\u53F7", "\u4EA4\u6613\u7C7B\u578B", "\u6536/\u652F/\u5176\u4ED6", "\u4EA4\u6613\u65B9\u5F0F", "\u91D1\u989D", "\u4EA4\u6613\u65F6\u95F4", "\u8F6C\u8D26\u8BF4\u660E", "\u4EA4\u6613\u72B6\u6001" })
+                            header.Cell().Border(0.6f).Padding(3).AlignCenter().Text(title).SemiBold();
+                    });
+                    foreach (var record in records)
+                    {
+                        var values = new[]
+                        {
+                            record.SerialNum,
+                            FirstNotBlank(record.ProductName, record.ProductBrief),
+                            FirstNotBlank(record.IncomeAttribute, record.TradeMoney >= 0 ? "\u6536\u5165" : "\u652F\u51FA"),
+                            FirstNotBlank(record.TradeChannel, record.CashCheck, "/"),
+                            (record.TradeMoney ?? 0d).ToString("0.00", CultureInfo.InvariantCulture),
+                            record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty,
+                            FirstNotBlank(record.OppositeUsername, record.Remark, "/"),
+                            FirstNotBlank(record.HandleStatus, "\u6210\u529F")
+                        };
+                        foreach (var value in values)
+                            table.Cell().Border(0.5f).Padding(3).MinHeight(18).Text(value ?? string.Empty);
+                    }
+                });
+                page.Footer().AlignCenter().Text(text =>
+                {
+                    text.Span("\u7B2C ");
+                    text.CurrentPageNumber();
+                    text.Span(" \u9875 / \u5171 ");
+                    text.TotalPages();
+                    text.Span(" \u9875");
+                });
+            });
+        }).GeneratePdf(path);
+    }
+
+    public static void ExportAgriculturalPersonalLatestElectronic(
+        PrintRenderContext context,
+        string path,
+        string vendorDir,
+        string templateXml)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        var records = context.Records.ToList();
+        var source = XDocument.Parse(templateXml, LoadOptions.None);
+        var title = ReadTemplateText(source, "Text1", "\u4E2D\u56FD\u519C\u4E1A\u94F6\u884C\u8D26\u6237\u6D3B\u671F\u4EA4\u6613\u660E\u7EC6\u6E05\u5355");
+        var note = ReadTemplateText(source, "Text32", string.Empty);
+        var headings = Enumerable.Range(7, 9)
+            .Select(index => ReadTemplateText(source, $"Text{index}", string.Empty))
+            .ToArray();
+        var widths = Enumerable.Range(7, 9)
+            .Select(index => ReadTemplateWidth(source, $"Text{index}", 10f))
+            .ToArray();
+        var rowHeight = ReadTemplateHeight(source, "DataBand5", 5.3f) * 72f / 25.4f;
+        var bodyFontSize = ReadTemplateFontSize(source, "Text17", 7.5f);
+        var headerFontSize = ReadTemplateFontSize(source, "Text7", 8f);
+        var stampBytes = ReadTemplateImage(source, "Image2");
+
+        Document.Create(document =>
+        {
+            document.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.MarginHorizontal(28);
+                page.MarginTop(24);
+                page.MarginBottom(22);
+                page.DefaultTextStyle(style => style.FontFamily("SimSun", "Microsoft YaHei").FontSize(6));
+
+                page.Header().Height(76).Column(header =>
+                {
+                    header.Item().Height(35).Row(row =>
+                    {
+                        row.ConstantItem(153);
+                        row.RelativeItem().AlignCenter().AlignMiddle()
+                            .Text(title)
+                            .FontSize(ReadTemplateFontSize(source, "Text1", 10.5f));
+                        var stamp = row.ConstantItem(153)
+                            .PaddingLeft(54)
+                            .PaddingRight(52)
+                            .PaddingTop(7)
+                            .PaddingBottom(3);
+                        if (stampBytes is not null)
+                            stamp.Image(stampBytes).FitArea();
+                    });
+                    header.Item().PaddingTop(8).Row(row =>
+                    {
+                        row.RelativeItem().Text($"\u6237\u540D\uFF1A{context.BankUser.AccountName}");
+                        row.ConstantItem(205).AlignRight().Text($"\u8D26\u6237\uFF1A{context.BankUser.AccountNo}");
+                    });
+                    header.Item().PaddingTop(5).Row(row =>
+                    {
+                        row.RelativeItem().Text("\u5E01\u79CD\uFF1A\u4EBA\u6C11\u5E01");
+                        row.ConstantItem(205).AlignRight().Text("\u6C47\u949E\u6807\u8BC6\uFF1A\u672C\u5E01");
+                    });
+                    header.Item().PaddingTop(5).Row(row =>
+                    {
+                        row.RelativeItem().Text($"\u8D77\u6B62\u65E5\u671F\uFF1A{context.BankUser.StartDate:yyyyMMdd}-{context.BankUser.EndDate:yyyyMMdd}");
+                        row.ConstantItem(205).AlignRight().Text($"\u7535\u5B50\u6D41\u6C34\u53F7\uFF1A{ResolveAgriculturalReceiptNumber(context)}");
+                    });
+                });
+
+                page.Content().Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        foreach (var width in widths)
+                            columns.RelativeColumn(width);
+                    });
+                    table.Header(header =>
+                    {
+                        foreach (var heading in headings)
+                            header.Cell().BorderTop(0.75f).BorderBottom(0.75f).MinHeight(18).AlignMiddle().AlignCenter().Text(heading).FontSize(headerFontSize);
+                    });
+
+                    foreach (var record in records)
+                    {
+                        var hideTime = record.ProductBrief is "\u7ED3\u606F" or "\u5229\u606F\u7A0E" or "\u77ED\u4FE1\u8D39";
+                        var amount = (record.TradeMoney ?? 0d).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
+                        var values = new[]
+                        {
+                            FirstNotBlank(record.AccountTime?.ToString("yyyyMMdd"), record["\u65E5\u671F"]),
+                            hideTime ? string.Empty : FirstNotBlank(record.AccountTime?.ToString("HHmmss"), record["\u4EA4\u6613\u65F6\u95F4"]),
+                            FirstNotBlank(record.ProductBrief, record["\u6458\u8981"], record.ProductName),
+                            amount,
+                            FirstNotBlank(record.Balance?.ToString("0.00", CultureInfo.InvariantCulture), record["\u672C\u6B21\u4F59\u989D"], record["\u4F59\u989D"]),
+                            FirstNotBlank(record.OppositeUsername, record["\u5BF9\u624B\u4FE1\u606F"], record["\u5BF9\u65B9\u6237\u540D"], record["\u6237\u540D"]),
+                            FirstNotBlank(record.LogNum, record["\u65E5\u5FD7\u53F7"], record.SerialNum),
+                            FirstNotBlank(record.TradeChannel, record["\u4EA4\u6613\u6E20\u9053"], record.TradeChannelEn),
+                            FirstNotBlank(record.Remark, record["\u4EA4\u6613\u9644\u8A00"], record["\u9644\u8A00"], record.TradeExplain)
+                        };
+                        foreach (var value in values)
+                            table.Cell().Height(rowHeight).PaddingHorizontal(1).AlignMiddle().Text(value ?? string.Empty).FontSize(bodyFontSize);
+                    }
+                });
+
+                page.Footer().Height(27).Column(footer =>
+                {
+                    footer.Item().BorderTop(0.75f).PaddingTop(2).Text(note).FontSize(ReadTemplateFontSize(source, "Text32", 8f));
+                    footer.Item().DefaultTextStyle(style => style.FontSize(6)).AlignCenter().Text(text =>
+                    {
+                        text.Span("\u7B2C");
+                        text.CurrentPageNumber();
+                        text.Span("\u9875\uFF0C\u5171");
+                        text.TotalPages();
+                        text.Span("\u9875");
+                    });
+                });
+            });
+        }).GeneratePdf(path);
+
+        static string ResolveAgriculturalReceiptNumber(PrintRenderContext renderContext)
+        {
+            foreach (var field in new[] { "\u6D41\u6C34\u53F7", "\u7535\u5B50\u6D41\u6C34\u53F7", "\u4EA4\u6613\u6D41\u6C34\u53F7", "ReceiptNum", "UserNum" })
+            {
+                var configured = renderContext.BankUser[field];
+                if (!string.IsNullOrWhiteSpace(configured))
+                    return configured.Trim();
+            }
+
+            var receipt = renderContext.Records
+                .Select(record => record.ReceiptNum)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+            return !string.IsNullOrWhiteSpace(receipt)
+                ? receipt
+                : $"{DateTime.Now:yyyyMMddHHmmss}{Random.Shared.Next(100000, 1000000)}";
+        }
+    }
+
+    private static XElement? FindTemplateComponent(XDocument source, string name)
+    {
+        return source.Descendants().FirstOrDefault(element =>
+            string.Equals(element.Elements().FirstOrDefault(child => child.Name.LocalName == "Name")?.Value, name, StringComparison.Ordinal));
+    }
+
+    private static string ReadTemplateText(XDocument source, string name, string fallback)
+    {
+        return FindTemplateComponent(source, name)?.Elements().FirstOrDefault(element => element.Name.LocalName == "Text")?.Value
+            ?? fallback;
+    }
+
+    private static float ReadTemplateWidth(XDocument source, string name, float fallback)
+    {
+        return ReadTemplateRectanglePart(source, name, 2, fallback);
+    }
+
+    private static float ReadTemplateHeight(XDocument source, string name, float fallback)
+    {
+        return ReadTemplateRectanglePart(source, name, 3, fallback);
+    }
+
+    private static float ReadTemplateRectanglePart(XDocument source, string name, int index, float fallback)
+    {
+        var rectangle = FindTemplateComponent(source, name)?.Elements().FirstOrDefault(element => element.Name.LocalName == "ClientRectangle")?.Value;
+        var parts = rectangle?.Split(',');
+        return parts is { Length: > 3 }
+            && float.TryParse(parts[index], NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+    }
+
+    private static float ReadTemplateFontSize(XDocument source, string name, float fallback)
+    {
+        var font = FindTemplateComponent(source, name)?.Elements().FirstOrDefault(element => element.Name.LocalName == "Font")?.Value;
+        var parts = font?.Split(',');
+        return parts is { Length: > 1 }
+            && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : fallback;
+    }
+
+    private static byte[]? ReadTemplateImage(XDocument source, string name)
+    {
+        var encoded = FindTemplateComponent(source, name)?.Elements().FirstOrDefault(element => element.Name.LocalName == "ImageBytes")?.Value;
+        if (string.IsNullOrWhiteSpace(encoded))
+            return null;
+        try
+        {
+            return Convert.FromBase64String(string.Concat(encoded.Where(character => !char.IsWhiteSpace(character))));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string FirstNotBlank(params string?[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
     }
 
     private static void ExportCore(PrintRenderContext context, string path)

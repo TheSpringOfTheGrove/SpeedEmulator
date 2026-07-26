@@ -776,15 +776,33 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
     private sealed class ZhenchengTemplateCatalog
     {
+        private const string CoreDllName = "caiwu-core.dll";
+
+        private static readonly string[] PdfTemplateTypeNames =
+        [
+            "MainEntry.entity.PDFTemplate",
+            "caiwu_core.entity.PDFTemplate"
+        ];
+
+        private static readonly string[] PdfConfigTypeNames =
+        [
+            "MainEntry.entity.PdfConfig.PDFConfig",
+            "caiwu_core.entity.PdfConfig.PDFConfig"
+        ];
+
         private static readonly object CatalogSyncRoot = new();
         private static ZhenchengTemplateCatalog? current;
         private static bool attemptedLoad;
 
         private readonly Dictionary<long, List<VendorTemplateItem>> templatesByVendorBankId;
+        private readonly IReadOnlyList<VendorTemplateItem> builtInTemplates;
 
-        private ZhenchengTemplateCatalog(Dictionary<long, List<VendorTemplateItem>> templatesByVendorBankId)
+        private ZhenchengTemplateCatalog(
+            Dictionary<long, List<VendorTemplateItem>> templatesByVendorBankId,
+            IReadOnlyList<VendorTemplateItem> builtInTemplates)
         {
             this.templatesByVendorBankId = templatesByVendorBankId;
+            this.builtInTemplates = builtInTemplates;
         }
 
         public static IReadOnlyList<PrintTemplateDefinition>? TryGetTemplateDefinitions(Bank bank)
@@ -857,26 +875,30 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     vendorDir + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty));
 
                 var loadContext = new VendorLoadContext(mainDll);
-                var assembly = loadContext.LoadFromAssemblyPath(mainDll);
-                var pdfTemplateType = assembly.GetType("MainEntry.entity.PDFTemplate", throwOnError: true)!;
-                var pdfConfigType = assembly.GetType("MainEntry.entity.PdfConfig.PDFConfig", throwOnError: false);
-                var listPdfTemplateType = typeof(List<>).MakeGenericType(pdfTemplateType);
-                var listMethod = GetLoadableTypes(assembly)
-                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                    .FirstOrDefault(method =>
-                    {
-                        var parameters = method.GetParameters();
-                        return parameters.Length == 1
-                            && (parameters[0].ParameterType == typeof(long) || parameters[0].ParameterType == typeof(int))
-                            && method.ReturnType == listPdfTemplateType;
-                    });
+                var assemblies = LoadVendorAssemblies(loadContext, mainDll, vendorDir).ToList();
+                var pdfTemplateType = FindType(assemblies, PdfTemplateTypeNames)
+                    ?? assemblies
+                        .SelectMany(GetLoadableTypes)
+                        .FirstOrDefault(type => string.Equals(type.Name, "PDFTemplate", StringComparison.Ordinal));
+                if (pdfTemplateType is null)
+                {
+                    return null;
+                }
+
+                var pdfConfigType = FindType(assemblies, PdfConfigTypeNames)
+                    ?? assemblies
+                        .SelectMany(GetLoadableTypes)
+                        .FirstOrDefault(type =>
+                            string.Equals(type.Name, "PDFConfig", StringComparison.Ordinal)
+                            && (type.Namespace?.Contains("PdfConfig", StringComparison.Ordinal) ?? false));
+                var listMethod = FindTemplateListMethod(assemblies, pdfTemplateType);
 
                 if (listMethod is null)
                 {
                     return null;
                 }
 
-                var configFactory = pdfConfigType is null ? null : TryGetConfigFactory(assembly, pdfConfigType);
+                var configFactory = pdfConfigType is null ? null : TryGetConfigFactory(assemblies, pdfConfigType);
                 var result = new Dictionary<long, List<VendorTemplateItem>>();
                 var parameterType = listMethod.GetParameters()[0].ParameterType;
                 for (var bankId = 1L; bankId <= 180L; bankId++)
@@ -907,7 +929,10 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     }
                 }
 
-                return result.Count == 0 ? null : new ZhenchengTemplateCatalog(result);
+                var builtInTemplates = ReadBuiltInTemplates(configFactory, pdfConfigType);
+                return result.Count == 0 && builtInTemplates.Count == 0
+                    ? null
+                    : new ZhenchengTemplateCatalog(result, builtInTemplates);
             }
             finally
             {
@@ -916,6 +941,101 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     Directory.SetCurrentDirectory(previousDirectory);
                 }
             }
+        }
+
+        private static IEnumerable<Assembly> LoadVendorAssemblies(
+            VendorLoadContext loadContext,
+            string mainDll,
+            string vendorDir)
+        {
+            var loaded = new List<Assembly>();
+            AddVendorAssembly(loaded, loadContext, mainDll);
+            AddVendorAssembly(loaded, loadContext, Path.Combine(vendorDir, CoreDllName));
+            return loaded;
+        }
+
+        private static void AddVendorAssembly(
+            ICollection<Assembly> assemblies,
+            VendorLoadContext loadContext,
+            string assemblyPath)
+        {
+            if (!File.Exists(assemblyPath)
+                || assemblies.Any(item => string.Equals(item.Location, assemblyPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            try
+            {
+                assemblies.Add(loadContext.LoadFromAssemblyPath(assemblyPath));
+            }
+            catch
+            {
+                // Older vendor runtimes did not split the core assembly. Keep the main assembly path usable.
+            }
+        }
+
+        private static Type? FindType(IEnumerable<Assembly> assemblies, IEnumerable<string> typeNames)
+        {
+            foreach (var typeName in typeNames)
+            {
+                foreach (var assembly in assemblies)
+                {
+                    var type = assembly.GetType(typeName, throwOnError: false);
+                    if (type is not null)
+                    {
+                        return type;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static MethodInfo? FindTemplateListMethod(IEnumerable<Assembly> assemblies, Type pdfTemplateType)
+        {
+            foreach (var assembly in assemblies)
+            {
+                foreach (var type in GetLoadableTypes(assembly))
+                {
+                    MethodInfo[] methods;
+                    try
+                    {
+                        methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (var method in methods)
+                    {
+                        try
+                        {
+                            var parameters = method.GetParameters();
+                            if (parameters.Length == 1
+                                && (parameters[0].ParameterType == typeof(long) || parameters[0].ParameterType == typeof(int))
+                                && IsTemplateListReturnType(method.ReturnType, pdfTemplateType))
+                            {
+                                return method;
+                            }
+                        }
+                        catch
+                        {
+                            // Some vendor metadata can reference optional assemblies; skip only that method.
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsTemplateListReturnType(Type returnType, Type pdfTemplateType)
+        {
+            return returnType.IsGenericType
+                && returnType.GetGenericTypeDefinition() == typeof(List<>)
+                && returnType.GetGenericArguments()[0] == pdfTemplateType;
         }
 
         private IReadOnlyList<VendorTemplateItem> ResolveTemplates(Bank bank)
@@ -927,7 +1047,62 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 .ThenBy(item => item.Key)
                 .FirstOrDefault();
 
-            return best?.Value ?? [];
+            var resolved = new List<VendorTemplateItem>();
+            if (best is not null)
+            {
+                resolved.AddRange(best.Value);
+            }
+
+            resolved.AddRange(builtInTemplates
+                .Where(item => ScoreTemplateName(bank, item.Name) > 0));
+
+            return resolved
+                .GroupBy(item => item.Name, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderByDescending(item => item.BankId > 0)
+                    .ThenByDescending(item => item.Id > 0)
+                    .ThenByDescending(item => !string.IsNullOrWhiteSpace(item.PdfData))
+                    .First())
+                .OrderBy(item => item.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        private static IReadOnlyList<VendorTemplateItem> ReadBuiltInTemplates(
+            MethodInfo? configFactory,
+            Type? pdfConfigType)
+        {
+            if (configFactory?.DeclaringType is null || pdfConfigType is null)
+            {
+                return [];
+            }
+
+            var result = new List<VendorTemplateItem>();
+            foreach (var method in configFactory.DeclaringType
+                         .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                         .Where(method => method.ReturnType == pdfConfigType && method.GetParameters().Length == 0))
+            {
+                var config = InvokeSilently(() => method.Invoke(null, null));
+                if (config is null)
+                {
+                    continue;
+                }
+
+                var pageRows = ConvertToInt(GetPropertyValue(config, "RowCount"));
+                result.Add(new VendorTemplateItem(
+                    0,
+                    0,
+                    method.Name,
+                    pageRows,
+                    string.Empty,
+                    string.Empty,
+                    true,
+                    ReadPdfConfig(config, method.Name, pageRows)));
+            }
+
+            return result
+                .GroupBy(item => item.Name, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
         }
 
         private static int ScoreTemplates(Bank bank, IReadOnlyList<VendorTemplateItem> templates)
@@ -1032,35 +1207,38 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             }
         }
 
-        private static MethodInfo? TryGetConfigFactory(Assembly assembly, Type pdfConfigType)
+        private static MethodInfo? TryGetConfigFactory(IEnumerable<Assembly> assemblies, Type pdfConfigType)
         {
-            foreach (var type in GetLoadableTypes(assembly))
+            foreach (var assembly in assemblies)
             {
-                MethodInfo[] methods;
-                try
+                foreach (var type in GetLoadableTypes(assembly))
                 {
-                    methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                foreach (var method in methods)
-                {
+                    MethodInfo[] methods;
                     try
                     {
-                        var parameters = method.GetParameters();
-                        if (method.ReturnType == pdfConfigType
-                            && parameters.Length == 1
-                            && parameters[0].ParameterType == typeof(string))
-                        {
-                            return method;
-                        }
+                        methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                     }
                     catch
                     {
-                        // Some vendor metadata can reference optional assemblies; skip only that method.
+                        continue;
+                    }
+
+                    foreach (var method in methods)
+                    {
+                        try
+                        {
+                            var parameters = method.GetParameters();
+                            if (method.ReturnType == pdfConfigType
+                                && parameters.Length == 1
+                                && parameters[0].ParameterType == typeof(string))
+                            {
+                                return method;
+                            }
+                        }
+                        catch
+                        {
+                            // Some vendor metadata can reference optional assemblies; skip only that method.
+                        }
                     }
                 }
             }

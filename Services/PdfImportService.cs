@@ -450,6 +450,7 @@ public sealed class PdfImportService : IPdfImportService
             PdfImportTabularMapper.NormalizeImportedFlowRecord(record, bank, bankUser);
         }
 
+        FillMissingPdfRecordTimes(result.FlowRecords, bank);
         ReindexFlowRecords(result.FlowRecords);
         if (target == PdfImportTarget.BankUsers && result.Users.Count == 0 && !result.HasBlockingErrors)
         {
@@ -662,11 +663,21 @@ public sealed class PdfImportService : IPdfImportService
         var lines = document.Lines.ToList();
         foreach (var line in lines.Take(80))
         {
+            var text = CleanPdfValue(line.Text);
             var nameMatch = Regex.Match(line.Text, @"户名：(?<name>\S+)\s+账户：(?<account>\S+)");
             if (nameMatch.Success)
             {
                 SetUserNamed(user, bank, "姓名", nameMatch.Groups["name"].Value);
                 SetUserNamed(user, bank, "卡号", nameMatch.Groups["account"].Value);
+                parsedUser = true;
+            }
+
+            var labeledName = GetAbcHeaderValue(text, "户名");
+            var labeledAccount = GetAbcHeaderValue(text, "账户");
+            if (!string.IsNullOrWhiteSpace(labeledName) || !string.IsNullOrWhiteSpace(labeledAccount))
+            {
+                SetUserNamed(user, bank, "姓名", labeledName);
+                SetUserNamed(user, bank, "卡号", labeledAccount);
                 parsedUser = true;
             }
 
@@ -678,6 +689,15 @@ public sealed class PdfImportService : IPdfImportService
                 parsedUser = true;
             }
 
+            var labeledCurrency = GetAbcHeaderValue(text, "币种");
+            var labeledCash = GetAbcHeaderValue(text, "汇钞标识");
+            if (!string.IsNullOrWhiteSpace(labeledCurrency) || !string.IsNullOrWhiteSpace(labeledCash))
+            {
+                SetUserNamed(user, bank, "货币", labeledCurrency);
+                user["汇钞标识"] = CleanPdfValue(labeledCash);
+                parsedUser = true;
+            }
+
             var rangeMatch = Regex.Match(line.Text, @"起止日期：(?<start>\d{8})-(?<end>\d{8})\s+电子流水号：(?<serial>\S+)");
             if (rangeMatch.Success)
             {
@@ -686,9 +706,25 @@ public sealed class PdfImportService : IPdfImportService
                 SetUserNamed(user, bank, "流水号", rangeMatch.Groups["serial"].Value);
                 parsedUser = true;
             }
+
+            var labeledRange = GetAbcHeaderValue(text, "起止日期");
+            var labeledSerial = GetAbcHeaderValue(text, "电子流水号");
+            var labeledRangeMatch = Regex.Match(labeledRange, @"^(?<start>\d{8})-(?<end>\d{8})$");
+            if (labeledRangeMatch.Success || !string.IsNullOrWhiteSpace(labeledSerial))
+            {
+                if (labeledRangeMatch.Success)
+                {
+                    SetUserNamed(user, bank, "开始日期", labeledRangeMatch.Groups["start"].Value);
+                    SetUserNamed(user, bank, "结束日期", labeledRangeMatch.Groups["end"].Value);
+                }
+
+                SetUserNamed(user, bank, "流水号", labeledSerial);
+                parsedUser = true;
+            }
         }
 
-        foreach (var group in GroupLinesByStart(lines, IsAbcRecordStart, IsAbcIgnoredLine))
+        var recordLines = SplitAbcEmbeddedRecordLines(lines);
+        foreach (var group in GroupLinesByStart(recordLines, IsAbcRecordStart, IsAbcIgnoredLine))
         {
             if (TryParseAbcRecord(group, bank, user, out var record))
             {
@@ -1416,7 +1452,6 @@ public sealed class PdfImportService : IPdfImportService
         record.OppositeAccount = oppositeAccount;
         record.OppositeBank = oppositeBank;
         record.Remark = remark;
-        record.TradeExplain = remark;
         ApplySignedAmountColumns(record, amount);
 
         SetFlowRaw(record, "卡号", record.Account);
@@ -2264,7 +2299,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.Usage = usage;
         record.Remark = remark;
-        record.TradeExplain = remark;
         record.OppositeUsername = oppositeName;
         record.OppositeAccount = oppositeAccount;
         record.OppositeBank = oppositeBankNo;
@@ -2524,7 +2558,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductName = summary;
         record.ProductType = summary;
         record.Remark = remark;
-        record.TradeExplain = remark;
         record.SerialNum = serial;
         record.LogNum = serial;
         record.SequenceNum = serial;
@@ -3047,7 +3080,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.Remark = remark;
-        record.TradeExplain = remark;
         record.OppositeUsername = oppositeName;
         record.OppositeBank = oppositeBank;
         record.Currency = FirstNotBlank(user.Currency, "人民币");
@@ -3117,7 +3149,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.Remark = remark;
-        record.TradeExplain = remark;
         record.OppositeUsername = oppositeName;
         record.OppositeBank = oppositeBank;
         record.Currency = FirstNotBlank(user.Currency, "人民币");
@@ -3512,7 +3543,6 @@ public sealed class PdfImportService : IPdfImportService
         record.BalanceAmount = record.Balance;
         record.OppositeUsername = oppositeName;
         record.Remark = remark;
-        record.TradeExplain = remark;
         record.Currency = FirstNotBlank(user.Currency, "人民币");
         ApplySignedAmountColumns(record, amount);
 
@@ -3645,7 +3675,6 @@ public sealed class PdfImportService : IPdfImportService
         record.BalanceAmount = record.Balance;
         record.OppositeUsername = oppositeName;
         record.Remark = summary == productType ? string.Empty : summary;
-        record.TradeExplain = record.Remark;
         record.Currency = FirstNotBlank(user.Currency, "人民币");
         ApplySignedAmountColumns(record, amount);
 
@@ -3701,7 +3730,6 @@ public sealed class PdfImportService : IPdfImportService
         record.LogNum = reference;
         record.Usage = detail;
         record.Remark = note;
-        record.TradeExplain = note;
         record.OppositeUsername = oppositeName;
         record.OppositeBank = oppositeBank;
         record.Currency = FirstNotBlank(user.Currency, "人民币");
@@ -4012,25 +4040,33 @@ public sealed class PdfImportService : IPdfImportService
     {
         record = new FlowRecord();
         var text = JoinGroupText(group);
-        var match = Regex.Match(text, @"^(?<date>\d{8})\s+(?<time>\d{6})\s+(?<summary>\S+)\s+(?<amount>[+-]?\d[\d,]*\.\d{2})\s+(?<balance>[+-]?\d[\d,]*\.\d{2})(?:\s+(?<rest>.*))?$");
+        var match = Regex.Match(text, @"^(?<date>\d{8})(?:\s+(?<time>\d{6}))?\s+(?<summary>\S+)\s+(?<amount>[+-]?\d[\d,]*\.\d{2})\s+(?<balance>[+-]?\d[\d,]*\.\d{2})(?:\s+(?<rest>.*))?$");
         if (!match.Success)
         {
             return false;
         }
 
-        var (oppositeName, logNumber, channel, remark) = SplitAbcRemainder(match.Groups["rest"].Value);
+        var rest = RemoveAbcHeaderTail(match.Groups["rest"].Value);
+        var (oppositeName, logNumber, channel, remark) = SplitAbcRemainder(rest);
+        var hasTime = match.Groups["time"].Success && !string.IsNullOrWhiteSpace(match.Groups["time"].Value);
+        var summary = CleanPdfValue(match.Groups["summary"].Value);
+        if (!hasTime && IsAbcInterestSummary(summary) && string.IsNullOrWhiteSpace(remark) && !string.IsNullOrWhiteSpace(channel))
+        {
+            remark = channel;
+            channel = string.Empty;
+        }
+
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
         record.Account = FirstNotBlank(user.CardNo, user.AccountNo);
-        record.AccountTime = ParseDateTimeOrNull($"{match.Groups["date"].Value} {match.Groups["time"].Value}");
-        record.ProductBrief = CleanPdfValue(match.Groups["summary"].Value);
+        record.AccountTime = ParseDateTimeOrNull(hasTime ? $"{match.Groups["date"].Value} {match.Groups["time"].Value}" : match.Groups["date"].Value);
+        record.ProductBrief = summary;
         record.TradeMoney = ParseDoubleOrNull(match.Groups["amount"].Value);
         record.Balance = ParseDoubleOrNull(match.Groups["balance"].Value);
         record.OppositeUsername = CleanPdfValue(oppositeName);
         record.LogNum = CleanPdfValue(logNumber);
         record.TradeChannel = CleanPdfValue(channel);
         record.Remark = CleanPdfValue(remark);
-        record.TradeExplain = record.Remark;
 
         SetFlowRaw(record, "日期", match.Groups["date"].Value);
         SetFlowRaw(record, "交易时间", match.Groups["time"].Value);
@@ -4094,7 +4130,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.Remark = note;
-        record.TradeExplain = note;
         record.OppositeUsername = oppositeName;
         record.OppositeAccount = oppositeAccount;
         record.OppositeBank = oppositeBank;
@@ -4549,7 +4584,6 @@ public sealed class PdfImportService : IPdfImportService
         record.ProductName = summary;
         record.TradeChannel = summary;
         record.Remark = remark;
-        record.TradeExplain = remark;
         ApplySignedAmountColumns(record, amount);
 
         SetFlowRaw(record, "交易日期", record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? dateTimeText);
@@ -4599,7 +4633,6 @@ public sealed class PdfImportService : IPdfImportService
         record.OppositeAccount = oppositeAccount;
         record.OppositeBank = oppositeBank;
         record.Remark = remark;
-        record.TradeExplain = remark;
         ApplySignedAmountColumns(record, amount);
 
         SetFlowRaw(record, "记账日期", match.Groups["date"].Value);
@@ -4684,6 +4717,9 @@ public sealed class PdfImportService : IPdfImportService
         SetFlowRaw(record, "交易时间", record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? $"{date} {time}");
         SetFlowRaw(record, "交易类型", record.ProductBrief);
         SetFlowRaw(record, "收/支/其他", direction);
+        SetFlowRaw(record, "收支其他", direction);
+        SetFlowRaw(record, "收支其它", direction);
+        SetFlowRaw(record, "收入支出其他", direction);
         SetFlowRaw(record, "收入支出", direction);
         SetFlowRaw(record, "交易方式", record.CashCheck);
         SetFlowRaw(record, "金额", rawAmount);
@@ -5475,6 +5511,60 @@ public sealed class PdfImportService : IPdfImportService
         return result;
     }
 
+    private static IReadOnlyList<PdfTextLine> SplitAbcEmbeddedRecordLines(IReadOnlyList<PdfTextLine> lines)
+    {
+        var result = new List<PdfTextLine>(lines.Count);
+        foreach (var line in lines)
+        {
+            var parts = SplitAbcEmbeddedRecordText(line.Text);
+            if (parts.Count == 0)
+            {
+                continue;
+            }
+
+            if (parts.Count == 1)
+            {
+                result.Add(line);
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                result.Add(new PdfTextLine(line.PageNumber, line.LineNumber, part));
+            }
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> SplitAbcEmbeddedRecordText(string text)
+    {
+        var cleaned = CleanPdfValue(text);
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return [];
+        }
+
+        var matches = Regex.Matches(cleaned, @"(?<!^)(?=\d{8}\s+(?:\d{6}\s+|(?:结息|利息税)\s+[+-]?\d))");
+        if (matches.Count == 0)
+        {
+            return [cleaned];
+        }
+
+        var indexes = matches.Select(match => match.Index).Prepend(0).Append(cleaned.Length).Distinct().OrderBy(item => item).ToList();
+        var parts = new List<string>();
+        for (var index = 0; index < indexes.Count - 1; index++)
+        {
+            var part = CleanPdfValue(cleaned[indexes[index]..indexes[index + 1]]);
+            if (!string.IsNullOrWhiteSpace(part))
+            {
+                parts.Add(part);
+            }
+        }
+
+        return parts;
+    }
+
     private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupIcbcRecords(IReadOnlyList<PdfTextLine> lines)
     {
         var result = new List<IReadOnlyList<PdfTextLine>>();
@@ -5750,7 +5840,8 @@ public sealed class PdfImportService : IPdfImportService
 
     private static bool IsAbcRecordStart(string text)
     {
-        return Regex.IsMatch(text, @"^\d{8}\s+\d{6}\s+");
+        return Regex.IsMatch(text, @"^\d{8}\s+\d{6}\s+")
+            || Regex.IsMatch(text, @"^\d{8}\s+(?:结息|利息税)\s+[+-]?\d");
     }
 
     private static bool IsPingAnRecordStart(string text)
@@ -5888,8 +5979,13 @@ public sealed class PdfImportService : IPdfImportService
         return IsCommonIgnoredLine(text)
             || text.Contains("中国农业银行账户活期交易明细清单", StringComparison.Ordinal)
             || text.Contains("户名：", StringComparison.Ordinal)
+            || text.Contains("户名:", StringComparison.Ordinal)
             || text.Contains("币种：", StringComparison.Ordinal)
+            || text.Contains("币种:", StringComparison.Ordinal)
             || text.Contains("起止日期：", StringComparison.Ordinal)
+            || text.Contains("起止日期:", StringComparison.Ordinal)
+            || text.Contains("电子流水号：", StringComparison.Ordinal)
+            || text.Contains("电子流水号:", StringComparison.Ordinal)
             || text.Contains("交易日期 交易时间", StringComparison.Ordinal)
             || text.Contains("明细内容仅供参考", StringComparison.Ordinal);
     }
@@ -6441,6 +6537,36 @@ public sealed class PdfImportService : IPdfImportService
             CleanPdfValue(tokens[logIndex]),
             channelIndex < tokens.Count ? CleanPdfValue(tokens[channelIndex]) : string.Empty,
             CleanPdfValue(string.Join(' ', tokens.Skip(channelIndex + 1))));
+    }
+
+    private static string RemoveAbcHeaderTail(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var match = Regex.Match(text, @"(?:^|\s)户名[:：]\s*.*?(?:币种|起止日期|账户|汇钞标识|电子流水号)[:：]");
+        if (!match.Success)
+        {
+            match = Regex.Match(text, @"(?:^|\s)(?:币种|起止日期|账户|汇钞标识|电子流水号)[:：]\s*.*?(?:账户|汇钞标识|电子流水号)[:：]");
+        }
+
+        return match.Success ? CleanPdfValue(text[..match.Index]) : text;
+    }
+
+    private static string GetAbcHeaderValue(string text, string label)
+    {
+        var match = Regex.Match(
+            text,
+            $@"{Regex.Escape(label)}[:：]\s*(?<value>.*?)(?=\s+(?:户名|账户|币种|汇钞标识|起止日期|电子流水号)[:：]|$)");
+        return match.Success ? CleanPdfValue(match.Groups["value"].Value) : string.Empty;
+    }
+
+    private static bool IsAbcInterestSummary(string summary)
+    {
+        return summary is "结息" or "利息税";
     }
 
     private static (string Note, string OppositeName, string OppositeAccount, string OppositeBank) SplitPingAnCounterparty(IReadOnlyList<string> tokens)
@@ -7184,6 +7310,66 @@ public sealed class PdfImportService : IPdfImportService
         return $"{match.Groups["date"].Value} {digits[..2]}:{digits.Substring(2, 2)}:{digits.Substring(4, 2)}";
     }
 
+    private static void FillMissingPdfRecordTimes(IList<FlowRecord> records, Bank bank)
+    {
+        var groups = records
+            .Select((record, index) => new { record, index })
+            .Where(item => item.record.AccountTime.HasValue && item.record.AccountTime.Value.TimeOfDay == TimeSpan.Zero)
+            .GroupBy(item => item.record.AccountTime!.Value.Date)
+            .OrderBy(group => group.Key);
+
+        foreach (var group in groups)
+        {
+            var items = group.OrderBy(item => item.index).ToList();
+            var seconds = CreateSortedRandomSeconds(bank.Name, group.Key, items.Count);
+            for (var index = 0; index < items.Count; index++)
+            {
+                var accountTime = group.Key.AddSeconds(seconds[index]);
+                items[index].record.AccountTime = accountTime;
+                SetGeneratedRecordTimeRawFields(items[index].record, accountTime);
+            }
+        }
+    }
+
+    private static IReadOnlyList<int> CreateSortedRandomSeconds(string bankName, DateTime date, int count)
+    {
+        const int startSecond = 8 * 60 * 60;
+        const int endSecond = 21 * 60 * 60;
+        var random = new Random(CreateStableTimeSeed(bankName, date, count));
+        return Enumerable.Range(0, count)
+            .Select(_ => random.Next(startSecond, endSecond + 1))
+            .OrderBy(second => second)
+            .ToList();
+    }
+
+    private static int CreateStableTimeSeed(string bankName, DateTime date, int count)
+    {
+        unchecked
+        {
+            var seed = 17;
+            var text = $"{bankName}|{date:yyyyMMdd}|{count}";
+            foreach (var character in text)
+            {
+                seed = (seed * 31) + character;
+            }
+
+            return seed;
+        }
+    }
+
+    private static void SetGeneratedRecordTimeRawFields(FlowRecord record, DateTime accountTime)
+    {
+        var text = accountTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        SetFlowRaw(record, "日期", text);
+        SetFlowRaw(record, "时间", text);
+        SetFlowRaw(record, "交易日期", text);
+        SetFlowRaw(record, "交易时间", text);
+        SetFlowRaw(record, "记账日期", text);
+        SetFlowRaw(record, "记账时间", text);
+        SetFlowRaw(record, "记帐日期", text);
+        SetFlowRaw(record, "记帐时间", text);
+    }
+
     private static void InferCiticMoneyDirections(IList<FlowRecord> records)
     {
         double? previousBalance = null;
@@ -7531,6 +7717,7 @@ public sealed class PdfImportService : IPdfImportService
             previousRecord = record;
         }
 
+        FillMissingPdfRecordTimes(result.FlowRecords, bank);
         ReindexFlowRecords(result.FlowRecords);
         if (result.FlowRecords.Count == 0 && !result.HasBlockingErrors)
         {

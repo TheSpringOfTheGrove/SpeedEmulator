@@ -6,9 +6,16 @@ public static class ExcelColumnFieldResolver
 {
     public static (string? Field, string Type) ResolveFlowRecordField(string bankName, string columnName)
     {
+        var normalizedName = NormalizeColumnName(columnName);
+        if (IsWechatBankName(bankName)
+            && normalizedName is "收支其他" or "收支其它" or "收入支出其他" or "收/支/其他")
+        {
+            return (nameof(FlowRecord.IncomeAttribute), "Text");
+        }
+
         if (IsPostalBankName(bankName))
         {
-            return NormalizeColumnName(columnName) switch
+            return normalizedName switch
             {
                 "交易方式" => (nameof(FlowRecord.TradeChannel), "Text"),
                 "摘要" or "交易摘要" => (nameof(FlowRecord.Remark), "Text"),
@@ -226,5 +233,10 @@ public static class ExcelColumnFieldResolver
     {
         return bankName.Contains("邮政", StringComparison.Ordinal)
             || bankName.Contains("邮储", StringComparison.Ordinal);
+    }
+
+    private static bool IsWechatBankName(string bankName)
+    {
+        return bankName.Contains("微信", StringComparison.Ordinal);
     }
 }

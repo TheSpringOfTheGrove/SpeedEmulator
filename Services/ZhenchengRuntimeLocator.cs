@@ -9,7 +9,7 @@ public static class ZhenchengRuntimeLocator
     public const string ProjectRuntimeDirectory = "VendorRuntime\\Zhencheng";
     public const string MainDllName = "\u771F\u8BDA\u8D22\u52A1\u8F6F\u4EF6.dll";
 
-    private const string DefaultVendorDir = "D:\\\u771F\u8BDA\u8D22\u52A1\u8F6F\u4EF6";
+    private const string CurrentInstallVendorDir = "C:\\Program Files\\\u771F\u8BDA\u8D22\u52A1\u8F6F\u4EF6";
 
     public static string ResolveRequired()
     {
@@ -35,11 +35,13 @@ public static class ZhenchengRuntimeLocator
     {
         var candidates = new List<string>();
         AddIfNotBlank(candidates, Environment.GetEnvironmentVariable(VendorDirEnvName));
+        // During development, compare and synchronize against the currently installed
+        // vendor runtime. Bundled copies remain fallbacks for deployed builds.
+        AddIfNotBlank(candidates, CurrentInstallVendorDir);
         AddIfNotBlank(candidates, Path.Combine(AppContext.BaseDirectory, OutputDirectoryName));
         AddIfNotBlank(candidates, Path.Combine(AppContext.BaseDirectory, ProjectRuntimeDirectory));
         AddIfNotBlank(candidates, Path.Combine(Directory.GetCurrentDirectory(), OutputDirectoryName));
         AddIfNotBlank(candidates, Path.Combine(Directory.GetCurrentDirectory(), ProjectRuntimeDirectory));
-        AddIfNotBlank(candidates, DefaultVendorDir);
         return candidates;
     }
 

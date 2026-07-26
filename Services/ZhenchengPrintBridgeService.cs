@@ -1017,9 +1017,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly Type flowType;
         private readonly Type templateType;
         private readonly Type configType;
+        private readonly Type? pRectType;
         private readonly Type flowListType;
         private readonly MethodInfo configFactory;
         private readonly MethodInfo renderFactory;
+        private readonly MethodInfo? vendorGeneratePdfFileMethod;
+        private readonly MethodInfo? stimulsoftExportMethod;
+        private readonly MethodInfo? stimulsoftImportTemplateDataMethod;
+        private readonly MethodInfo? vendorApplicationExportMethod;
+        private readonly MethodInfo? vendorSignedPdfMethod;
         private readonly MethodInfo? templateListMethod;
         private readonly MethodInfo generatePdfMethod;
 
@@ -1035,17 +1041,48 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Environment.SetEnvironmentVariable(
                     "PATH",
                     vendorDir + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty));
-                CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
-
                 loadContext = new VendorLoadContext(mainDll);
                 mainAssembly = loadContext.LoadFromAssemblyPath(mainDll);
-                bankUserType = RequireType("MainEntry.entity.BankUser");
-                flowType = RequireType("MainEntry.entity.GenerateFlowRecord");
-                templateType = RequireType("MainEntry.entity.PDFTemplate");
-                configType = RequireType("MainEntry.entity.PdfConfig.PDFConfig");
+                if (mainAssembly.EntryPoint?.DeclaringType is { } entryPointType)
+                {
+                    RuntimeHelpers.RunClassConstructor(entryPointType.TypeHandle);
+                }
+                var coreAssembly = LoadVendorAssemblyIfPresent("caiwu-core.dll");
+                foreach (var stimulsoftDll in Directory.EnumerateFiles(vendorDir, "Stimulsoft*.dll"))
+                {
+                    LoadVendorAssemblyIfPresent(Path.GetFileName(stimulsoftDll));
+                }
+                var runtimeAssemblies = loadContext.Assemblies
+                    .Append(mainAssembly)
+                    .Concat(coreAssembly is null ? [] : [coreAssembly])
+                    .Distinct()
+                    .ToList();
+                bankUserType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.BankUser", "caiwu_core.entity.BankUser");
+                flowType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.GenerateFlowRecord", "caiwu_core.entity.GenerateFlowRecord");
+                templateType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.PDFTemplate", "caiwu_core.entity.PDFTemplate");
+                configType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.PdfConfig.PDFConfig", "caiwu_core.entity.PdfConfig.PDFConfig");
+                pRectType = ResolveRuntimeTypeOrDefault(runtimeAssemblies, "MainEntry.entity.PRect", "caiwu_core.entity.PRect");
                 flowListType = typeof(List<>).MakeGenericType(flowType);
 
-                var types = GetLoadableTypes(mainAssembly).ToList();
+                var types = GetRuntimeTypes(runtimeAssemblies).ToList();
+                vendorApplicationExportMethod = GetLoadableTypes(mainAssembly)
+                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    .FirstOrDefault(IsVendorApplicationExportMethod);
+                vendorSignedPdfMethod = pRectType is null
+                    ? null
+                    : types.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                        .Where(method =>
+                        {
+                            var parameters = method.GetParameters();
+                            return parameters.Length == 5
+                                && method.DeclaringType?.Assembly == pRectType.Assembly
+                                && parameters[0].ParameterType == typeof(Stream)
+                                && parameters[1].ParameterType == typeof(Stream).MakeByRefType()
+                                && parameters[2].ParameterType == pRectType
+                                && parameters[3].ParameterType == typeof(string)
+                                && parameters[4].ParameterType == typeof(string);
+                        })
+                        .FirstOrDefault(method => method.Name.Length == 1 && method.Name[0] == '\u0006');
                 templateListMethod = FindTemplateListMethod(types);
                 configFactory = types
                     .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
@@ -1057,6 +1094,28 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                 renderFactory = FindRenderFactory(types)
                     ?? throw new MissingMethodException("PDF render factory was not found.");
+                var pdfUtilType = ResolveRuntimeTypeOrDefault(
+                    runtimeAssemblies,
+                    "MainEntry.utils.PdfUtil",
+                    "caiwu_core.utils.PdfUtil");
+                vendorGeneratePdfFileMethod = FindVendorGeneratePdfFileMethod(
+                    pdfUtilType is null ? types : types.Prepend(pdfUtilType).ToList());
+                var isolatedPdfEditorType = ResolveRuntimeTypeOrDefault(
+                    runtimeAssemblies,
+                    "MainEntry.utils.PdfEditorCoreUtil",
+                    "caiwu_core.utils.PdfEditorCoreUtil");
+                stimulsoftExportMethod = isolatedPdfEditorType?
+                    .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                    .FirstOrDefault(DefaultStimulsoftExporter.IsStimulsoftExportMethod)
+                    ?? types
+                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                    .FirstOrDefault(DefaultStimulsoftExporter.IsStimulsoftExportMethod);
+                stimulsoftImportTemplateDataMethod = isolatedPdfEditorType?
+                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .FirstOrDefault(method => method.Name == "ImportTemplateData"
+                        && method.ReturnType == typeof(string)
+                        && method.GetParameters() is [{ ParameterType: var parameterType }]
+                        && parameterType == typeof(byte[]));
 
                 var questPdfAssembly = LoadQuestPdfAssembly();
                 SetQuestPdfLicense(questPdfAssembly);
@@ -1095,6 +1154,36 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                     try
                     {
+                        if (string.Equals(context.Template.Name, "\u5FAE\u4FE1\u8F6C\u8D26\u7535\u5B50\u51ED\u8BC1", StringComparison.Ordinal))
+                        {
+                            QuestPdfPrintService.ExportWeChatTransferCertificate(context, path);
+                            return File.Exists(path) && new FileInfo(path).Length > 0;
+                        }
+
+                        if (DefaultStimulsoftExporter.ExportOrThrow(
+                                vendorDir,
+                                CreateRenderContext(context, resolvedTemplate),
+                                path))
+                        {
+                            return true;
+                        }
+
+                        if (stimulsoftExportMethod is not null)
+                        {
+                            InitializeVendorExportType(stimulsoftExportMethod);
+                            var vendorBankUser = CreateVendorBankUser(context);
+                            var vendorRecords = CreateVendorFlowRecords(context);
+                            ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, vendorBankUser, vendorRecords);
+                            var vendorTemplate = resolvedTemplate.Template
+                                ?? CreateVendorTemplate(context, resolvedTemplate, resolvedTemplate.PageRows);
+                            var sourcePdfData = PrepareStimulsoftPdfData(
+                                context,
+                                FirstNotBlank(resolvedTemplate.PdfData, context.Template.PdfData));
+                            Set(vendorTemplate, "PdfData", sourcePdfData);
+                            stimulsoftExportMethod.Invoke(null, [vendorBankUser, vendorRecords, vendorTemplate, path]);
+                            return File.Exists(path) && new FileInfo(path).Length > 0;
+                        }
+
                         return DefaultStimulsoftExporter.ExportOrThrow(
                             vendorDir,
                             CreateRenderContext(context, resolvedTemplate),
@@ -1118,6 +1207,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
                     if (!IsDefaultQuestPdfBridgeDisabled()
                         && !IsAgriculturalBankPersonalPaperTemplate(context)
+                        && !ShouldUseVendorCompletePdfPipeline(context)
                         && !ShouldUseIcbcFallbackStampCode(context))
                     {
                         try
@@ -1522,6 +1612,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
 
                     var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
+                    if (ShouldUseVendorCompletePdfPipeline(context)
+                        && TryGenerateWithVendorCompletePdfPipeline(bankUser, records, template, path))
+                    {
+                        NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+                        return true;
+                    }
+
                     var document = renderFactory.Invoke(null, [bankUser, records, template]);
                     if (document is null)
                     {
@@ -1531,6 +1628,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     NormalizeVendorDynamicImageDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, path]);
                     NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+                    ApplyVendorDigitalSignature(context, path);
                     return true;
                 }
                 catch (Exception ex) when (ShouldRetryVendorQuestPdfWithFewerRows(context, ex, pageRows))
@@ -1546,6 +1644,128 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             return false;
+        }
+
+        private bool TryGenerateWithVendorCompletePdfPipeline(
+            object bankUser,
+            object records,
+            object template,
+            string path)
+        {
+            if (vendorGeneratePdfFileMethod is null)
+            {
+                return false;
+            }
+
+            var result = vendorGeneratePdfFileMethod.Invoke(null, [bankUser, records, template, path]);
+            if (result is false)
+            {
+                throw new InvalidOperationException("Vendor complete PDF pipeline returned false.");
+            }
+
+            if (!File.Exists(path) || new FileInfo(path).Length == 0)
+            {
+                throw new InvalidOperationException("Vendor complete PDF pipeline did not create a PDF file.");
+            }
+
+            return true;
+        }
+
+        private void ApplyVendorDigitalSignature(PrintRenderContext context, string path)
+        {
+            if (!ShouldUseVendorCompletePdfPipeline(context))
+            {
+                return;
+            }
+
+            if (vendorSignedPdfMethod is null || pRectType is null)
+            {
+                throw new MissingMethodException("Vendor digital signature method was not found.");
+            }
+
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException("PDF to be digitally signed was not found.", path);
+            }
+
+            var stampPath = ResolveVendorSignedStampPath(context);
+            if (string.IsNullOrWhiteSpace(stampPath))
+            {
+                throw new FileNotFoundException("Vendor signed stamp image was not found.");
+            }
+
+            var rect = Activator.CreateInstance(pRectType)
+                ?? throw new InvalidOperationException("Vendor signature rectangle was not created.");
+            var width = context.Template.Config.SealWidth > 0 ? context.Template.Config.SealWidth : 86d;
+            Set(rect, "X", context.Template.Config.SealRight > 0 ? context.Template.Config.SealRight : 70d);
+            Set(rect, "Y", Math.Max(0d, context.Template.Config.SealBottom));
+            Set(rect, "Width", width);
+            Set(rect, "Height", width);
+
+            var tempPath = path + ".signed-" + Guid.NewGuid().ToString("N") + ".pdf";
+            try
+            {
+                using var input = File.OpenRead(path);
+                object?[] arguments = [input, null, rect, stampPath, "电子签章"];
+                vendorSignedPdfMethod.Invoke(null, arguments);
+                if (arguments[1] is not Stream signedStream)
+                {
+                    throw new InvalidOperationException("Vendor signature pipeline did not return a PDF stream.");
+                }
+
+                using (signedStream)
+                using (var output = File.Create(tempPath))
+                {
+                    signedStream.Position = 0;
+                    signedStream.CopyTo(output);
+                }
+
+                File.Move(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteFile(tempPath);
+            }
+        }
+
+        private static void InitializeVendorExportType(MethodInfo method)
+        {
+            if (method.DeclaringType is not { } declaringType)
+            {
+                return;
+            }
+
+            RuntimeHelpers.RunClassConstructor(declaringType.TypeHandle);
+            foreach (var initializer in declaringType
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Where(candidate => !candidate.IsSpecialName
+                    && candidate.ReturnType == typeof(void)
+                    && candidate.GetParameters().Length == 0))
+            {
+                try
+                {
+                    initializer.Invoke(null, null);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static bool ShouldUseVendorCompletePdfPipeline(PrintRenderContext context)
+        {
+            var templateName = context.Template.Name;
+            if (templateName.Contains("微信个人版", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var isPostal = templateName.Contains("邮政", StringComparison.Ordinal)
+                || context.Bank.Name.Contains("邮政", StringComparison.Ordinal)
+                || context.BankUser.BankName.Contains("邮政", StringComparison.Ordinal);
+            return isPostal
+                && templateName.Contains("个人", StringComparison.Ordinal)
+                && templateName.Contains("电子", StringComparison.Ordinal);
         }
 
         private void ExportIcbcPerPageFallbackStampCodes(
@@ -1964,10 +2184,49 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 : fallback;
         }
 
-        private Type RequireType(string fullName)
+        private Assembly? LoadVendorAssemblyIfPresent(string assemblyFileName)
         {
-            return mainAssembly.GetType(fullName, throwOnError: true)
-                ?? throw new TypeLoadException(fullName);
+            var path = Path.Combine(vendorDir, assemblyFileName);
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var assemblyName = AssemblyName.GetAssemblyName(path).Name;
+            return loadContext.Assemblies.FirstOrDefault(assembly =>
+                string.Equals(assembly.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase))
+                ?? loadContext.LoadFromAssemblyPath(path);
+        }
+
+        private MethodInfo? FindVendorGeneratePdfFileMethod(IReadOnlyCollection<Type> types)
+        {
+            return types
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                .FirstOrDefault(method =>
+                {
+                    if (!string.Equals(method.Name, "GeneratePDFFile", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 4
+                        && parameters[0].ParameterType == bankUserType
+                        && parameters[1].ParameterType == flowListType
+                        && parameters[2].ParameterType == templateType
+                        && parameters[3].ParameterType == typeof(string);
+                });
+        }
+
+        private bool IsVendorApplicationExportMethod(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            return method.ReturnType == typeof(void)
+                && parameters.Length == 4
+                && parameters[0].ParameterType == bankUserType
+                && parameters[1].ParameterType == flowListType
+                && parameters[2].ParameterType == templateType
+                && parameters[3].ParameterType == typeof(string);
         }
 
         private static PrintRenderContext CreateRenderContext(PrintRenderContext context, ResolvedTemplate resolvedTemplate)
@@ -2016,6 +2275,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             this.vendorDir = vendorDir;
             RegisterResolver(vendorDir);
+            LoadOptionalAssemblies(vendorDir, "caiwu-core.dll");
             LoadOptionalAssemblies(vendorDir, "QuestPDF.dll");
             LoadOptionalAssemblies(vendorDir, "QuestPdfSkia.dll");
             LoadOptionalAssemblies(vendorDir, "SkiaSharp*.dll");
@@ -2034,14 +2294,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     return false;
                 }
             }) ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(mainDll);
+            if (mainAssembly.EntryPoint?.DeclaringType is { } entryPointType)
+            {
+                RuntimeHelpers.RunClassConstructor(entryPointType.TypeHandle);
+            }
 
-            bankUserType = mainAssembly.GetType("MainEntry.entity.BankUser", throwOnError: true)!;
-            flowType = mainAssembly.GetType("MainEntry.entity.GenerateFlowRecord", throwOnError: true)!;
-            templateType = mainAssembly.GetType("MainEntry.entity.PDFTemplate", throwOnError: true)!;
-            configType = mainAssembly.GetType("MainEntry.entity.PdfConfig.PDFConfig", throwOnError: true)!;
+            var runtimeAssemblies = AssemblyLoadContext.Default.Assemblies.Append(mainAssembly).Distinct().ToList();
+            bankUserType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.BankUser", "caiwu_core.entity.BankUser");
+            flowType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.GenerateFlowRecord", "caiwu_core.entity.GenerateFlowRecord");
+            templateType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.PDFTemplate", "caiwu_core.entity.PDFTemplate");
+            configType = ResolveRuntimeType(runtimeAssemblies, "MainEntry.entity.PdfConfig.PDFConfig", "caiwu_core.entity.PdfConfig.PDFConfig");
             flowListType = typeof(List<>).MakeGenericType(flowType);
 
-            var types = GetLoadableTypes(mainAssembly).ToList();
+            var types = GetRuntimeTypes(runtimeAssemblies).ToList();
             templateListMethod = FindTemplateListMethod(types);
             configFactory = types
                 .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
@@ -2609,13 +2874,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly Type templateType;
         private readonly Type flowListType;
         private readonly MethodInfo exportMethod;
-        private readonly MethodInfo templateDesignerMethod;
+        private readonly MethodInfo? templateDesignerMethod;
         private readonly Assembly mainAssembly;
 
         private DefaultStimulsoftExporter(string vendorDir)
         {
             this.vendorDir = vendorDir;
             RegisterResolver(vendorDir);
+            LoadOptionalAssemblies(vendorDir, "caiwu-core.dll");
             LoadOptionalAssemblies(vendorDir, "Stimulsoft*.dll");
 
             var mainDll = Path.Combine(vendorDir, ZhenchengRuntimeLocator.MainDllName);
@@ -2630,24 +2896,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     return false;
                 }
             }) ?? AssemblyLoadContext.Default.LoadFromAssemblyPath(mainDll);
+            if (mainAssembly.EntryPoint?.DeclaringType is { } entryPointType)
+            {
+                RuntimeHelpers.RunClassConstructor(entryPointType.TypeHandle);
+            }
 
-            bankUserType = mainAssembly.GetType("MainEntry.entity.BankUser", throwOnError: true)!;
-            flowType = mainAssembly.GetType("MainEntry.entity.GenerateFlowRecord", throwOnError: true)!;
-            templateType = mainAssembly.GetType("MainEntry.entity.PDFTemplate", throwOnError: true)!;
-            flowListType = typeof(List<>).MakeGenericType(flowType);
-            exportMethod = GetLoadableTypes(mainAssembly)
+            var runtimeAssemblies = AssemblyLoadContext.Default.Assemblies.Append(mainAssembly).Distinct().ToList();
+            var types = GetRuntimeTypes(runtimeAssemblies).ToList();
+            var pdfEditorType = ResolveRuntimeTypeOrDefault(
+                runtimeAssemblies,
+                "MainEntry.utils.PdfEditorCoreUtil",
+                "caiwu_core.utils.PdfEditorCoreUtil");
+            exportMethod = (pdfEditorType is null
+                    ? null
+                    : pdfEditorType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                        .FirstOrDefault(IsStimulsoftExportMethod))
+                ?? types
                 .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                .FirstOrDefault(method =>
-                {
-                    var parameters = method.GetParameters();
-                    return method.ReturnType == typeof(void)
-                        && parameters.Length == 4
-                        && parameters[0].ParameterType == bankUserType
-                        && parameters[1].ParameterType == flowListType
-                        && parameters[2].ParameterType == typeof(Stream)
-                        && parameters[3].ParameterType == typeof(string);
-                })
+                .FirstOrDefault(IsStimulsoftExportMethod)
                 ?? throw new MissingMethodException("Vendor Stimulsoft export method was not found.");
+            var exportParameters = exportMethod.GetParameters();
+            bankUserType = exportParameters[0].ParameterType;
+            flowListType = exportParameters[1].ParameterType;
+            flowType = flowListType.GetGenericArguments()[0];
             templateDesignerMethod = exportMethod.DeclaringType?
                 .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
                 .FirstOrDefault(method =>
@@ -2655,11 +2926,36 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     var parameters = method.GetParameters();
                     return method.ReturnType == typeof(void)
                         && parameters.Length == 1
-                        && parameters[0].ParameterType == templateType;
-                })
-                ?? throw new MissingMethodException("Vendor Stimulsoft template designer method was not found.");
-
+                        && string.Equals(parameters[0].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal);
+                });
+            templateType = templateDesignerMethod?.GetParameters()[0].ParameterType
+                ?? (typeof(Stream).IsAssignableFrom(exportParameters[2].ParameterType)
+                    ? typeof(object)
+                    : exportParameters[2].ParameterType);
             InitializeStimulsoftPrintRuntime();
+        }
+
+        internal static bool IsStimulsoftExportMethod(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            var usesTemplateStream = parameters.Length == 4
+                && typeof(Stream).IsAssignableFrom(parameters[2].ParameterType);
+            var signatureMatches = method.ReturnType == typeof(void)
+                && parameters.Length == 4
+                && (usesTemplateStream || string.Equals(method.Name, "Generate", StringComparison.Ordinal))
+                && string.Equals(parameters[0].ParameterType.Name, "BankUser", StringComparison.Ordinal)
+                && parameters[1].ParameterType.FullName?.Contains("GenerateFlowRecord", StringComparison.Ordinal) == true
+                && (string.Equals(parameters[2].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal)
+                    || usesTemplateStream)
+                && parameters[3].ParameterType == typeof(string);
+            if (!signatureMatches || !usesTemplateStream)
+            {
+                return signatureMatches;
+            }
+
+            return method.DeclaringType?.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Any(candidate => candidate.ReturnType == typeof(void)
+                    && candidate.GetParameters() is [{ ParameterType.Name: "PDFTemplate" }]) == true;
         }
 
         public static bool TryExport(string vendorDir, PrintRenderContext context, string path)
@@ -2839,12 +3135,58 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 }
             }
 
+            RegisterStimulsoftTemplateFonts();
             RegisterReportUtilityFunctions();
+        }
+
+        private void RegisterStimulsoftTemplateFonts()
+        {
+            var fontCollectionType = AssemblyLoadContext.Default.Assemblies
+                .Select(assembly => assembly.GetType("Stimulsoft.Base.StiFontCollection", false))
+                .FirstOrDefault(type => type is not null);
+            var addFontFile = fontCollectionType?
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(method => method.Name == "AddFontFile"
+                    && method.GetParameters() is [{ ParameterType: var parameterType }, _, _]
+                    && parameterType == typeof(string));
+            if (addFontFile is null)
+            {
+                return;
+            }
+
+            foreach (var directory in new[]
+            {
+                Path.Combine(vendorDir, "static", "fonts"),
+                Path.Combine(vendorDir, "LatoFont")
+            })
+            {
+                if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                foreach (var fontPath in Directory.EnumerateFiles(directory)
+                    .Where(path => path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)
+                        || path.EndsWith(".ttc", StringComparison.OrdinalIgnoreCase)
+                        || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        addFontFile.Invoke(null, [fontPath, null, null]);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
         }
 
         private void RegisterReportUtilityFunctions()
         {
-            var reportUtilsType = mainAssembly.GetType("MainEntry.utils.ReportUtils");
+            var reportUtilsType = ResolveRuntimeTypeOrDefault(
+                AssemblyLoadContext.Default.Assemblies.Append(mainAssembly),
+                "MainEntry.utils.ReportUtils",
+                "caiwu_core.utils.ReportUtils");
             if (reportUtilsType is null)
             {
                 return;
@@ -2915,12 +3257,25 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
             var pdfData = PrepareStimulsoftPdfData(context, context.Template.PdfData);
-            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(pdfData));
-            exportMethod.Invoke(null, [bankUser, records, stream, path]);
+            if (typeof(Stream).IsAssignableFrom(exportMethod.GetParameters()[2].ParameterType))
+            {
+                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(pdfData));
+                exportMethod.Invoke(null, [bankUser, records, stream, path]);
+            }
+            else
+            {
+                var template = CreateTemplate(context.Template);
+                Set(template, "PdfData", pdfData);
+                exportMethod.Invoke(null, [bankUser, records, template, path]);
+            }
         }
 
         private void OpenTemplateDesigner(PrintTemplate template)
         {
+            if (templateDesignerMethod is null)
+            {
+                throw new MissingMethodException("Vendor Stimulsoft template designer method was not found.");
+            }
             var vendorTemplate = CreateTemplate(template);
             templateDesignerMethod.Invoke(null, [vendorTemplate]);
             CopyTemplateBack(vendorTemplate, template);
@@ -3115,17 +3470,26 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private sealed class VendorLoadContext : AssemblyLoadContext
     {
         private readonly AssemblyDependencyResolver resolver;
+        private readonly string runtimeDirectory;
 
         public VendorLoadContext(string mainAssemblyPath)
             : base(isCollectible: false)
         {
             resolver = new AssemblyDependencyResolver(mainAssemblyPath);
+            runtimeDirectory = Path.GetDirectoryName(mainAssemblyPath)
+                ?? throw new ArgumentException("Vendor runtime path has no directory.", nameof(mainAssemblyPath));
         }
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
             var path = resolver.ResolveAssemblyToPath(assemblyName);
-            return path is null ? null : LoadFromAssemblyPath(path);
+            if (path is not null)
+            {
+                return LoadFromAssemblyPath(path);
+            }
+
+            var siblingPath = Path.Combine(runtimeDirectory, assemblyName.Name + ".dll");
+            return File.Exists(siblingPath) ? LoadFromAssemblyPath(siblingPath) : null;
         }
 
         protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
@@ -3145,6 +3509,79 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             return ex.Types.Where(type => type is not null)!;
         }
+    }
+
+    private static IEnumerable<Type> GetRuntimeTypes(IEnumerable<Assembly> assemblies)
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in assemblies)
+        {
+            var key = GetAssemblyIdentityKey(assembly);
+            if (!visited.Add(key))
+            {
+                continue;
+            }
+
+            foreach (var type in GetLoadableTypes(assembly))
+            {
+                yield return type;
+            }
+        }
+    }
+
+    private static Type ResolveRuntimeType(IEnumerable<Assembly> assemblies, params string[] fullNames)
+    {
+        return ResolveRuntimeTypeOrDefault(assemblies, fullNames)
+            ?? throw new TypeLoadException(string.Join(" / ", fullNames));
+    }
+
+    private static Type? ResolveRuntimeTypeOrDefault(IEnumerable<Assembly> assemblies, params string[] fullNames)
+    {
+        var names = fullNames.Where(name => !string.IsNullOrWhiteSpace(name)).ToArray();
+        foreach (var assembly in assemblies.Distinct())
+        {
+            foreach (var fullName in names)
+            {
+                var type = assembly.GetType(fullName, throwOnError: false);
+                if (type is not null)
+                {
+                    return type;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<Assembly> CollectRuntimeAssemblies(Assembly anchor)
+    {
+        var assemblies = new List<Assembly> { anchor };
+        if (AssemblyLoadContext.GetLoadContext(anchor) is { } loadContext)
+        {
+            assemblies.AddRange(loadContext.Assemblies);
+        }
+
+        return assemblies.Distinct().ToList();
+    }
+
+    private static string GetAssemblyIdentityKey(Assembly assembly)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(assembly.Location)
+                ? assembly.Location
+                : assembly.FullName ?? assembly.GetName().Name ?? RuntimeHelpers.GetHashCode(assembly).ToString(CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return RuntimeHelpers.GetHashCode(assembly).ToString(CultureInfo.InvariantCulture);
+        }
+    }
+
+    private static bool IsVendorPdfConfigType(Type type)
+    {
+        return string.Equals(type.FullName, "MainEntry.entity.PdfConfig.PDFConfig", StringComparison.Ordinal)
+            || string.Equals(type.FullName, "caiwu_core.entity.PdfConfig.PDFConfig", StringComparison.Ordinal);
     }
 
     private static Dictionary<string, object?> CreateValueMap(object source)
@@ -3222,6 +3659,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         BankUser bankUser,
         IReadOnlyDictionary<string, object?> values)
     {
+        var signedStampPath = ResolveVendorSignedStampPath(context);
+        var shouldPrintStamp = bankUser.ShouldPrintSeal || !string.IsNullOrWhiteSpace(signedStampPath);
         var stampCode = ResolveBankUserStampCode(context, bankUser, values);
         var stampBranch = FirstNotBlank(
             bankUser.ChapterBranch,
@@ -3237,8 +3676,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             printBranch = NormalizeAgriculturalPaperPrintBranch(printBranch);
         }
 
-        Set(target, "IsPrintStamp", bankUser.ShouldPrintSeal);
-        Set(target, "ZhangImg", bankUser.ShouldPrintSeal ? FirstNotBlank(bankUser.SealImagePath, GetValue(values, "ZhangImg")) : string.Empty);
+        Set(target, "IsPrintStamp", shouldPrintStamp);
+        Set(target, "ZhangImg", shouldPrintStamp
+            ? FirstNotBlank(signedStampPath, bankUser.SealImagePath, GetValue(values, "ZhangImg"))
+            : string.Empty);
         Set(target, "StampCode", stampCode);
         Set(target, "StampBranch", stampBranch);
         Set(target, "ChapterCode", stampCode);
@@ -3251,6 +3692,31 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "PrintInstitution", resolvedPrintBranch);
         Set(target, "PrintNet", resolvedPrintBranch);
         Set(target, "PrintNetwork", resolvedPrintBranch);
+    }
+
+    private static string ResolveVendorSignedStampPath(PrintRenderContext context)
+    {
+        string? fileName = null;
+        if (context.Template.Name.Contains("微信个人版", StringComparison.Ordinal))
+        {
+            fileName = "微信.png";
+        }
+        else if ((context.Template.Name.Contains("邮政", StringComparison.Ordinal)
+                || context.Bank.Name.Contains("邮政", StringComparison.Ordinal)
+                || context.BankUser.BankName.Contains("邮政", StringComparison.Ordinal))
+            && context.Template.Name.Contains("个人", StringComparison.Ordinal)
+            && context.Template.Name.Contains("电子", StringComparison.Ordinal))
+        {
+            fileName = "邮政个人电子版.png";
+        }
+
+        if (fileName is null)
+        {
+            return string.Empty;
+        }
+
+        var path = Path.Combine(ZhenchengRuntimeLocator.ResolveRequired(), "static", "bank", fileName);
+        return File.Exists(path) ? path : string.Empty;
     }
 
     private static void SetIcbcStampCodeAliases(object target, string stampCode)
@@ -6524,7 +6990,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         try
         {
-            var types = GetLoadableTypes(assembly).ToList();
+            var runtimeAssemblies = CollectRuntimeAssemblies(assembly);
+            var types = GetRuntimeTypes(runtimeAssemblies).ToList();
             var dynamicImageTypes = types.Where(type =>
                 type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Any(field => field.FieldType == typeof(byte[]))
                 && type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Any(field => field.FieldType == typeof(byte[][]))
@@ -6532,7 +6999,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     var parameters = constructor.GetParameters();
                     return parameters.Length >= 1
-                        && string.Equals(parameters[0].ParameterType.FullName, "MainEntry.entity.PdfConfig.PDFConfig", StringComparison.Ordinal);
+                        && IsVendorPdfConfigType(parameters[0].ParameterType);
                 }))
                 .ToList();
             if (IsPrintBridgeDebugEnabledGlobal())
@@ -6545,7 +7012,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 return;
             }
 
-            var resourceName = ResolveVendorString(assembly, -659841973);
+            var resourceName = ResolveVendorString(runtimeAssemblies, -659841973);
             if (string.IsNullOrWhiteSpace(resourceName))
             {
                 resourceName = "alipay.png";
@@ -6619,22 +7086,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
-    private static string? ResolveVendorString(Assembly assembly, int key)
+    private static string? ResolveVendorString(IEnumerable<Assembly> assemblies, int key)
     {
-        try
+        foreach (var assembly in assemblies.Distinct())
         {
-            var method = GetLoadableTypes(assembly)
-                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                .FirstOrDefault(method =>
-                    method.ReturnType == typeof(string)
-                    && method.GetParameters() is [{ ParameterType: var parameterType }]
-                    && parameterType == typeof(int));
-            return method?.Invoke(null, [key]) as string;
+            try
+            {
+                var method = GetLoadableTypes(assembly)
+                    .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                    .FirstOrDefault(method =>
+                        method.ReturnType == typeof(string)
+                        && method.GetParameters() is [{ ParameterType: var parameterType }]
+                        && parameterType == typeof(int));
+                if (method?.Invoke(null, [key]) is string text && !string.IsNullOrWhiteSpace(text))
+                {
+                    return text;
+                }
+            }
+            catch
+            {
+            }
         }
-        catch
-        {
-            return null;
-        }
+
+        return null;
     }
 
     private static string ResolveVendorImagePath(string vendorDir, string resourceName)

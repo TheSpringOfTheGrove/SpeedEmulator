@@ -25,6 +25,8 @@
     <Content Include="db2.db" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="VendorRuntime\Zhencheng\**\*" Exclude="VendorRuntime\Zhencheng\.gitkeep" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- Vendor QuestPDF templates resolve bank logos and seals from AppContext.BaseDirectory/static. -->
+    <Content Include="VendorRuntime\Zhencheng\static\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="static\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -34,7 +36,8 @@
     </Reference>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3405.78" />
     <PackageReference Include="PdfPig" Version="0.1.15" />
-    <PackageReference Include="QuestPDF" Version="2026.6.0" />
+    <PackageReference Include="QuestPDF" Version="2026.7.1" />
+    <PackageReference Include="System.Text.Json" Version="10.0.0" />
     <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
