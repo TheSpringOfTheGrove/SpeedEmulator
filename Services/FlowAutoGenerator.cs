@@ -85,7 +85,7 @@ public sealed class FlowAutoGenerator
     private const double MonthlyClosingBalanceCapRatio = 0.10d;
     private const double MonthlyClosingBalanceTolerance = 1d;
     private const double MonthlyIncomeCapMultiplier = 2d;
-    private const int MinimumExactAmountRepeatGapDays = 3;
+    private const int RequiredRepeatAmountGapDays = 3;
     private const double MinimumPrecisionRepeatGapDays = 7d;
     private const double PreferredPrecisionRepeatGapDays = 30d;
     private const int MaxRuleAmountPoolCacheEntries = 2048;
@@ -538,7 +538,7 @@ public sealed class FlowAutoGenerator
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
         FinalizeConfiguredPrecisionReferenceAmounts(records, openingBalance, random);
-        EnforceMinimumExactAmountRepeatGap(records);
+        EnforceMinimumExactAmountRepeatGap(records, request, random);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("monthly closing final", records);
@@ -823,7 +823,7 @@ public sealed class FlowAutoGenerator
             PruneZeroAmountRecords(records);
         }
 
-        EnforceMinimumExactAmountRepeatGap(records);
+        EnforceMinimumExactAmountRepeatGap(records, request, random);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -875,7 +875,7 @@ public sealed class FlowAutoGenerator
 
         PruneZeroAmountRecords(records);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
-        EnforceMinimumExactAmountRepeatGap(records);
+        EnforceMinimumExactAmountRepeatGap(records, request, Random.Shared);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -946,7 +946,7 @@ public sealed class FlowAutoGenerator
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
-        EnforceMinimumExactAmountRepeatGap(records);
+        EnforceMinimumExactAmountRepeatGap(records, request, random);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -5872,7 +5872,7 @@ public sealed class FlowAutoGenerator
             var normalizedEnd = NormalizeEndDate(end);
             var key = string.Create(
                 CultureInfo.InvariantCulture,
-                $"{start.Date.Ticks}:{normalizedEnd.Date.Ticks}:{rule.TradeWeekend}");
+                $"{start.Date.Ticks}:{normalizedEnd.Date.Ticks}:{rule.StartDay}:{rule.EndDay}:{rule.TradeHoliday}:{rule.TradeWeekend}");
             if (!candidateDatesByRange.TryGetValue(key, out var dates))
             {
                 dates = EnumerateNativeCandidateDates(start, normalizedEnd, rule).ToArray();
@@ -8868,7 +8868,8 @@ public sealed class FlowAutoGenerator
         var monthlyTotals = monthlyPlan.Months
             .Select(month => SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End))))
             .ToArray();
-        if (monthlyTotals.All(total => total <= monthlyPlan.MonthlyIncomeCap + 0.009d))
+        var monthlyCaps = BuildEffectiveMonthlyIncomeCaps(records, monthlyPlan);
+        if (monthlyTotals.Where((total, index) => total > monthlyCaps[index] + 0.009d).Any() is false)
         {
             return false;
         }
@@ -8880,8 +8881,8 @@ public sealed class FlowAutoGenerator
         var originalIncome = SumIncome(records);
         var scheduleState = NativeScheduleState.From(records);
         foreach (var sourceIndex in Enumerable.Range(0, monthlyPlan.Months.Count)
-                     .Where(index => monthlyTotals[index] > monthlyPlan.MonthlyIncomeCap + 0.009d)
-                     .OrderByDescending(index => monthlyTotals[index] - monthlyPlan.MonthlyIncomeCap))
+                     .Where(index => monthlyTotals[index] > monthlyCaps[index] + 0.009d)
+                     .OrderByDescending(index => monthlyTotals[index] - monthlyCaps[index]))
         {
             var source = monthlyPlan.Months[sourceIndex];
             var movableRecords = records
@@ -8901,19 +8902,19 @@ public sealed class FlowAutoGenerator
                 .ToList();
             foreach (var candidate in movableRecords)
             {
-                if (monthlyTotals[sourceIndex] <= monthlyPlan.MonthlyIncomeCap + 0.009d)
+                if (monthlyTotals[sourceIndex] <= monthlyCaps[sourceIndex] + 0.009d)
                 {
                     break;
                 }
 
                 var destinationIndexes = Enumerable.Range(0, monthlyPlan.Months.Count)
                     .Where(index => index != sourceIndex)
-                    .Where(index => monthlyPlan.MonthlyIncomeCap - monthlyTotals[index] >= candidate.Amount - 0.009d)
+                    .Where(index => monthlyCaps[index] - monthlyTotals[index] >= candidate.Amount - 0.009d)
                     .Where(index => scheduleState.GetCandidateDates(
                         monthlyPlan.Months[index].Start,
                         monthlyPlan.Months[index].End,
                         candidate.Rule!).Count > 0)
-                    .OrderBy(index => monthlyTotals[index] / Math.Max(0.01d, monthlyPlan.MonthlyIncomeCap))
+                    .OrderBy(index => monthlyTotals[index] / Math.Max(0.01d, monthlyCaps[index]))
                     .ThenBy(index => index > sourceIndex ? 1 : 0)
                     .ThenBy(_ => random.Next())
                     .ToList();
@@ -8940,11 +8941,11 @@ public sealed class FlowAutoGenerator
 
         var amountToRedistribute = 0d;
         foreach (var sourceIndex in Enumerable.Range(0, monthlyPlan.Months.Count)
-                     .Where(index => monthlyTotals[index] > monthlyPlan.MonthlyIncomeCap + 0.009d)
-                     .OrderByDescending(index => monthlyTotals[index] - monthlyPlan.MonthlyIncomeCap))
+                     .Where(index => monthlyTotals[index] > monthlyCaps[index] + 0.009d)
+                     .OrderByDescending(index => monthlyTotals[index] - monthlyCaps[index]))
         {
             var source = monthlyPlan.Months[sourceIndex];
-            var excess = RoundMoney(monthlyTotals[sourceIndex] - monthlyPlan.MonthlyIncomeCap);
+            var excess = RoundMoney(monthlyTotals[sourceIndex] - monthlyCaps[sourceIndex]);
             var donors = records
                 .Where(item => item.TradeMoney > 0.009d)
                 .Where(item => !IsSystemInterestRecord(item))
@@ -8962,8 +8963,8 @@ public sealed class FlowAutoGenerator
         }
 
         foreach (var destinationIndex in Enumerable.Range(0, monthlyPlan.Months.Count)
-                     .Where(index => monthlyTotals[index] < monthlyPlan.MonthlyIncomeCap - 0.009d)
-                     .OrderBy(index => monthlyTotals[index] / Math.Max(0.01d, monthlyPlan.MonthlyIncomeCap))
+                     .Where(index => monthlyTotals[index] < monthlyCaps[index] - 0.009d)
+                     .OrderBy(index => monthlyTotals[index] / Math.Max(0.01d, monthlyCaps[index]))
                      .ThenBy(_ => random.Next()))
         {
             if (amountToRedistribute <= 0.009d)
@@ -8972,7 +8973,7 @@ public sealed class FlowAutoGenerator
             }
 
             var destination = monthlyPlan.Months[destinationIndex];
-            var room = RoundMoney(monthlyPlan.MonthlyIncomeCap - monthlyTotals[destinationIndex]);
+            var room = RoundMoney(monthlyCaps[destinationIndex] - monthlyTotals[destinationIndex]);
             var requested = RoundMoney(Math.Min(room, amountToRedistribute));
             var recipients = records
                 .Where(item => item.TradeMoney > 0.009d)
@@ -8989,7 +8990,7 @@ public sealed class FlowAutoGenerator
             amountToRedistribute = RoundMoney(amountToRedistribute - added);
         }
 
-        var monthlyCapSatisfied = monthlyTotals.All(total => total <= monthlyPlan.MonthlyIncomeCap + 0.009d);
+        var monthlyCapSatisfied = monthlyTotals.Where((total, index) => total > monthlyCaps[index] + 0.009d).Any() is false;
         var totalPreserved = Math.Abs(SumIncome(records) - originalIncome) <= 0.009d;
         if (!monthlyCapSatisfied || !totalPreserved || amountToRedistribute > 0.009d)
         {
@@ -9007,24 +9008,33 @@ public sealed class FlowAutoGenerator
         return true;
     }
 
-    private static void ValidateActualMonthlyIncomeCap(
+    private static bool ValidateActualMonthlyIncomeCap(
         IReadOnlyList<FlowRecord> records,
         MonthlyAmountPlan monthlyPlan)
     {
-        var violation = monthlyPlan.Months
-            .Select(month => new
+        var monthlyCaps = BuildEffectiveMonthlyIncomeCaps(records, monthlyPlan);
+        return monthlyPlan.Months
+            .Select((month, index) => new
             {
-                Month = month.Start,
-                Income = SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End)))
+                Income = SumIncome(records.Where(item => IsRecordInRange(item, month.Start, month.End))),
+                Cap = monthlyCaps[index]
             })
-            .FirstOrDefault(item => item.Income > monthlyPlan.MonthlyIncomeCap + 0.009d);
-        if (violation is null)
-        {
-            return;
-        }
+            .All(item => item.Income <= item.Cap + 0.009d);
+    }
 
-        throw new InvalidOperationException(
-            $"{violation.Month:yyyy-MM} 月收入 {violation.Income:N2} 超过月均收入 2 倍上限 {monthlyPlan.MonthlyIncomeCap:N2}。请检查该月固定日期收入和每月必出收入的最低金额配置。");
+    private static double[] BuildEffectiveMonthlyIncomeCaps(
+        IEnumerable<FlowRecord> records,
+        MonthlyAmountPlan monthlyPlan)
+    {
+        return monthlyPlan.Months
+            .Select(month =>
+            {
+                var requiredIncome = SumIncome(records
+                    .Where(IsRequiredGeneratedRecord)
+                    .Where(item => IsRecordInRange(item, month.Start, month.End)));
+                return RoundMoney(Math.Max(monthlyPlan.MonthlyIncomeCap, requiredIncome));
+            })
+            .ToArray();
     }
 
     private static bool TryMoveNativeIncomeBundleLater(
@@ -16795,7 +16805,10 @@ public sealed class FlowAutoGenerator
         record.IncomeFlag = sign > 0 ? "C" : "D";
     }
 
-    private static bool EnforceMinimumExactAmountRepeatGap(List<FlowRecord> records)
+    private static bool EnforceMinimumExactAmountRepeatGap(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest? request = null,
+        Random? random = null)
     {
         var candidates = records
             .Where(item => item.AccountTime.HasValue)
@@ -16809,122 +16822,320 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var usageByDate = new Dictionary<(int Sign, long Cents, DateTime Date), int>();
+        var usageByDate = new Dictionary<(int Sign, long IntegerAmount, DateTime Date), int>();
         foreach (var record in candidates)
         {
-            AddExactAmountDateUsage(usageByDate, record);
+            AddIntegerAmountDateUsage(usageByDate, record);
         }
 
-        var candidatesByMonthAndSign = candidates
-            .GroupBy(item =>
-            {
-                var time = item.AccountTime!.Value;
-                return (
-                    Sign: GetAmountSign(item.TradeMoney ?? 0),
-                    Month: new DateTime(time.Year, time.Month, 1));
-            })
-            .ToDictionary(group => group.Key, group => group.ToList());
-
-        var changed = false;
-        for (var pass = 0; pass < 6; pass++)
+        var scheduleState = request is null ? null : NativeScheduleState.From(records);
+        random ??= Random.Shared;
+        var recordBySequence = candidates
+            .Select((record, sequence) => (record, sequence))
+            .ToDictionary(item => item.sequence, item => item.record);
+        var remainingByTime = new SortedSet<(DateTime Time, int Sequence)>(
+            candidates.Select((record, sequence) => (record.AccountTime!.Value, sequence)));
+        var remainingByAmount = new Dictionary<(int Sign, long IntegerAmount), SortedSet<(DateTime Time, int Sequence)>>();
+        foreach (var entry in remainingByTime)
         {
-            var passChanged = false;
-            var repeatedGroups = candidates
-                .GroupBy(CreateSignedAmountKey)
-                .Where(group => group.Count() > 1)
-                .ToList();
-            foreach (var group in repeatedGroups)
+            AddRemainingAmountEntry(remainingByAmount, recordBySequence[entry.Sequence], entry);
+        }
+
+        var moveCounts = new Dictionary<int, int>();
+        var changed = false;
+        while (remainingByTime.Count > 0)
+        {
+            var currentEntry = remainingByTime.Min;
+            remainingByTime.Remove(currentEntry);
+            var current = recordBySequence[currentEntry.Sequence];
+            RemoveRemainingAmountEntry(remainingByAmount, current, currentEntry);
+            var currentKey = CreateSignedIntegerAmountKey(current);
+            if (currentKey.Sign == 0 || !current.AccountTime.HasValue)
             {
-                var ordered = group
-                    .OrderBy(item => item.AccountTime)
-                    .ThenBy(item => item.Index)
-                    .ToList();
-                for (var index = 1; index < ordered.Count; index++)
+                continue;
+            }
+
+            while (TryGetForwardSameAmountConflict(
+                       remainingByAmount,
+                       currentKey,
+                       current.AccountTime.Value,
+                       out var conflictEntry))
+            {
+                var conflict = recordBySequence[conflictEntry.Sequence];
+                // Prefer changing only the later optional reference record.  The old
+                // paired adjustment preserves the total exactly, but it can get
+                // stuck when a narrow natural-consumption slice (such as 10~29)
+                // already occupies every nearby counterpart value.
+                RemoveRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                if (TryReselectRepeatedIntegerAmount(conflict, usageByDate, random))
                 {
-                    var earlier = ordered[index - 1];
-                    var later = ordered[index];
-                    if (CreateSignedAmountKey(earlier) != CreateSignedAmountKey(later)
-                        || !AreAccountTimesWithinRepeatGap(earlier, later))
-                    {
-                        continue;
-                    }
-
-                    var earlierTime = earlier.AccountTime!.Value;
-                    var laterTime = later.AccountTime!.Value;
-                    var sameMonth = earlierTime.Year == laterTime.Year && earlierTime.Month == laterTime.Month;
-                    if (sameMonth
-                        && TryAdjustAmountPairPreservingTotals(earlier, later, usageByDate))
-                    {
-                        passChanged = true;
-                        continue;
-                    }
-
-                    var adjustedWithMonthlyPartner = TryAdjustRepeatedAmountWithMonthlyPartner(
-                            later,
-                            earlier,
-                            candidatesByMonthAndSign,
-                            usageByDate)
-                        || TryAdjustRepeatedAmountWithMonthlyPartner(
-                            earlier,
-                            later,
-                            candidatesByMonthAndSign,
-                            usageByDate);
-                    if (adjustedWithMonthlyPartner)
-                    {
-                        passChanged = true;
-                    }
+                    AddRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                    changed = true;
+                    continue;
                 }
-            }
 
-            if (!passChanged)
-            {
-                break;
-            }
+                AddRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                if (TryAdjustFutureAmountPair(
+                        remainingByTime,
+                        remainingByAmount,
+                        recordBySequence,
+                        conflictEntry,
+                        usageByDate,
+                        random))
+                {
+                    changed = true;
+                    continue;
+                }
 
-            changed = true;
+                if (request is null
+                    || scheduleState is null
+                    || moveCounts.GetValueOrDefault(conflictEntry.Sequence) >= 2)
+                {
+                    break;
+                }
+
+                RemoveRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                remainingByTime.Remove(conflictEntry);
+                if (!TryMoveRepeatedIntegerAmountRecordForward(
+                        request,
+                        conflict,
+                        usageByDate,
+                        scheduleState,
+                        random))
+                {
+                    remainingByTime.Add(conflictEntry);
+                    AddRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                    break;
+                }
+
+                changed = true;
+                moveCounts[conflictEntry.Sequence] = moveCounts.GetValueOrDefault(conflictEntry.Sequence) + 1;
+                var movedEntry = (conflict.AccountTime!.Value, conflictEntry.Sequence);
+                remainingByTime.Add(movedEntry);
+                AddRemainingAmountEntry(remainingByAmount, conflict, movedEntry);
+            }
         }
 
         return changed;
     }
 
-    private static bool TryAdjustRepeatedAmountWithMonthlyPartner(
-        FlowRecord repeatedRecord,
-        FlowRecord collidingRecord,
-        IReadOnlyDictionary<(int Sign, DateTime Month), List<FlowRecord>> candidatesByMonthAndSign,
-        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate)
+    private static bool TryReselectRepeatedIntegerAmount(
+        FlowRecord record,
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
+        Random random)
     {
-        if (!repeatedRecord.AccountTime.HasValue)
+        if (!record.AccountTime.HasValue || !IsGeneratedReferenceRecord(record))
         {
             return false;
         }
 
-        var sign = GetAmountSign(repeatedRecord.TradeMoney ?? 0);
-        var time = repeatedRecord.AccountTime.Value;
-        var key = (sign, new DateTime(time.Year, time.Month, 1));
-        if (!candidatesByMonthAndSign.TryGetValue(key, out var monthlyCandidates))
+        var sign = GetAmountSign(record.TradeMoney ?? 0);
+        if (sign == 0)
         {
             return false;
         }
 
-        foreach (var partner in monthlyCandidates
-                     .Where(item => !ReferenceEquals(item, repeatedRecord)
-                         && !ReferenceEquals(item, collidingRecord))
-                     .OrderBy(item => Math.Abs((item.AccountTime!.Value - time).TotalDays))
-                     .Take(32))
+        var originalAmount = RoundMoney(Math.Abs(record.TradeMoney ?? 0));
+        var originalIntegerAmount = ToAbsoluteIntegerAmount(originalAmount);
+        var bounds = GetRecordAmountBounds(record);
+        var candidates = CreateRuleAmountPoolValues(bounds);
+        if (candidates.Count < 2)
         {
-            if (TryAdjustAmountPairPreservingTotals(repeatedRecord, partner, usageByDate))
+            return false;
+        }
+
+        RemoveIntegerAmountDateUsage(usageByDate, record);
+        foreach (var candidate in candidates
+                     .Where(value => ToAbsoluteIntegerAmount(value) != originalIntegerAmount)
+                     .OrderBy(value => Math.Abs(value - originalAmount))
+                     .ThenBy(_ => random.Next()))
+        {
+            if (!IsAmountWithinPrecisionBounds(candidate, bounds)
+                || HasDisallowedRepeatedAmountTail(candidate, bounds)
+                || HasIntegerAmountNearDate(
+                    usageByDate,
+                    sign,
+                    ToAbsoluteIntegerAmount(candidate),
+                    record.AccountTime.Value.Date))
             {
+                continue;
+            }
+
+            ApplySignedAmount(record, sign, candidate);
+            AddIntegerAmountDateUsage(usageByDate, record);
+            return true;
+        }
+
+        AddIntegerAmountDateUsage(usageByDate, record);
+        return false;
+    }
+
+    private static void AddRemainingAmountEntry(
+        IDictionary<(int Sign, long IntegerAmount), SortedSet<(DateTime Time, int Sequence)>> remainingByAmount,
+        FlowRecord record,
+        (DateTime Time, int Sequence) entry)
+    {
+        var key = CreateSignedIntegerAmountKey(record);
+        if (key.Sign == 0)
+        {
+            return;
+        }
+
+        if (!remainingByAmount.TryGetValue(key, out var entries))
+        {
+            entries = new SortedSet<(DateTime Time, int Sequence)>();
+            remainingByAmount[key] = entries;
+        }
+
+        entries.Add(entry);
+    }
+
+    private static void RemoveRemainingAmountEntry(
+        IDictionary<(int Sign, long IntegerAmount), SortedSet<(DateTime Time, int Sequence)>> remainingByAmount,
+        FlowRecord record,
+        (DateTime Time, int Sequence) entry)
+    {
+        var key = CreateSignedIntegerAmountKey(record);
+        if (!remainingByAmount.TryGetValue(key, out var entries))
+        {
+            return;
+        }
+
+        entries.Remove(entry);
+        if (entries.Count == 0)
+        {
+            remainingByAmount.Remove(key);
+        }
+    }
+
+    private static bool TryGetForwardSameAmountConflict(
+        IReadOnlyDictionary<(int Sign, long IntegerAmount), SortedSet<(DateTime Time, int Sequence)>> remainingByAmount,
+        (int Sign, long IntegerAmount) amountKey,
+        DateTime currentTime,
+        out (DateTime Time, int Sequence) conflictEntry)
+    {
+        conflictEntry = default;
+        if (!remainingByAmount.TryGetValue(amountKey, out var entries)
+            || entries.Count == 0)
+        {
+            return false;
+        }
+
+        var candidate = entries.Min;
+        if (candidate.Time.Date > currentTime.Date.AddDays(RequiredRepeatAmountGapDays))
+        {
+            return false;
+        }
+
+        conflictEntry = candidate;
+        return true;
+    }
+
+    private static bool TryAdjustFutureAmountPair(
+        SortedSet<(DateTime Time, int Sequence)> remainingByTime,
+        IDictionary<(int Sign, long IntegerAmount), SortedSet<(DateTime Time, int Sequence)>> remainingByAmount,
+        IReadOnlyDictionary<int, FlowRecord> recordBySequence,
+        (DateTime Time, int Sequence) conflictEntry,
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
+        Random random)
+    {
+        var conflict = recordBySequence[conflictEntry.Sequence];
+        var partnerEntries = remainingByTime
+            .GetViewBetween((conflictEntry.Time, int.MinValue), (DateTime.MaxValue, int.MaxValue))
+            .Where(entry => entry.Sequence != conflictEntry.Sequence)
+            .Take(48)
+            .ToArray();
+        foreach (var partnerEntry in partnerEntries)
+        {
+            var partner = recordBySequence[partnerEntry.Sequence];
+            if (GetAmountSign(conflict.TradeMoney ?? 0) != GetAmountSign(partner.TradeMoney ?? 0))
+            {
+                continue;
+            }
+
+            RemoveRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+            RemoveRemainingAmountEntry(remainingByAmount, partner, partnerEntry);
+            if (TryAdjustIntegerAmountPairByMagnitude(conflict, partner, usageByDate, random))
+            {
+                AddRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+                AddRemainingAmountEntry(remainingByAmount, partner, partnerEntry);
                 return true;
             }
+
+            AddRemainingAmountEntry(remainingByAmount, conflict, conflictEntry);
+            AddRemainingAmountEntry(remainingByAmount, partner, partnerEntry);
         }
 
         return false;
     }
 
-    private static bool TryAdjustAmountPairPreservingTotals(
+    private static bool TryMoveRepeatedIntegerAmountRecordForward(
+        FlowAutoGenerationRequest request,
+        FlowRecord record,
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
+        NativeScheduleState scheduleState,
+        Random random)
+    {
+        if (!record.AccountTime.HasValue
+            || IsSystemInterestRecord(record)
+            || !IsGeneratedReferenceRecord(record)
+            || ResolveRecordSourceRule(request, record) is not GenerateReferenceRule rule)
+        {
+            return false;
+        }
+
+        var originalTime = record.AccountTime.Value;
+        var generationEnd = NormalizeEndDate(request.Config.EndTime);
+        var rangeStart = originalTime.Date.AddDays(RequiredRepeatAmountGapDays + 1);
+        if (rangeStart > generationEnd)
+        {
+            return false;
+        }
+
+        var sign = GetAmountSign(record.TradeMoney ?? 0);
+        var integerAmount = ToAbsoluteIntegerAmount(record.TradeMoney ?? 0);
+        if (sign == 0)
+        {
+            return false;
+        }
+
+        RemoveIntegerAmountDateUsage(usageByDate, record);
+        var candidates = scheduleState.GetCandidateDates(rangeStart, generationEnd, rule)
+            .Where(date => date.Date >= rangeStart)
+            .Where(date => !HasIntegerAmountNearDate(usageByDate, sign, integerAmount, date.Date))
+            .Select(date => new
+            {
+                Date = date,
+                SameDirection = scheduleState.GetSameDirectionCount(date, sign > 0),
+                NeighborSameDirection = scheduleState.GetNeighborSameDirectionCount(date, sign > 0),
+                Total = scheduleState.GetTotalCount(date),
+                Distance = Math.Abs((date.Date - originalTime.Date).TotalDays)
+            })
+            .OrderBy(item => item.SameDirection)
+            .ThenBy(item => item.NeighborSameDirection)
+            .ThenBy(item => item.Total)
+            .ThenByDescending(item => item.Distance)
+            .Take(12)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            AddIntegerAmountDateUsage(usageByDate, record);
+            return false;
+        }
+
+        var selected = candidates[random.Next(Math.Min(4, candidates.Count))].Date;
+        var sequence = scheduleState.NextSequence();
+        record.AccountTime = PickNativeTimeOnDate(selected, rule, random, scheduleState, sequence);
+        scheduleState.Move(record, originalTime);
+        AddIntegerAmountDateUsage(usageByDate, record);
+        return true;
+    }
+
+    private static bool TryAdjustIntegerAmountPairByMagnitude(
         FlowRecord first,
         FlowRecord second,
-        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate)
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
+        Random random)
     {
         if (ReferenceEquals(first, second)
             || !first.AccountTime.HasValue
@@ -16939,68 +17150,68 @@ public sealed class FlowAutoGenerator
             return false;
         }
 
-        var earlier = first.AccountTime.Value <= second.AccountTime.Value ? first : second;
-        var later = ReferenceEquals(earlier, first) ? second : first;
-        var earlierTime = earlier.AccountTime!.Value;
-        var laterTime = later.AccountTime!.Value;
-        var earlierAmount = RoundMoney(Math.Abs(earlier.TradeMoney ?? 0));
-        var laterAmount = RoundMoney(Math.Abs(later.TradeMoney ?? 0));
-        var earlierBounds = GetRecordAmountBounds(earlier);
-        var laterBounds = GetRecordAmountBounds(later);
-        var unit = Math.Max(0.01d, Math.Max(earlierBounds.Unit, laterBounds.Unit));
-        var maximumDelta = sign > 0
-            ? Math.Min(earlierBounds.Max - earlierAmount, laterAmount - laterBounds.Min)
-            : Math.Min(earlierAmount - earlierBounds.Min, laterBounds.Max - laterAmount);
-        var maximumSteps = (int)Math.Min(512d, Math.Floor((maximumDelta + 0.0000001d) / unit));
-        if (maximumSteps < 1)
+        var firstAmount = RoundMoney(Math.Abs(first.TradeMoney ?? 0));
+        var secondAmount = RoundMoney(Math.Abs(second.TradeMoney ?? 0));
+        var firstBounds = GetRecordAmountBounds(first);
+        var secondBounds = GetRecordAmountBounds(second);
+        RemoveIntegerAmountDateUsage(usageByDate, first);
+        RemoveIntegerAmountDateUsage(usageByDate, second);
+        var directions = random.Next(2) == 0
+            ? new[] { -1d, 1d }
+            : new[] { 1d, -1d };
+        foreach (var delta in GetRepeatAmountAdjustmentSteps(firstBounds, random))
         {
-            return false;
+            foreach (var direction in directions)
+            {
+                var nextFirstAmount = RoundMoney(firstAmount + direction * delta);
+                var nextSecondAmount = RoundMoney(secondAmount - direction * delta);
+                if (!IsAmountWithinPrecisionBounds(nextFirstAmount, firstBounds)
+                    || !IsAmountWithinPrecisionBounds(nextSecondAmount, secondBounds)
+                    || HasDisallowedRepeatedAmountTail(nextFirstAmount, firstBounds)
+                    || HasDisallowedRepeatedAmountTail(nextSecondAmount, secondBounds))
+                {
+                    continue;
+                }
+
+                var firstIntegerAmount = ToAbsoluteIntegerAmount(nextFirstAmount);
+                var secondIntegerAmount = ToAbsoluteIntegerAmount(nextSecondAmount);
+                if (HasIntegerAmountNearDate(usageByDate, sign, firstIntegerAmount, first.AccountTime.Value.Date)
+                    || HasIntegerAmountNearDate(usageByDate, sign, secondIntegerAmount, second.AccountTime.Value.Date)
+                    || firstIntegerAmount == secondIntegerAmount && AreAccountTimesWithinRepeatGap(first, second))
+                {
+                    continue;
+                }
+
+                ApplySignedAmount(first, sign, nextFirstAmount);
+                ApplySignedAmount(second, sign, nextSecondAmount);
+                AddIntegerAmountDateUsage(usageByDate, first);
+                AddIntegerAmountDateUsage(usageByDate, second);
+                return true;
+            }
         }
 
-        RemoveExactAmountDateUsage(usageByDate, earlier);
-        RemoveExactAmountDateUsage(usageByDate, later);
-        for (var step = 1; step <= maximumSteps; step++)
-        {
-            var delta = RoundMoney(step * unit);
-            var nextEarlierAmount = RoundMoney(earlierAmount + (sign > 0 ? delta : -delta));
-            var nextLaterAmount = RoundMoney(laterAmount + (sign > 0 ? -delta : delta));
-            if (!IsAmountWithinPrecisionBounds(nextEarlierAmount, earlierBounds)
-                || !IsAmountWithinPrecisionBounds(nextLaterAmount, laterBounds)
-                || Math.Abs(RoundMoney(
-                    nextEarlierAmount + nextLaterAmount - earlierAmount - laterAmount)) > 0.009d
-                || HasDisallowedRepeatedAmountTail(nextEarlierAmount, earlierBounds)
-                || HasDisallowedRepeatedAmountTail(nextLaterAmount, laterBounds))
-            {
-                continue;
-            }
-
-            var earlierCents = ToAbsoluteAmountCents(nextEarlierAmount);
-            var laterCents = ToAbsoluteAmountCents(nextLaterAmount);
-            if (HasExactAmountNearDate(
-                    usageByDate,
-                    sign,
-                    earlierCents,
-                    earlierTime.Date)
-                || HasExactAmountNearDate(
-                    usageByDate,
-                    sign,
-                    laterCents,
-                    laterTime.Date)
-                || earlierCents == laterCents && AreAccountTimesWithinRepeatGap(earlier, later))
-            {
-                continue;
-            }
-
-            ApplySignedAmount(earlier, sign, nextEarlierAmount);
-            ApplySignedAmount(later, sign, nextLaterAmount);
-            AddExactAmountDateUsage(usageByDate, earlier);
-            AddExactAmountDateUsage(usageByDate, later);
-            return true;
-        }
-
-        AddExactAmountDateUsage(usageByDate, earlier);
-        AddExactAmountDateUsage(usageByDate, later);
+        AddIntegerAmountDateUsage(usageByDate, first);
+        AddIntegerAmountDateUsage(usageByDate, second);
         return false;
+    }
+
+    private static IEnumerable<double> GetRepeatAmountAdjustmentSteps(AmountBounds bounds, Random random)
+    {
+        // The adjustment granularity follows the source rule, not the number of
+        // digits in the generated amount. A 5~80 rule with precision 0 must be
+        // able to turn 29 into 28~24 or 30~34; -1 and -2 rules move by tens and
+        // hundreds respectively. Fractional rules still adjust the integer part
+        // because repeat detection compares the truncated integer amount.
+        var unit = Math.Max(1d, bounds.Unit);
+
+        var startFactor = random.Next(5);
+        var steps = new double[5];
+        for (var offset = 0; offset < steps.Length; offset++)
+        {
+            steps[offset] = unit * (1 + (startFactor + offset) % steps.Length);
+        }
+
+        return steps;
     }
 
     private static bool HasDisallowedRepeatedAmountTail(double amount, AmountBounds bounds)
@@ -17013,31 +17224,31 @@ public sealed class FlowAutoGenerator
         return first.AccountTime.HasValue
             && second.AccountTime.HasValue
             && Math.Abs((first.AccountTime.Value.Date - second.AccountTime.Value.Date).TotalDays)
-                < MinimumExactAmountRepeatGapDays;
+                <= RequiredRepeatAmountGapDays;
     }
 
-    private static (int Sign, long Cents) CreateSignedAmountKey(FlowRecord record)
+    private static (int Sign, long IntegerAmount) CreateSignedIntegerAmountKey(FlowRecord record)
     {
         var amount = record.TradeMoney ?? 0;
-        return (GetAmountSign(amount), ToAbsoluteAmountCents(amount));
+        return (GetAmountSign(amount), ToAbsoluteIntegerAmount(amount));
     }
 
-    private static long ToAbsoluteAmountCents(double amount)
+    private static long ToAbsoluteIntegerAmount(double amount)
     {
-        return Convert.ToInt64(Math.Round(Math.Abs(RoundMoney(amount)) * 100d, MidpointRounding.AwayFromZero));
+        return Convert.ToInt64(Math.Truncate(Math.Abs(RoundMoney(amount))));
     }
 
-    private static bool HasExactAmountNearDate(
-        IReadOnlyDictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+    private static bool HasIntegerAmountNearDate(
+        IReadOnlyDictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
         int sign,
-        long cents,
+        long integerAmount,
         DateTime date)
     {
-        for (var offset = -(MinimumExactAmountRepeatGapDays - 1);
-             offset <= MinimumExactAmountRepeatGapDays - 1;
+        for (var offset = -RequiredRepeatAmountGapDays;
+             offset <= RequiredRepeatAmountGapDays;
              offset++)
         {
-            if (usageByDate.GetValueOrDefault((sign, cents, date.AddDays(offset).Date)) > 0)
+            if (usageByDate.GetValueOrDefault((sign, integerAmount, date.AddDays(offset).Date)) > 0)
             {
                 return true;
             }
@@ -17046,8 +17257,8 @@ public sealed class FlowAutoGenerator
         return false;
     }
 
-    private static void AddExactAmountDateUsage(
-        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+    private static void AddIntegerAmountDateUsage(
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
         FlowRecord record)
     {
         if (!record.AccountTime.HasValue)
@@ -17055,18 +17266,18 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var (sign, cents) = CreateSignedAmountKey(record);
+        var (sign, integerAmount) = CreateSignedIntegerAmountKey(record);
         if (sign == 0)
         {
             return;
         }
 
-        var key = (sign, cents, record.AccountTime.Value.Date);
+        var key = (sign, integerAmount, record.AccountTime.Value.Date);
         usageByDate[key] = usageByDate.GetValueOrDefault(key) + 1;
     }
 
-    private static void RemoveExactAmountDateUsage(
-        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+    private static void RemoveIntegerAmountDateUsage(
+        Dictionary<(int Sign, long IntegerAmount, DateTime Date), int> usageByDate,
         FlowRecord record)
     {
         if (!record.AccountTime.HasValue)
@@ -17074,8 +17285,8 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var (sign, cents) = CreateSignedAmountKey(record);
-        var key = (sign, cents, record.AccountTime.Value.Date);
+        var (sign, integerAmount) = CreateSignedIntegerAmountKey(record);
+        var key = (sign, integerAmount, record.AccountTime.Value.Date);
         var count = usageByDate.GetValueOrDefault(key);
         if (count <= 1)
         {
@@ -18187,7 +18398,7 @@ public sealed class FlowAutoGenerator
         {
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
-        EnforceMinimumExactAmountRepeatGap(records);
+        EnforceMinimumExactAmountRepeatGap(records, request, random);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("fast final validation", records);
