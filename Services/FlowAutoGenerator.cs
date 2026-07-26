@@ -85,6 +85,7 @@ public sealed class FlowAutoGenerator
     private const double MonthlyClosingBalanceCapRatio = 0.10d;
     private const double MonthlyClosingBalanceTolerance = 1d;
     private const double MonthlyIncomeCapMultiplier = 2d;
+    private const int MinimumExactAmountRepeatGapDays = 3;
     private const double MinimumPrecisionRepeatGapDays = 7d;
     private const double PreferredPrecisionRepeatGapDays = 30d;
     private const int MaxRuleAmountPoolCacheEntries = 2048;
@@ -237,8 +238,6 @@ public sealed class FlowAutoGenerator
         var scheduleState = NativeScheduleState.From(records);
         var amountUsage = AmountUsageTracker.From(records);
         var targetIncome = RoundMoney(Math.Max(0, request.Config.AllInMoney));
-        var finalBalanceTarget = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
-        ValidateMonthlyClosingBalanceCap(targetIncome, finalBalanceTarget);
         var plannedExpense = RoundMoney(Math.Min(targetIncome, Math.Max(0, targetIncome - request.Config.LastMoney)));
         var monthlyPlan = CreateMonthlyAmountPlan(request, start, end, targetIncome, plannedExpense, random);
 
@@ -539,6 +538,7 @@ public sealed class FlowAutoGenerator
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
         FinalizeConfiguredPrecisionReferenceAmounts(records, openingBalance, random);
+        EnforceMinimumExactAmountRepeatGap(records);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("monthly closing final", records);
@@ -823,6 +823,7 @@ public sealed class FlowAutoGenerator
             PruneZeroAmountRecords(records);
         }
 
+        EnforceMinimumExactAmountRepeatGap(records);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -874,6 +875,7 @@ public sealed class FlowAutoGenerator
 
         PruneZeroAmountRecords(records);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+        EnforceMinimumExactAmountRepeatGap(records);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -944,6 +946,7 @@ public sealed class FlowAutoGenerator
         PruneZeroAmountRecords(records);
         EnsureDistinctSignedAmounts(records, random);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
+        EnforceMinimumExactAmountRepeatGap(records);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -3137,10 +3140,13 @@ public sealed class FlowAutoGenerator
                  monthIndex++)
             {
                 var month = monthlyPlan.Months[monthIndex];
+                var targetUpperBound = monthIndex == monthlyPlan.Months.Count - 1
+                    ? Math.Max(monthlyPlan.ClosingBalanceCap, monthlyPlan.ClosingBalanceTargets[monthIndex])
+                    : monthlyPlan.ClosingBalanceCap;
                 var target = RoundMoney(Math.Clamp(
                     monthlyPlan.ClosingBalanceTargets[monthIndex],
                     0,
-                    monthlyPlan.ClosingBalanceCap));
+                    targetUpperBound));
                 var actual = CalculateBalanceThroughDate(records, openingBalance, month.End);
                 var difference = RoundMoney(actual - target);
                 if (difference > MonthlyClosingBalanceTolerance)
@@ -3303,9 +3309,12 @@ public sealed class FlowAutoGenerator
                         records,
                         openingBalance,
                         monthlyPlan.Months[suffixIndex].End);
+                    var suffixLimit = suffixIndex == monthlyPlan.Months.Count - 1
+                        ? Math.Max(monthlyPlan.ClosingBalanceCap, target)
+                        : monthlyPlan.ClosingBalanceCap;
                     suffixRoom = Math.Min(
                         suffixRoom,
-                        RoundMoney(monthlyPlan.ClosingBalanceCap - suffixClosing));
+                        RoundMoney(suffixLimit - suffixClosing));
                 }
 
                 var adjustment = RoundMoney(Math.Min(remaining, Math.Max(0, suffixRoom)));
@@ -14374,7 +14383,7 @@ public sealed class FlowAutoGenerator
         }
 
         closingBalanceCap = RoundMoney(Math.Max(0, closingBalanceCap));
-        finalBalanceTarget = RoundMoney(Math.Clamp(finalBalanceTarget, 0, closingBalanceCap));
+        finalBalanceTarget = RoundMoney(Math.Max(0, finalBalanceTarget));
 
         var minimumRequired = new double[monthCount];
         minimumRequired[^1] = finalBalanceTarget;
@@ -16772,6 +16781,298 @@ public sealed class FlowAutoGenerator
         record.IncomeFlag = sign > 0 ? "C" : "D";
     }
 
+    private static bool EnforceMinimumExactAmountRepeatGap(List<FlowRecord> records)
+    {
+        var candidates = records
+            .Where(item => item.AccountTime.HasValue)
+            .Where(item => GetAmountSign(item.TradeMoney ?? 0) != 0)
+            .Where(item => !IsSystemInterestRecord(item))
+            .OrderBy(item => item.AccountTime)
+            .ThenBy(item => item.Index)
+            .ToList();
+        if (candidates.Count < 2)
+        {
+            return false;
+        }
+
+        var usageByDate = new Dictionary<(int Sign, long Cents, DateTime Date), int>();
+        foreach (var record in candidates)
+        {
+            AddExactAmountDateUsage(usageByDate, record);
+        }
+
+        var candidatesByMonthAndSign = candidates
+            .GroupBy(item =>
+            {
+                var time = item.AccountTime!.Value;
+                return (
+                    Sign: GetAmountSign(item.TradeMoney ?? 0),
+                    Month: new DateTime(time.Year, time.Month, 1));
+            })
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        var changed = false;
+        for (var pass = 0; pass < 6; pass++)
+        {
+            var passChanged = false;
+            var repeatedGroups = candidates
+                .GroupBy(CreateSignedAmountKey)
+                .Where(group => group.Count() > 1)
+                .ToList();
+            foreach (var group in repeatedGroups)
+            {
+                var ordered = group
+                    .OrderBy(item => item.AccountTime)
+                    .ThenBy(item => item.Index)
+                    .ToList();
+                for (var index = 1; index < ordered.Count; index++)
+                {
+                    var earlier = ordered[index - 1];
+                    var later = ordered[index];
+                    if (CreateSignedAmountKey(earlier) != CreateSignedAmountKey(later)
+                        || !AreAccountTimesWithinRepeatGap(earlier, later))
+                    {
+                        continue;
+                    }
+
+                    var earlierTime = earlier.AccountTime!.Value;
+                    var laterTime = later.AccountTime!.Value;
+                    var sameMonth = earlierTime.Year == laterTime.Year && earlierTime.Month == laterTime.Month;
+                    if (sameMonth
+                        && TryAdjustAmountPairPreservingTotals(earlier, later, usageByDate))
+                    {
+                        passChanged = true;
+                        continue;
+                    }
+
+                    var adjustedWithMonthlyPartner = TryAdjustRepeatedAmountWithMonthlyPartner(
+                            later,
+                            earlier,
+                            candidatesByMonthAndSign,
+                            usageByDate)
+                        || TryAdjustRepeatedAmountWithMonthlyPartner(
+                            earlier,
+                            later,
+                            candidatesByMonthAndSign,
+                            usageByDate);
+                    if (adjustedWithMonthlyPartner)
+                    {
+                        passChanged = true;
+                    }
+                }
+            }
+
+            if (!passChanged)
+            {
+                break;
+            }
+
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool TryAdjustRepeatedAmountWithMonthlyPartner(
+        FlowRecord repeatedRecord,
+        FlowRecord collidingRecord,
+        IReadOnlyDictionary<(int Sign, DateTime Month), List<FlowRecord>> candidatesByMonthAndSign,
+        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate)
+    {
+        if (!repeatedRecord.AccountTime.HasValue)
+        {
+            return false;
+        }
+
+        var sign = GetAmountSign(repeatedRecord.TradeMoney ?? 0);
+        var time = repeatedRecord.AccountTime.Value;
+        var key = (sign, new DateTime(time.Year, time.Month, 1));
+        if (!candidatesByMonthAndSign.TryGetValue(key, out var monthlyCandidates))
+        {
+            return false;
+        }
+
+        foreach (var partner in monthlyCandidates
+                     .Where(item => !ReferenceEquals(item, repeatedRecord)
+                         && !ReferenceEquals(item, collidingRecord))
+                     .OrderBy(item => Math.Abs((item.AccountTime!.Value - time).TotalDays))
+                     .Take(32))
+        {
+            if (TryAdjustAmountPairPreservingTotals(repeatedRecord, partner, usageByDate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryAdjustAmountPairPreservingTotals(
+        FlowRecord first,
+        FlowRecord second,
+        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate)
+    {
+        if (ReferenceEquals(first, second)
+            || !first.AccountTime.HasValue
+            || !second.AccountTime.HasValue)
+        {
+            return false;
+        }
+
+        var sign = GetAmountSign(first.TradeMoney ?? 0);
+        if (sign == 0 || sign != GetAmountSign(second.TradeMoney ?? 0))
+        {
+            return false;
+        }
+
+        var earlier = first.AccountTime.Value <= second.AccountTime.Value ? first : second;
+        var later = ReferenceEquals(earlier, first) ? second : first;
+        var earlierTime = earlier.AccountTime!.Value;
+        var laterTime = later.AccountTime!.Value;
+        var earlierAmount = RoundMoney(Math.Abs(earlier.TradeMoney ?? 0));
+        var laterAmount = RoundMoney(Math.Abs(later.TradeMoney ?? 0));
+        var earlierBounds = GetRecordAmountBounds(earlier);
+        var laterBounds = GetRecordAmountBounds(later);
+        var unit = Math.Max(0.01d, Math.Max(earlierBounds.Unit, laterBounds.Unit));
+        var maximumDelta = sign > 0
+            ? Math.Min(earlierBounds.Max - earlierAmount, laterAmount - laterBounds.Min)
+            : Math.Min(earlierAmount - earlierBounds.Min, laterBounds.Max - laterAmount);
+        var maximumSteps = (int)Math.Min(512d, Math.Floor((maximumDelta + 0.0000001d) / unit));
+        if (maximumSteps < 1)
+        {
+            return false;
+        }
+
+        RemoveExactAmountDateUsage(usageByDate, earlier);
+        RemoveExactAmountDateUsage(usageByDate, later);
+        for (var step = 1; step <= maximumSteps; step++)
+        {
+            var delta = RoundMoney(step * unit);
+            var nextEarlierAmount = RoundMoney(earlierAmount + (sign > 0 ? delta : -delta));
+            var nextLaterAmount = RoundMoney(laterAmount + (sign > 0 ? -delta : delta));
+            if (!IsAmountWithinPrecisionBounds(nextEarlierAmount, earlierBounds)
+                || !IsAmountWithinPrecisionBounds(nextLaterAmount, laterBounds)
+                || Math.Abs(RoundMoney(
+                    nextEarlierAmount + nextLaterAmount - earlierAmount - laterAmount)) > 0.009d
+                || HasDisallowedRepeatedAmountTail(nextEarlierAmount, earlierBounds)
+                || HasDisallowedRepeatedAmountTail(nextLaterAmount, laterBounds))
+            {
+                continue;
+            }
+
+            var earlierCents = ToAbsoluteAmountCents(nextEarlierAmount);
+            var laterCents = ToAbsoluteAmountCents(nextLaterAmount);
+            if (HasExactAmountNearDate(
+                    usageByDate,
+                    sign,
+                    earlierCents,
+                    earlierTime.Date)
+                || HasExactAmountNearDate(
+                    usageByDate,
+                    sign,
+                    laterCents,
+                    laterTime.Date)
+                || earlierCents == laterCents && AreAccountTimesWithinRepeatGap(earlier, later))
+            {
+                continue;
+            }
+
+            ApplySignedAmount(earlier, sign, nextEarlierAmount);
+            ApplySignedAmount(later, sign, nextLaterAmount);
+            AddExactAmountDateUsage(usageByDate, earlier);
+            AddExactAmountDateUsage(usageByDate, later);
+            return true;
+        }
+
+        AddExactAmountDateUsage(usageByDate, earlier);
+        AddExactAmountDateUsage(usageByDate, later);
+        return false;
+    }
+
+    private static bool HasDisallowedRepeatedAmountTail(double amount, AmountBounds bounds)
+    {
+        return bounds.Precision is > 1 && HasUnnaturalFractionTail(amount);
+    }
+
+    private static bool AreAccountTimesWithinRepeatGap(FlowRecord first, FlowRecord second)
+    {
+        return first.AccountTime.HasValue
+            && second.AccountTime.HasValue
+            && Math.Abs((first.AccountTime.Value.Date - second.AccountTime.Value.Date).TotalDays)
+                < MinimumExactAmountRepeatGapDays;
+    }
+
+    private static (int Sign, long Cents) CreateSignedAmountKey(FlowRecord record)
+    {
+        var amount = record.TradeMoney ?? 0;
+        return (GetAmountSign(amount), ToAbsoluteAmountCents(amount));
+    }
+
+    private static long ToAbsoluteAmountCents(double amount)
+    {
+        return Convert.ToInt64(Math.Round(Math.Abs(RoundMoney(amount)) * 100d, MidpointRounding.AwayFromZero));
+    }
+
+    private static bool HasExactAmountNearDate(
+        IReadOnlyDictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+        int sign,
+        long cents,
+        DateTime date)
+    {
+        for (var offset = -(MinimumExactAmountRepeatGapDays - 1);
+             offset <= MinimumExactAmountRepeatGapDays - 1;
+             offset++)
+        {
+            if (usageByDate.GetValueOrDefault((sign, cents, date.AddDays(offset).Date)) > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddExactAmountDateUsage(
+        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+        FlowRecord record)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return;
+        }
+
+        var (sign, cents) = CreateSignedAmountKey(record);
+        if (sign == 0)
+        {
+            return;
+        }
+
+        var key = (sign, cents, record.AccountTime.Value.Date);
+        usageByDate[key] = usageByDate.GetValueOrDefault(key) + 1;
+    }
+
+    private static void RemoveExactAmountDateUsage(
+        Dictionary<(int Sign, long Cents, DateTime Date), int> usageByDate,
+        FlowRecord record)
+    {
+        if (!record.AccountTime.HasValue)
+        {
+            return;
+        }
+
+        var (sign, cents) = CreateSignedAmountKey(record);
+        var key = (sign, cents, record.AccountTime.Value.Date);
+        var count = usageByDate.GetValueOrDefault(key);
+        if (count <= 1)
+        {
+            usageByDate.Remove(key);
+        }
+        else
+        {
+            usageByDate[key] = count - 1;
+        }
+    }
+
     private static bool EnsureDistinctSignedAmounts(List<FlowRecord> records, Random? random = null)
     {
         var changed = false;
@@ -17749,18 +18050,6 @@ public sealed class FlowAutoGenerator
         return RoundMoney(openingBalance + lastMoney);
     }
 
-    private static void ValidateMonthlyClosingBalanceCap(double targetIncome, double finalBalanceTarget)
-    {
-        var cap = RoundMoney(Math.Max(0, targetIncome) * MonthlyClosingBalanceCapRatio);
-        if (finalBalanceTarget <= cap + MonthlyClosingBalanceTolerance)
-        {
-            return;
-        }
-
-        throw new InvalidOperationException(
-            $"\u671f\u672b\u4f59\u989d\u76ee\u6807 {finalBalanceTarget:N2} \u8d85\u8fc7\u603b\u8fdb\u8d26\u91d1\u989d 10% \u7684\u6708\u7ed3\u4e0a\u9650 {cap:N2}\uff0c\u65e0\u6cd5\u540c\u65f6\u6ee1\u8db3\u6708\u7ed3\u4e0a\u9650\u548c\u671f\u672b\u4f59\u989d\u89c4\u5219\u3002");
-    }
-
     private static bool IsFinalBalanceOutsideTolerance(double finalBalance, double openingBalance, double lastMoney)
     {
         return Math.Abs(RoundMoney(finalBalance - CalculateFinalBalanceTarget(openingBalance, lastMoney))) > FinalBalanceTolerance + 0.009d;
@@ -17884,6 +18173,7 @@ public sealed class FlowAutoGenerator
         {
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
+        EnforceMinimumExactAmountRepeatGap(records);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("fast final validation", records);
