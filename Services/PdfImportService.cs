@@ -5545,7 +5545,7 @@ public sealed class PdfImportService : IPdfImportService
             return [];
         }
 
-        var matches = Regex.Matches(cleaned, @"(?<!^)(?=\d{8}\s+(?:\d{6}\s+|(?:结息|利息税)\s+[+-]?\d))");
+        var matches = Regex.Matches(cleaned, @"(?<!^)(?=\d{8}\s+(?:\d{6}\s+)?\S+\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2})");
         if (matches.Count == 0)
         {
             return [cleaned];
@@ -5840,8 +5840,7 @@ public sealed class PdfImportService : IPdfImportService
 
     private static bool IsAbcRecordStart(string text)
     {
-        return Regex.IsMatch(text, @"^\d{8}\s+\d{6}\s+")
-            || Regex.IsMatch(text, @"^\d{8}\s+(?:结息|利息税)\s+[+-]?\d");
+        return Regex.IsMatch(text, @"^\d{8}\s+(?:\d{6}\s+)?\S+\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}");
     }
 
     private static bool IsPingAnRecordStart(string text)
