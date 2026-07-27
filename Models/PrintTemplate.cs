@@ -14,6 +14,8 @@ public sealed class PrintTemplate
 
     public bool IsDeleted { get; set; }
 
+    public bool IsPageRowsOverride { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     public string PageSize { get; set; } = "A4Landscape";
@@ -40,6 +42,7 @@ public sealed class PrintTemplate
             VendorBankId = VendorBankId,
             IsSystem = IsSystem,
             IsDeleted = IsDeleted,
+            IsPageRowsOverride = IsPageRowsOverride,
             Name = Name,
             PageSize = PageSize,
             PageRows = PageRows,

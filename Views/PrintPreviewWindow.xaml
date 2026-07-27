@@ -40,7 +40,7 @@
             <Setter Property="AutoGenerateColumns" Value="False" />
             <Setter Property="HeadersVisibility" Value="Column" />
             <Setter Property="CanUserAddRows" Value="False" />
-            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="IsReadOnly" Value="False" />
             <Setter Property="RowHeight" Value="32" />
             <Setter Property="GridLinesVisibility" Value="None" />
             <Setter Property="BorderThickness" Value="0" />
@@ -76,7 +76,9 @@
                       ItemsSource="{Binding Templates}"
                       SelectedItem="{Binding SelectedTemplate}"
                       Style="{StaticResource TemplateGridStyle}"
+                      PreviewMouseLeftButtonDown="TemplateGrid_PreviewMouseLeftButtonDown"
                       PreviewMouseRightButtonDown="TemplateGrid_PreviewMouseRightButtonDown"
+                      CellEditEnding="TemplateGrid_CellEditEnding"
                       MouseDoubleClick="TemplateGrid_MouseDoubleClick">
                 <DataGrid.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -90,10 +92,13 @@
                     </ContextMenu>
                 </DataGrid.ContextMenu>
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="系统" Binding="{Binding SystemText}" Width="52" />
-                    <DataGridTextColumn Header="模板名字" Binding="{Binding Name}" Width="*" />
-                    <DataGridTextColumn Header="页" Binding="{Binding PageRows}" Width="42" />
-                    <DataGridTextColumn Header="备注" Binding="{Binding Remark}" Width="112" />
+                    <DataGridTextColumn Header="系统" Binding="{Binding SystemText}" Width="52" IsReadOnly="True" />
+                    <DataGridTextColumn Header="模板名字" Binding="{Binding Name}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn x:Name="PageRowsColumn"
+                                        Header="行"
+                                        Binding="{Binding PageRows, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Width="42" />
+                    <DataGridTextColumn Header="备注" Binding="{Binding Remark}" Width="112" IsReadOnly="True" />
                 </DataGrid.Columns>
             </DataGrid>
 

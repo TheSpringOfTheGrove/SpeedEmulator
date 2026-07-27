@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
+using SpeedEmulator.Models;
 using SpeedEmulator.ViewModels;
 
 namespace SpeedEmulator.Views;
@@ -122,8 +123,45 @@ public partial class PrintPreviewWindow : Window
         }
     }
 
+    private void TemplateGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGrid grid
+            || FindAncestor<DataGridCell>(e.OriginalSource as DependencyObject) is not { } cell
+            || cell.Column != PageRowsColumn
+            || FindAncestor<DataGridRow>(cell) is not { } row)
+        {
+            return;
+        }
+
+        grid.SelectedItem = row.Item;
+        grid.CurrentCell = new DataGridCellInfo(row.Item, PageRowsColumn);
+        row.IsSelected = true;
+        row.Focus();
+        e.Handled = true;
+        Dispatcher.BeginInvoke(() => grid.BeginEdit(), DispatcherPriority.Input);
+    }
+
+    private async void TemplateGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction != DataGridEditAction.Commit
+            || e.Column != PageRowsColumn
+            || e.Row.Item is not PrintTemplate template)
+        {
+            return;
+        }
+
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.DataBind);
+        await viewModel.SavePageRowsAsync(template);
+    }
+
     private async void TemplateGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        if (FindAncestor<DataGridCell>(e.OriginalSource as DependencyObject) is { Column: var column }
+            && column == PageRowsColumn)
+        {
+            return;
+        }
+
         if (FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject) is not { } row)
         {
             return;

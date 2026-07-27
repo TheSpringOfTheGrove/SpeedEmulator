@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using SpeedEmulator.Models;
 using ColumnDefinition = SpeedEmulator.Models.ColumnDefinition;
 
@@ -9,6 +10,27 @@ namespace SpeedEmulator.Services;
 
 internal static class PdfImportTabularMapper
 {
+    private static readonly char[] PdfTextWhitespaceCharacters = [' ', '\t', '\r', '\n', '\u00a0'];
+
+    private static readonly PropertyInfo[] ImportedFlowTextProperties = typeof(FlowRecord)
+        .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        .Where(property => property.PropertyType == typeof(string)
+            && property.CanRead
+            && property.CanWrite
+            && property.GetIndexParameters().Length == 0)
+        .ToArray();
+
+    private static readonly PropertyInfo[] ImportedUserTextProperties = typeof(BankUser)
+        .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        .Where(property => property.PropertyType == typeof(string)
+            && property.CanRead
+            && property.CanWrite
+            && property.Name is not nameof(BankUser.LoginPassword)
+                and not nameof(BankUser.PaymentPassword)
+                and not nameof(BankUser.SealImagePath)
+            && property.GetIndexParameters().Length == 0)
+        .ToArray();
+
     private enum FlowMoneyDirection
     {
         Unknown,
@@ -302,6 +324,7 @@ internal static class PdfImportTabularMapper
     {
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
+        NormalizeImportedTextFields(record, ImportedFlowTextProperties);
         var direction = ResolveFlowMoneyDirection(record.IncomeAttribute);
 
         if (!record.TradeMoney.HasValue)
@@ -355,6 +378,101 @@ internal static class PdfImportTabularMapper
         {
             record.BalanceAmount = record.Balance;
         }
+    }
+
+    public static void NormalizeImportedBankUser(BankUser user)
+    {
+        NormalizeImportedTextFields(user, ImportedUserTextProperties);
+    }
+
+    private static void NormalizeImportedTextFields<T>(T entity, IEnumerable<PropertyInfo> textProperties)
+        where T : class
+    {
+        foreach (var property in textProperties)
+        {
+            var original = property.GetValue(entity) as string;
+            var normalized = NormalizeWrappedPdfText(original);
+            if (!string.Equals(original, normalized, StringComparison.Ordinal))
+            {
+                property.SetValue(entity, normalized);
+            }
+        }
+
+        switch (entity)
+        {
+            case FlowRecord record:
+                NormalizeExtraFields(record.ExtraFields);
+                break;
+            case BankUser user:
+                NormalizeExtraFields(user.ExtraFields);
+                break;
+        }
+    }
+
+    private static void NormalizeExtraFields(IDictionary<string, string> fields)
+    {
+        foreach (var fieldName in fields.Keys.ToList())
+        {
+            fields[fieldName] = NormalizeWrappedPdfText(fields[fieldName]);
+        }
+    }
+
+    private static string NormalizeWrappedPdfText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        if (value.AsSpan().IndexOfAny(PdfTextWhitespaceCharacters) < 0)
+        {
+            return value;
+        }
+
+        var builder = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length;)
+        {
+            var current = value[index];
+            if (!char.IsWhiteSpace(current) && current != '\u00a0')
+            {
+                builder.Append(current);
+                index++;
+                continue;
+            }
+
+            var nextIndex = index + 1;
+            while (nextIndex < value.Length
+                && (char.IsWhiteSpace(value[nextIndex]) || value[nextIndex] == '\u00a0'))
+            {
+                nextIndex++;
+            }
+
+            if (builder.Length > 0 && nextIndex < value.Length
+                && !ShouldRemovePdfWhitespace(builder[^1], value[nextIndex]))
+            {
+                builder.Append(' ');
+            }
+
+            index = nextIndex;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool ShouldRemovePdfWhitespace(char previous, char next)
+    {
+        var previousIsChinese = previous is >= '\u4e00' and <= '\u9fff';
+        var nextIsChinese = next is >= '\u4e00' and <= '\u9fff';
+        var previousIsAsciiLetterOrDigit = previous is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9';
+        var nextIsAsciiLetterOrDigit = next is >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z'
+            or >= '0' and <= '9';
+
+        return (previousIsChinese && (nextIsChinese || nextIsAsciiLetterOrDigit))
+            || (previousIsAsciiLetterOrDigit && nextIsChinese)
+            || (char.IsDigit(previous) && char.IsDigit(next));
     }
 
     public static string NormalizeHeader(string value)

@@ -270,7 +270,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static bool ShouldApplyLocalPdfConfig(PrintRenderContext context)
     {
-        return !context.Template.IsSystem;
+        return !context.Template.IsSystem || context.Template.IsPageRowsOverride;
     }
 
     private static void TryWritePrintFailureDiagnostic(
@@ -1135,7 +1135,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         public bool TryExport(PrintRenderContext context, string path)
         {
             var previousDirectory = Directory.GetCurrentDirectory();
-            Directory.SetCurrentDirectory(vendorDir);
+            using var renderDirectory = CreateVendorRenderDirectory(context);
+            Directory.SetCurrentDirectory(renderDirectory?.Path ?? vendorDir);
             try
             {
                 var resolvedTemplate = ResolveTemplate(context);
@@ -1306,9 +1307,63 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             target.VendorId = ReadLong(resolvedTemplate.Template, "Id", target.VendorId);
             target.VendorBankId = ReadLong(resolvedTemplate.Template, "BankId", target.VendorBankId);
-            target.PageRows = (int)ReadLong(resolvedTemplate.Template, "PageSize", target.PageRows);
+            var fallbackRows = ReadLong(resolvedTemplate.Template, "PageSize", target.PageRows);
+            target.PageRows = resolvedTemplate.Config is null
+                ? (int)fallbackRows
+                : (int)ReadLong(resolvedTemplate.Config, "RowCount", fallbackRows);
             target.Remark = ReadString(resolvedTemplate.Template, "Remark", target.Remark);
             target.PdfData = ReadString(resolvedTemplate.Template, "PdfData", target.PdfData);
+        }
+
+        private VendorRenderDirectory? CreateVendorRenderDirectory(PrintRenderContext context)
+        {
+            if (!IsPostalPersonalElectronicPrintContext(context))
+            {
+                return null;
+            }
+
+            var sourcePath = ResolveVendorSignedStampPath(context);
+            if (!File.Exists(sourcePath))
+            {
+                return null;
+            }
+
+            try
+            {
+                return new VendorRenderDirectory(sourcePath);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private sealed class VendorRenderDirectory : IDisposable
+        {
+            public string Path { get; }
+
+            public VendorRenderDirectory(string sourcePath)
+            {
+                Path = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    "SpeedEmulator",
+                    "vendor-render",
+                    Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(Path);
+                File.Copy(sourcePath, System.IO.Path.Combine(Path, "BankUser.ZhangImg"));
+            }
+
+            public void Dispose()
+            {
+                try
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+                catch
+                {
+                    // The directory is only a short-lived rendering compatibility cache.
+                }
+            }
         }
 
         private ResolvedTemplate? ResolveTemplate(PrintRenderContext context)
@@ -1331,13 +1386,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
                 var vendorPdfData = ReadString(vendorTemplate, "PdfData", string.Empty);
                 var vendorPageRows = (int)ReadLong(vendorTemplate, "PageSize", context.Template.PageRows);
+                var effectivePageRows = vendorPageRows > 0
+                    ? vendorPageRows
+                    : context.Template.PageRows;
                 var vendorConfig = templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate)
                     ?? CreateVendorConfig(candidateNames.Prepend(vendorName));
                 if (vendorConfig is null)
                 {
                     return string.IsNullOrWhiteSpace(vendorPdfData)
                         ? null
-                        : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, vendorPageRows);
+                        : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, effectivePageRows);
                 }
 
                 if (ShouldApplyLocalPdfConfig(context))
@@ -1345,7 +1403,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
-                return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, vendorPageRows);
+                return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, effectivePageRows);
             }
 
             foreach (var name in candidateNames)
@@ -1357,7 +1415,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
-                    return new ResolvedTemplate(name, config, null, string.Empty, context.Template.PageRows);
+                    var pageRows = context.Template.PageRows > 0
+                        ? context.Template.PageRows
+                        : (int)ReadLong(config, "RowCount", 0);
+                    return new ResolvedTemplate(name, config, null, string.Empty, pageRows);
                 }
             }
 
@@ -1443,12 +1504,24 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private static IEnumerable<long> GetVendorTemplateBankIds(PrintRenderContext context)
         {
-            var ids = new[]
+            var ids = new List<long>
             {
                 context.Template.VendorBankId,
                 context.Template.BankId,
                 context.Bank.Id
             };
+
+            if (context.Template.Name.StartsWith("\u519c\u5546\u94f6\u884c\u5bf9\u516c\u7248", StringComparison.Ordinal))
+            {
+                ids.Add(109);
+            }
+
+            if (context.Bank.Id == 104
+                || context.Template.BankId == 104
+                || context.Template.Name.StartsWith("\u5de5\u884c\u5bf9\u516c", StringComparison.Ordinal))
+            {
+                ids.Add(108);
+            }
 
             return ids.Where(id => id > 0).Distinct();
         }
@@ -1577,7 +1650,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
-                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                var oppositeAccount = FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"));
+                Set(
+                    target,
+                    "OppositeAccount",
+                    IsAgriculturalBankPersonalPaperTemplate(context)
+                        ? NormalizeSingleLinePrintText(oppositeAccount)
+                        : NormalizePrintNumber(context, oppositeAccount));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -2651,12 +2730,24 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private static IEnumerable<long> GetVendorTemplateBankIds(PrintRenderContext context)
         {
-            var ids = new[]
+            var ids = new List<long>
             {
                 context.Template.VendorBankId,
                 context.Template.BankId,
                 context.Bank.Id
             };
+
+            if (context.Template.Name.StartsWith("\u519c\u5546\u94f6\u884c\u5bf9\u516c\u7248", StringComparison.Ordinal))
+            {
+                ids.Add(109);
+            }
+
+            if (context.Bank.Id == 104
+                || context.Template.BankId == 104
+                || context.Template.Name.StartsWith("\u5de5\u884c\u5bf9\u516c", StringComparison.Ordinal))
+            {
+                ids.Add(108);
+            }
 
             return ids.Where(id => id > 0).Distinct();
         }
@@ -3117,6 +3208,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private void InitializeStimulsoftPrintRuntime()
         {
+            ConfigureStimulsoftLicense();
+
             if (exportMethod.DeclaringType is { } exportType)
             {
                 RuntimeHelpers.RunClassConstructor(exportType.TypeHandle);
@@ -3137,6 +3230,80 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             RegisterStimulsoftTemplateFonts();
             RegisterReportUtilityFunctions();
+        }
+
+        private void ConfigureStimulsoftLicense()
+        {
+            var licenseType = AssemblyLoadContext.Default.Assemblies
+                .Select(assembly => assembly.GetType("Stimulsoft.Base.StiLicense", false))
+                .FirstOrDefault(type => type is not null);
+            if (licenseType is null)
+            {
+                return;
+            }
+
+            var loadFromAssembly = licenseType.GetMethod(
+                "LoadFromAssembly",
+                BindingFlags.Public | BindingFlags.Static,
+                binder: null,
+                [typeof(Assembly), typeof(string)],
+                modifiers: null);
+            if (loadFromAssembly is not null)
+            {
+                foreach (var assembly in new[] { mainAssembly, Assembly.GetEntryAssembly() }.Where(assembly => assembly is not null).Distinct())
+                {
+                    try
+                    {
+                        loadFromAssembly.Invoke(null, [assembly!, "license.key"]);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(Convert.ToString(licenseType.GetProperty("Key", BindingFlags.Public | BindingFlags.Static)?.GetValue(null))))
+            {
+                return;
+            }
+
+            var loadFromFile = licenseType.GetMethod(
+                "LoadFromFile",
+                BindingFlags.Public | BindingFlags.Static,
+                binder: null,
+                [typeof(string)],
+                modifiers: null);
+            if (loadFromFile is null)
+            {
+                return;
+            }
+
+            var configuredPath = Environment.GetEnvironmentVariable("SPEEDEMULATOR_STIMULSOFT_LICENSE_PATH");
+            var licensePaths = new[]
+            {
+                configuredPath,
+                Path.Combine(AppContext.BaseDirectory, "license.key"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Stimulsoft", "license.key")
+            };
+            foreach (var licensePath in licensePaths.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(licensePath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    loadFromFile.Invoke(null, [licensePath]);
+                    if (!string.IsNullOrWhiteSpace(Convert.ToString(licenseType.GetProperty("Key", BindingFlags.Public | BindingFlags.Static)?.GetValue(null))))
+                    {
+                        return;
+                    }
+                }
+                catch
+                {
+                }
+            }
         }
 
         private void RegisterStimulsoftTemplateFonts()
@@ -5391,6 +5558,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyHuaxiaPersonalElectronicFlowFields(context, source, values, target);
         }
 
+        if (IsAgriculturalBankPersonalElectronicTemplate(context))
+        {
+            NormalizeAgriculturalElectronicFlowFields(target);
+            return;
+        }
+
         if (!IsAgriculturalBankPersonalPaperTemplate(context))
         {
             return;
@@ -6056,7 +6229,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var paperSubrowDetail = NormalizeSingleLinePrintText(longDetail ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(oppositeUsername))
         {
-            Set(target, nameof(FlowRecord.OppositeUsername), PrepareAgriculturalPaperCounterpartyText(oppositeUsername));
+            Set(
+                target,
+                nameof(FlowRecord.OppositeUsername),
+                PrepareAgriculturalPaperCounterpartyText(LimitAgriculturalPaperSubrowText(oppositeUsername)));
         }
 
         if (!string.IsNullOrWhiteSpace(subAccountToken))
@@ -6092,6 +6268,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             "BankAccount",
             "BankAccountNo",
             "BankCardNo");
+
+        var tradeChannel = NormalizeAgriculturalPaperTradeChannel(
+            ReadStringProperty(target, nameof(FlowRecord.TradeChannel), string.Empty));
+        Set(target, nameof(FlowRecord.TradeChannel), tradeChannel);
+        Set(target, nameof(FlowRecord.TradeChannelEn), tradeChannel);
     }
 
     private static void NormalizeAgriculturalPaperMainRowFields(
@@ -6311,6 +6492,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return NormalizeAgriculturalPaperInlineDetailText(text);
     }
 
+    private static string LimitAgriculturalPaperSubrowText(string text)
+    {
+        // The paper template reserves 48pt for this sub-row, which holds six Chinese glyphs.
+        // Keep the rendered value on one line; the source flow record remains unchanged.
+        const int maximumDisplayWidth = 12;
+        var value = NormalizeSingleLinePrintText(text);
+        var builder = new StringBuilder(value.Length);
+        var displayWidth = 0;
+        foreach (var character in value)
+        {
+            var characterWidth = character >= '\u2E80' ? 2 : 1;
+            if (displayWidth + characterWidth > maximumDisplayWidth)
+            {
+                break;
+            }
+
+            builder.Append(character);
+            displayWidth += characterWidth;
+        }
+
+        return builder.ToString();
+    }
+
     private static string NormalizeAgriculturalPaperInlineDetailText(string text)
     {
         return NormalizeSingleLinePrintText(text)
@@ -6515,6 +6719,98 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             && templateName.Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal);
 
         return isAgriculturalBank && isPersonalPaper;
+    }
+
+    private static bool IsAgriculturalBankPersonalElectronicTemplate(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        var bankName = context.Bank.Name ?? string.Empty;
+        var isAgriculturalBank = context.Bank.Id == 11
+            || context.Template.BankId == 11
+            || context.Template.VendorBankId == 55
+            || bankName.Contains("农行", StringComparison.Ordinal)
+            || bankName.Contains("农业", StringComparison.Ordinal);
+        var isPersonalElectronic = templateName.Contains("个人", StringComparison.Ordinal)
+            && templateName.Contains("电子版", StringComparison.Ordinal);
+
+        return isAgriculturalBank && isPersonalElectronic;
+    }
+
+    private static void NormalizeAgriculturalElectronicFlowFields(object target)
+    {
+        var counterpartyName = LimitSingleLinePrintText(
+            ReadStringProperty(target, nameof(FlowRecord.OppositeUsername), string.Empty),
+            10);
+        var channel = NormalizeAgriculturalElectronicTradeChannel(
+            ReadStringProperty(target, nameof(FlowRecord.TradeChannel), string.Empty));
+        Set(target, nameof(FlowRecord.OppositeUsername), counterpartyName);
+        Set(target, nameof(FlowRecord.TradeChannel), channel);
+        Set(target, nameof(FlowRecord.TradeChannelEn), channel);
+    }
+
+    private static string NormalizeAgriculturalElectronicTradeChannel(string value)
+    {
+        var channel = NormalizeSingleLinePrintText(value);
+        if (string.Equals(channel, "商户资金结算NormalT0", StringComparison.OrdinalIgnoreCase))
+        {
+            return "商户资金结算N";
+        }
+
+        if (Regex.IsMatch(channel, @"^360贷款ABCA\d+$"))
+        {
+            return "360贷款ABCA";
+        }
+
+        // This hard-coded vendor template places the log number and channel in one 84pt row.
+        return LimitAgriculturalElectronicChannel(channel);
+    }
+
+    private static string NormalizeAgriculturalPaperTradeChannel(string value)
+    {
+        var channel = NormalizeSingleLinePrintText(value);
+        if (string.Equals(channel, "\u5546\u6237\u8D44\u91D1\u7ED3\u7B97NormalT0", StringComparison.OrdinalIgnoreCase))
+        {
+            return "\u5546\u6237\u8D44\u91D1\u7ED3\u7B97";
+        }
+
+        if (Regex.IsMatch(channel, @"^360\u8D37\u6B3EABCA\d+$"))
+        {
+            return "360\u8D37\u6B3EABCA";
+        }
+
+        return LimitAgriculturalPaperTradeChannel(channel);
+    }
+
+    private static string LimitAgriculturalPaperTradeChannel(string value)
+    {
+        // This paper template's channel column is the same 48pt width as its counterparty sub-row.
+        return LimitSingleLinePrintText(value, 6);
+    }
+
+    private static string LimitAgriculturalElectronicChannel(string value)
+    {
+        const int maximumDisplayWidth = 14;
+        var text = NormalizeSingleLinePrintText(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        var displayWidth = 0;
+        foreach (var character in text)
+        {
+            var characterWidth = character >= '\u2E80' ? 2 : 1;
+            if (displayWidth + characterWidth > maximumDisplayWidth)
+            {
+                break;
+            }
+
+            builder.Append(character);
+            displayWidth += characterWidth;
+        }
+
+        return builder.ToString();
     }
 
     private static bool IsPaperPrintTemplate(PrintRenderContext context)
@@ -7546,6 +7842,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             yield return preferredName;
         }
 
+        if (name.StartsWith("\u519c\u5546\u94f6\u884c\u5bf9\u516c\u7248_", StringComparison.Ordinal))
+        {
+            var suffix = name["\u519c\u5546\u94f6\u884c\u5bf9\u516c\u7248_".Length..];
+            yield return $"\u519c\u5546\u94f6\u884c\u5bf9\u516c\u7248--{suffix}";
+        }
+
         if (!string.IsNullOrWhiteSpace(name))
         {
             yield return name;
@@ -7714,6 +8016,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248(\u6700\u65B0)"] = ["\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248\uFF08\u6700\u65B0\u7248\uFF09", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u72482", "\u519C\u884C\u4E2A\u4EBA\u7535\u5B50\u7248"],
             ["\u846B\u82A6\u5C9B"] = ["\u5B89\u5FBD\u519C\u91D1"],
         };
+
+        exactAliases["\u5de5\u884c\u5bf9\u516c\u7eb8\u8d28\u72482"] = ["\u5de5\u884c\u5bf9\u516c\u7eb8\u8d28\u7248"];
 
         if (exactAliases.TryGetValue(name, out var aliases))
         {

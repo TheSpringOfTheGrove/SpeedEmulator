@@ -50,12 +50,14 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     }
                 }
 
+                ApplySystemTemplatePageRowsOverrides(templates, savedTemplates);
+
                 var deletedTemplates = savedTemplates
-                    .Where(item => item.IsDeleted)
+                    .Where(item => item.IsDeleted && !item.IsPageRowsOverride)
                     .Select(item => item.Clone())
                     .ToList();
                 templates.AddRange(savedTemplates
-                    .Where(item => !item.IsDeleted)
+                    .Where(item => !item.IsDeleted && !item.IsPageRowsOverride)
                     .Select(item => item.Clone()));
                 if (deletedTemplates.Count > 0)
                 {
@@ -94,8 +96,30 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             .ToHashSet(StringComparer.Ordinal);
 
         return savedTemplates
-            .Where(item => !IsStaleVendorTemplateOverride(item, systemNameKeys, systemNameOnlyKeys, systemVendorKeys))
+            .Where(item => item.IsPageRowsOverride
+                || !IsStaleVendorTemplateOverride(item, systemNameKeys, systemNameOnlyKeys, systemVendorKeys))
             .ToList();
+    }
+
+    private static void ApplySystemTemplatePageRowsOverrides(
+        IEnumerable<PrintTemplate> systemTemplates,
+        IEnumerable<PrintTemplate> savedTemplates)
+    {
+        foreach (var pageRowsOverride in savedTemplates.Where(item =>
+                     item.IsPageRowsOverride
+                     && !item.IsDeleted
+                     && item.PageRows > 0))
+        {
+            var systemTemplate = systemTemplates.FirstOrDefault(item =>
+                item.IsSystem
+                && IsSameSystemTemplatePageRowsIdentity(item, pageRowsOverride));
+            if (systemTemplate is not null)
+            {
+                systemTemplate.PageRows = pageRowsOverride.PageRows;
+                systemTemplate.Config.RowCount = pageRowsOverride.PageRows;
+                systemTemplate.IsPageRowsOverride = true;
+            }
+        }
     }
 
     private static bool IsStaleVendorTemplateOverride(
@@ -123,6 +147,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             {
                 templates = [];
                 templatesByBank[bank.Id] = templates;
+            }
+
+            if (template.IsSystem)
+            {
+                SaveSystemTemplatePageRowsOverride(bank, template, templates);
+                Persist();
+                return Task.CompletedTask;
             }
 
             var copy = template.Clone();
@@ -177,6 +208,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 templatesByBank[bank.Id] = templates;
             }
 
+            if (template.IsSystem)
+            {
+                templates.RemoveAll(item =>
+                    item.IsPageRowsOverride
+                    && IsSameSystemTemplatePageRowsIdentity(item, template));
+            }
+
             var removedCount = templates.RemoveAll(item =>
                 !item.IsSystem
                 && !item.IsDeleted
@@ -196,6 +234,47 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             Persist();
             return Task.CompletedTask;
         }
+    }
+
+    private static void SaveSystemTemplatePageRowsOverride(
+        Bank bank,
+        PrintTemplate template,
+        List<PrintTemplate> templates)
+    {
+        var copy = template.Clone();
+        copy.Id = 0;
+        copy.BankId = bank.Id;
+        copy.IsSystem = false;
+        copy.IsDeleted = false;
+        copy.IsPageRowsOverride = true;
+        copy.PdfData = string.Empty;
+        copy.QuestPdfLayoutData = string.Empty;
+        copy.Config = new PrintPdfConfig();
+
+        var index = templates.FindIndex(item =>
+            !item.IsDeleted
+            && item.IsPageRowsOverride
+            && IsSameSystemTemplatePageRowsIdentity(item, copy));
+        if (index >= 0)
+        {
+            copy.Id = templates[index].Id;
+            templates[index] = copy;
+            return;
+        }
+
+        copy.Id = templates
+            .Where(item => !item.IsDeleted && item.Id > 0)
+            .Select(item => item.Id)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+        templates.Add(copy);
+    }
+
+    private static bool IsSameSystemTemplatePageRowsIdentity(PrintTemplate left, PrintTemplate right)
+    {
+        return string.Equals(left.Name?.Trim(), right.Name?.Trim(), StringComparison.Ordinal)
+            && left.VendorBankId == right.VendorBankId
+            && left.VendorId == right.VendorId;
     }
 
     private static List<PrintTemplate> CreateSystemTemplates(Bank bank)
@@ -500,6 +579,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
     private static PrintTemplate CreateSystemTemplate(Bank bank, PrintTemplateDefinition definition, int index)
     {
         var columns = CreateStatementColumns(bank).ToList();
+        var pageRows = GetDisplayRowCount(bank, definition);
 
         if (columns.Count == 0)
         {
@@ -519,7 +599,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             {
                 Name = definition.Name,
                 Desc = definition.Description,
-                RowCount = definition.PageRows <= 0 ? 28 : definition.PageRows,
+                RowCount = pageRows <= 0 ? 28 : pageRows,
                 MarginLeft = definition.Orientation == "A4Portrait" ? 54 : 22,
                 MarginTop = definition.Orientation == "A4Portrait" ? 54 : 22,
                 MarginRight = definition.Orientation == "A4Portrait" ? 54 : 22,
@@ -534,14 +614,14 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         else
         {
             config.Name = string.IsNullOrWhiteSpace(config.Name) ? definition.Name : config.Name;
-            if (definition.PageRows > 0)
+            if (pageRows > 0)
             {
-                config.RowCount = definition.PageRows;
+                config.RowCount = pageRows;
             }
 
             if (config.RowCount <= 0)
             {
-                config.RowCount = definition.PageRows <= 0 ? 28 : definition.PageRows;
+                config.RowCount = pageRows <= 0 ? 28 : pageRows;
             }
 
             if (config.Columns.Count == 0)
@@ -559,11 +639,20 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             IsSystem = definition.IsSystem,
             Name = definition.Name,
             PageSize = definition.Orientation,
-            PageRows = definition.PageRows,
+            PageRows = pageRows,
             Remark = definition.Remark,
             PdfData = definition.PdfData,
             Config = config
         };
+    }
+
+    private static int GetDisplayRowCount(Bank bank, PrintTemplateDefinition definition)
+    {
+        return bank.Id == 11
+            && bank.Type == BankTypes.Personal
+            && string.Equals(definition.Name, "\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal)
+            ? 46
+            : definition.PageRows;
     }
 
     private static IEnumerable<PrintTemplateDefinition> GetTemplateDefinitions(Bank bank)
@@ -1250,12 +1339,15 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         {
             var type = source.GetType();
             var name = Convert.ToString(type.GetProperty("Name")?.GetValue(source)) ?? string.Empty;
-            var pageRows = ConvertToInt(type.GetProperty("PageSize")?.GetValue(source));
+            var recordPageSize = ConvertToInt(type.GetProperty("PageSize")?.GetValue(source));
             var vendorConfig = type.GetProperty("PdfConfig")?.GetValue(source);
             if (vendorConfig is null && configFactory is not null && !string.IsNullOrWhiteSpace(name))
             {
                 vendorConfig = InvokeSilently(() => configFactory.Invoke(null, [name]));
             }
+
+            var config = ReadPdfConfig(vendorConfig, name, recordPageSize);
+            var pageRows = config?.RowCount > 0 ? config.RowCount : recordPageSize;
 
             return new VendorTemplateItem(
                 ConvertToLong(type.GetProperty("Id")?.GetValue(source)),
@@ -1265,7 +1357,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 Convert.ToString(type.GetProperty("Remark")?.GetValue(source)) ?? string.Empty,
                 Convert.ToString(type.GetProperty("PdfData")?.GetValue(source)) ?? string.Empty,
                 ConvertToBool(type.GetProperty("IsSystem")?.GetValue(source), defaultValue: true),
-                ReadPdfConfig(vendorConfig, name, pageRows));
+                config);
         }
 
         private static PrintPdfConfig? ReadPdfConfig(object? source, string templateName, int pageRows)
@@ -1279,7 +1371,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             {
                 Name = templateName,
                 Desc = Convert.ToString(GetPropertyValue(source, "Name")) ?? string.Empty,
-                RowCount = pageRows > 0 ? pageRows : ConvertToInt(GetPropertyValue(source, "RowCount")),
+                RowCount = ConvertToInt(GetPropertyValue(source, "RowCount")),
                 MarginLeft = ConvertToDouble(GetPropertyValue(source, "MarginLeft")),
                 MarginTop = ConvertToDouble(GetPropertyValue(source, "MarginTop")),
                 MarginRight = ConvertToDouble(GetPropertyValue(source, "MarginRight")),

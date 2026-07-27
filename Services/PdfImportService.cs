@@ -25,9 +25,10 @@ public interface IPdfImportService
     Task<PdfImportResult> ImportBankUserAndFlowRecordsAsync(string path, Bank bank, BankUser bankUser, CancellationToken cancellationToken = default);
 }
 
-public sealed class PdfImportService : IPdfImportService
+public sealed partial class PdfImportService : IPdfImportService
 {
     private const int MaxRawTextPreviewLength = 6000;
+    private static readonly char[] PdfWhitespaceCharacters = [' ', '\t', '\r', '\n', '\u00a0'];
     private static readonly BankPdfTemplateDefinition[] SupportedTemplates =
     [
         new("中行", "中国银行个人交易流水 PDF", ["中国银行交易流水明细清单", "借记卡号", "客户姓名", "记账日期"]),
@@ -210,7 +211,7 @@ public sealed class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path);
+            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, BankUser.CreateDraft(bank), document, PdfImportTarget.BankUsers);
@@ -227,7 +228,7 @@ public sealed class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path);
+            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, bankUser.Clone(), document, PdfImportTarget.FlowRecords);
@@ -244,7 +245,7 @@ public sealed class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path);
+            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, bankUser.Clone(), document, PdfImportTarget.BankUserAndFlowRecords);
@@ -303,7 +304,23 @@ public sealed class PdfImportService : IPdfImportService
         return string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character)));
     }
 
-    private static PdfExtractedDocument ExtractDocument(string path)
+    private static bool RequiresPositionedWordParsing(string bankName)
+    {
+        return bankName switch
+        {
+            "华夏" => true,
+            "浦发对公" => true,
+            "中信对公" => true,
+            "工行对公" => true,
+            "建行对公" => true,
+            "交行对公" => true,
+            "民生对公" => true,
+            "农行对公" => true,
+            _ => false
+        };
+    }
+
+    private static PdfExtractedDocument ExtractDocument(string path, bool includePositionedWords)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -344,6 +361,11 @@ public sealed class PdfImportService : IPdfImportService
                 for (var index = 0; index < pageLines.Count; index++)
                 {
                     extracted.Lines.Add(new PdfTextLine(page.Number, index + 1, pageLines[index]));
+                }
+
+                if (!includePositionedWords)
+                {
+                    continue;
                 }
 
                 try
@@ -1578,10 +1600,14 @@ public sealed class PdfImportService : IPdfImportService
     private static bool ParseAlipayPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
         var parsedUser = false;
-        var lines = document.Lines.ToList();
+        // Alipay statements reuse each text line in grouping and field extraction. Normalize it once
+        // here instead of allocating and applying the same cleanup again for every parsed record.
+        var lines = document.Lines
+            .Select(line => new PdfTextLine(line.PageNumber, line.LineNumber, CleanPdfValue(line.Text)))
+            .ToList();
         foreach (var line in lines.Take(120))
         {
-            var text = CleanPdfValue(line.Text);
+            var text = line.Text;
             var codeMatch = Regex.Match(text, @"编号:\s*(?<code>\S+)");
             if (codeMatch.Success)
             {
@@ -4048,6 +4074,7 @@ public sealed class PdfImportService : IPdfImportService
 
         var rest = RemoveAbcHeaderTail(match.Groups["rest"].Value);
         var (oppositeName, logNumber, channel, remark) = SplitAbcRemainder(rest);
+        channel = NormalizeAbcTradeChannel(channel);
         var hasTime = match.Groups["time"].Success && !string.IsNullOrWhiteSpace(match.Groups["time"].Value);
         var summary = CleanPdfValue(match.Groups["summary"].Value);
         if (!hasTime && IsAbcInterestSummary(summary) && string.IsNullOrWhiteSpace(remark) && !string.IsNullOrWhiteSpace(channel))
@@ -4736,7 +4763,7 @@ public sealed class PdfImportService : IPdfImportService
         out FlowRecord record)
     {
         record = new FlowRecord();
-        var lines = group.Select(item => CleanPdfValue(item.Text))
+        var lines = group.Select(item => item.Text)
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .ToList();
 
@@ -4748,7 +4775,7 @@ public sealed class PdfImportService : IPdfImportService
         var direction = string.Empty;
         var firstRest = string.Empty;
         var cursor = 1;
-        var firstMatch = Regex.Match(lines[0], @"^(?<direction>收入|支出|不计收支)\s+(?<rest>.+)$");
+        var firstMatch = AlipayDirectionRegex().Match(lines[0]);
         if (firstMatch.Success)
         {
             direction = firstMatch.Groups["direction"].Value;
@@ -4777,7 +4804,7 @@ public sealed class PdfImportService : IPdfImportService
             return TryParseSingleLineAlipayRecord(lines, bank, user, out record);
         }
 
-        var amountMatch = Regex.Match(lines[amountIndex], @"^(?:(?<payment>.+?)\s+)?(?<amount>\d[\d,]*\.\d{2})\s+(?<order>\S+)(?:\s+(?<tail>.*))?$");
+        var amountMatch = AlipayAmountAndOrderRegex().Match(lines[amountIndex]);
         if (!amountMatch.Success)
         {
             return TryParseSingleLineAlipayRecord(lines, bank, user, out record);
@@ -5797,7 +5824,7 @@ public sealed class PdfImportService : IPdfImportService
         var current = new List<PdfTextLine>();
         foreach (var line in lines)
         {
-            var text = line.Text.Trim();
+            var text = line.Text;
             if (IsAlipayIgnoredLine(text))
             {
                 continue;
@@ -5893,9 +5920,30 @@ public sealed class PdfImportService : IPdfImportService
 
     private static bool IsAlipayRecordStart(string text)
     {
-        return Regex.IsMatch(text, @"^(收入|支出|不计收支)\s+")
+        return AlipayRecordStartRegex().IsMatch(text)
             || text == "不计";
     }
+
+    [GeneratedRegex(@"^(?:\u6536\u5165|\u652f\u51fa|\u4e0d\u8ba1\u6536\u652f)\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayRecordStartRegex();
+
+    [GeneratedRegex(@"^(?<direction>\u6536\u5165|\u652f\u51fa|\u4e0d\u8ba1\u6536\u652f)\s+(?<rest>.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayDirectionRegex();
+
+    [GeneratedRegex(@"^(?:(?<payment>.+?)\s+)?(?<amount>\d[\d,]*\.\d{2})\s+(?<order>\S+)(?:\s+(?<tail>.*))?$", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayAmountAndOrderRegex();
+
+    [GeneratedRegex(@"^(?:.+?\s+)?\d[\d,]*\.\d{2}\s+\S+", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayAmountLineRegex();
+
+    [GeneratedRegex(@"^\d[\d,]*\.\d{2}$", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayAmountRegex();
+
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayDateRegex();
+
+    [GeneratedRegex(@"^\d{2}:\d{2}:\d{2}$", RegexOptions.CultureInvariant)]
+    private static partial Regex AlipayTimeRegex();
 
     private static bool IsCcbRecordStartWithoutSummary(string text)
     {
@@ -6238,13 +6286,45 @@ public sealed class PdfImportService : IPdfImportService
 
     private static string CleanPdfValue(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrEmpty(value))
         {
             return string.Empty;
         }
 
-        var text = Regex.Replace(value.Replace('\u00a0', ' ').Replace('\0', '.').Trim(), @"\s+", " ");
+        var text = value;
+        if (text.IndexOf('\0') >= 0)
+        {
+            text = text.Replace('\0', '.');
+        }
+
+        if (HasPdfWhitespace(text))
+        {
+            text = Regex.Replace(text.Replace('\u00a0', ' ').Trim(), @"\s+", " ");
+        }
+
+        if (text.Length == 0 || (text[0] != '-' && text[0] != '—' && text[0] != '_'))
+        {
+            return text;
+        }
         return Regex.IsMatch(text, @"^[-—_\s]+$") ? string.Empty : text;
+    }
+
+    private static bool HasPdfWhitespace(string value)
+    {
+        if (value.AsSpan().IndexOfAny(PdfWhitespaceCharacters) >= 0)
+        {
+            return true;
+        }
+
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static DateTime? ParseDateTimeOrNull(string value)
@@ -6536,6 +6616,19 @@ public sealed class PdfImportService : IPdfImportService
             CleanPdfValue(tokens[logIndex]),
             channelIndex < tokens.Count ? CleanPdfValue(tokens[channelIndex]) : string.Empty,
             CleanPdfValue(string.Join(' ', tokens.Skip(channelIndex + 1))));
+    }
+
+    private static string NormalizeAbcTradeChannel(string value)
+    {
+        var channel = CleanPdfValue(value);
+        if (string.Equals(channel, "商户资金结算NormalT0", StringComparison.OrdinalIgnoreCase))
+        {
+            return "商户资金结算N";
+        }
+
+        return Regex.IsMatch(channel, @"^360贷款ABCA\d+$")
+            ? "360贷款ABCA"
+            : channel;
     }
 
     private static string RemoveAbcHeaderTail(string value)
@@ -6948,7 +7041,7 @@ public sealed class PdfImportService : IPdfImportService
             productParts.Add(string.Join(' ', firstTokens.Skip(1)));
         }
 
-        foreach (var line in continuationLines.Select(CleanPdfValue).Where(item => !string.IsNullOrWhiteSpace(item)))
+        foreach (var line in continuationLines.Where(item => !string.IsNullOrWhiteSpace(item)))
         {
             if (ShouldAppendAlipayCounterparty(counterpartyParts, productParts, line))
             {
@@ -6984,7 +7077,7 @@ public sealed class PdfImportService : IPdfImportService
         }
 
         var dateIndex = FindAlipayCompactDateIndex(tokens);
-        if (dateIndex < 0 || dateIndex + 1 >= tokens.Count || !Regex.IsMatch(tokens[dateIndex + 1], @"^\d{2}:\d{2}:\d{2}$"))
+        if (dateIndex < 0 || dateIndex + 1 >= tokens.Count || !AlipayTimeRegex().IsMatch(tokens[dateIndex + 1]))
         {
             return false;
         }
@@ -7078,8 +7171,8 @@ public sealed class PdfImportService : IPdfImportService
     {
         for (var index = tokens.Count - 2; index >= 0; index--)
         {
-            if (Regex.IsMatch(tokens[index], @"^\d{4}-\d{2}-\d{2}$")
-                && Regex.IsMatch(tokens[index + 1], @"^\d{2}:\d{2}:\d{2}$"))
+            if (AlipayDateRegex().IsMatch(tokens[index])
+                && AlipayTimeRegex().IsMatch(tokens[index + 1]))
             {
                 return index;
             }
@@ -7092,7 +7185,7 @@ public sealed class PdfImportService : IPdfImportService
     {
         for (var index = endIndex - 1; index >= Math.Max(0, startIndex); index--)
         {
-            if (Regex.IsMatch(tokens[index], @"^\d[\d,]*\.\d{2}$"))
+            if (AlipayAmountRegex().IsMatch(tokens[index]))
             {
                 return index;
             }
@@ -7191,8 +7284,8 @@ public sealed class PdfImportService : IPdfImportService
     {
         for (var index = lines.Count - 2; index >= 0; index--)
         {
-            if (Regex.IsMatch(lines[index], @"^\d{4}-\d{2}-\d{2}$")
-                && Regex.IsMatch(lines[index + 1], @"^\d{2}:\d{2}:\d{2}$"))
+            if (AlipayDateRegex().IsMatch(lines[index])
+                && AlipayTimeRegex().IsMatch(lines[index + 1]))
             {
                 return index;
             }
@@ -7205,7 +7298,7 @@ public sealed class PdfImportService : IPdfImportService
     {
         for (var index = Math.Max(0, startIndex); index < endIndex; index++)
         {
-            if (Regex.IsMatch(lines[index], @"^(?:.+?\s+)?\d[\d,]*\.\d{2}\s+\S+"))
+            if (AlipayAmountLineRegex().IsMatch(lines[index]))
             {
                 return index;
             }
@@ -7217,7 +7310,6 @@ public sealed class PdfImportService : IPdfImportService
     private static (string TradeOrder, string MerchantOrder) SplitAlipayOrderParts(IReadOnlyList<string> parts)
     {
         var cleanedParts = parts
-            .Select(CleanPdfValue)
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .ToList();
         if (cleanedParts.Count == 0)
@@ -7284,11 +7376,42 @@ public sealed class PdfImportService : IPdfImportService
     private static string CollapseChineseSeparatedWords(string value)
     {
         var text = CleanPdfValue(value);
-        text = Regex.Replace(text, @"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", string.Empty);
-        text = Regex.Replace(text, @"\s*-\s*", "-");
-        text = Regex.Replace(text, @"\s*/\s*", "/");
-        text = Regex.Replace(text, @"(?<=\d)\s+(?=\d)", string.Empty);
-        return CleanPdfValue(text);
+        var firstSpace = text.IndexOf(' ');
+        if (firstSpace < 0)
+        {
+            return text;
+        }
+
+        var builder = new StringBuilder(text.Length);
+        builder.Append(text, 0, firstSpace);
+        for (var index = firstSpace; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (character != ' ')
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            var previous = builder.Length > 0 ? builder[^1] : '\0';
+            var next = index + 1 < text.Length ? text[index + 1] : '\0';
+            if ((IsCjkCharacter(previous) && IsCjkCharacter(next))
+                || (char.IsDigit(previous) && char.IsDigit(next))
+                || previous is '-' or '/'
+                || next is '-' or '/')
+            {
+                continue;
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsCjkCharacter(char value)
+    {
+        return value is >= '\u4e00' and <= '\u9fff';
     }
 
     private static string NormalizeBrokenDateTime(string value)
@@ -7487,7 +7610,7 @@ public sealed class PdfImportService : IPdfImportService
         var cleaned = CleanPdfValue(value);
         if (!string.IsNullOrWhiteSpace(cleaned))
         {
-            record[columnName] = cleaned;
+            record.ExtraFields[columnName] = cleaned;
         }
     }
 
@@ -7892,6 +8015,7 @@ public sealed class PdfImportService : IPdfImportService
 
     private static void NormalizeImportedUser(BankUser user, Bank bank)
     {
+        PdfImportTabularMapper.NormalizeImportedBankUser(user);
         user.BankId = bank.Id;
         user.BankName = bank.Name;
         if (string.IsNullOrWhiteSpace(user.UserCode))

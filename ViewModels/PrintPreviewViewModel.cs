@@ -152,6 +152,32 @@ public sealed class PrintPreviewViewModel : ObservableObject
         return GeneratePreviewAsync();
     }
 
+    public async Task SavePageRowsAsync(PrintTemplate template)
+    {
+        if (IsBusy || template.PageRows <= 0)
+        {
+            return;
+        }
+
+        template.Config.RowCount = template.PageRows;
+        template.IsPageRowsOverride = template.IsSystem;
+        IsBusy = true;
+        try
+        {
+            await templateRepository.SaveAsync(Bank, template);
+            StatusMessage = $"模板每页行数已保存：{template.Name} / {template.PageRows}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存模板页数失败：{GetFriendlyExceptionMessage(ex)}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     public async Task LoadAsync()
     {
         if (IsBusy)
