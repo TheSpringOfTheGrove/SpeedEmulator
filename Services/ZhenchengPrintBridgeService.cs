@@ -6250,10 +6250,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         RestoreAgriculturalPaperMainRowRemark(source, values, target, longDetail ?? string.Empty);
-        if (!string.IsNullOrWhiteSpace(paperSubrowDetail))
-        {
-            Set(target, nameof(FlowRecord.Remark), PrepareAgriculturalPaperDetailText(paperSubrowDetail));
-        }
 
         ClearAgriculturalPaperNarrowDetailFields(target);
         ClearAgriculturalPaperUnsafeLongTextFields(target, longDetail ?? string.Empty);
