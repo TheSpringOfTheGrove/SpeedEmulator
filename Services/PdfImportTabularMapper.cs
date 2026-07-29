@@ -325,6 +325,7 @@ internal static class PdfImportTabularMapper
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
         NormalizeImportedTextFields(record, ImportedFlowTextProperties);
+        NormalizeImportedTransactionType(record);
         var direction = ResolveFlowMoneyDirection(record.IncomeAttribute);
 
         if (!record.TradeMoney.HasValue)
@@ -415,6 +416,46 @@ internal static class PdfImportTabularMapper
         {
             fields[fieldName] = NormalizeWrappedPdfText(fields[fieldName]);
         }
+    }
+
+    private static void NormalizeImportedTransactionType(FlowRecord record)
+    {
+        if (!IsNumericTransactionType(record.ProductName))
+        {
+            return;
+        }
+
+        var numericType = record.ProductName;
+        if (string.IsNullOrWhiteSpace(record.ProductCode))
+        {
+            record.ProductCode = numericType;
+        }
+
+        record.ProductName = FirstDescriptiveTransactionText(record.ProductBrief, record.Remark, record.TradeExplain, record.Usage);
+        if (IsNumericTransactionType(record.ProductBrief))
+        {
+            record.ProductBrief = record.ProductName;
+        }
+
+        if (record.ExtraFields.TryGetValue("交易类型", out var rawType)
+            && IsNumericTransactionType(rawType))
+        {
+            record["交易类型"] = record.ProductName;
+        }
+    }
+
+    private static string FirstDescriptiveTransactionText(params string?[] values)
+    {
+        return values
+            .Select(value => value?.Trim() ?? string.Empty)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value) && !IsNumericTransactionType(value))
+            ?? string.Empty;
+    }
+
+    private static bool IsNumericTransactionType(string? value)
+    {
+        var text = value?.Trim() ?? string.Empty;
+        return text.Length > 0 && text.All(char.IsDigit);
     }
 
     private static string NormalizeWrappedPdfText(string? value)

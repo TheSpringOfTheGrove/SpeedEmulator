@@ -72,6 +72,18 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Remark", 496, 570)
     ];
 
+    private static readonly PdfPositionedColumnSpec[] PingAnPersonalColumns =
+    [
+        new("Sequence", 44, 78),
+        new("Date", 78, 135),
+        new("Amount", 135, 190),
+        new("Balance", 190, 260),
+        new("TradePlace", 260, 340),
+        new("Summary", 340, 405),
+        new("Remark", 405, 465),
+        new("Counterparty", 465, 600)
+    ];
+
     private static readonly PdfPositionedColumnSpec[] SpdbCorporateColumns =
     [
         new("Date", 18, 82),
@@ -308,6 +320,7 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         return bankName switch
         {
+            "平安" => true,
             "华夏" => true,
             "浦发对公" => true,
             "中信对公" => true,
@@ -547,6 +560,7 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool ParseIcbcPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
         var parsedUser = false;
+        var accountNumber = string.Empty;
         var lines = document.Lines.ToList();
         foreach (var line in lines.Take(80))
         {
@@ -569,11 +583,19 @@ public sealed partial class PdfImportService : IPdfImportService
             if (TryParseIcbcRecord(group, bank, user, out var record))
             {
                 result.FlowRecords.Add(record);
+                accountNumber = FirstNotBlank(accountNumber, record.Account);
             }
             else
             {
                 AddParseWarning(result, group, "该工行流水行未能按专用模板解析。");
             }
+        }
+
+        // ICBC statements show the card number in the header and the actual account
+        // number in the transaction table. They must remain separate user fields.
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            SetUserNamed(user, bank, "账号", accountNumber);
         }
 
         return parsedUser;
@@ -813,6 +835,26 @@ public sealed partial class PdfImportService : IPdfImportService
                 user["明细范围"] = CleanPdfValue(rangeMatch.Groups["scope"].Value);
                 parsedUser = true;
             }
+        }
+
+        if (document.Words.Count > 0)
+        {
+            foreach (var row in BuildPositionedRows(
+                document.Words.Where(word => !IsPingAnWatermarkWord(word)).ToList(),
+                PingAnPersonalColumns,
+                IsPingAnPositionedHeaderWord,
+                IsPingAnPositionedFooterWord,
+                @"^\d+$",
+                70,
+                70))
+            {
+                if (TryParsePingAnPositionedRecord(row, bank, user, out var record))
+                {
+                    result.FlowRecords.Add(record);
+                }
+            }
+
+            return parsedUser;
         }
 
         foreach (var group in GroupLinesByStart(lines, IsPingAnRecordStart, IsPingAnIgnoredLine))
@@ -4144,6 +4186,8 @@ public sealed partial class PdfImportService : IPdfImportService
 
         var afterSummary = tokens.Skip(summaryIndex + 1).ToList();
         var (note, oppositeName, oppositeAccount, oppositeBank) = SplitPingAnCounterparty(afterSummary);
+        var counterparty = BuildPingAnCounterpartyText(oppositeBank, oppositeName, oppositeAccount);
+        var counterpartyInfo = SplitPingAnCounterpartyInformation(counterparty);
         var amount = ParseDoubleOrNull(match.Groups["amount"].Value);
 
         record.BankId = bank.Id;
@@ -4157,9 +4201,10 @@ public sealed partial class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.Remark = note;
-        record.OppositeUsername = oppositeName;
-        record.OppositeAccount = oppositeAccount;
-        record.OppositeBank = oppositeBank;
+        record.OppositeUsername = counterpartyInfo.AccountName;
+        record.OppositeAccount = counterpartyInfo.AccountNumber;
+        record.OppositeBank = counterpartyInfo.CounterpartyBank;
+        record.MerchantName = counterpartyInfo.SecondaryMerchantName;
         ApplySignedAmountColumns(record, amount);
 
         SetFlowRaw(record, "交易日期", match.Groups["date"].Value);
@@ -4176,6 +4221,89 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "对方户名", record.OppositeUsername);
         SetFlowRaw(record, "对方账号", record.OppositeAccount);
         SetFlowRaw(record, "对方开户行", record.OppositeBank);
+        SetFlowRaw(record, "交易对手行", record.OppositeBank);
+        SetFlowRaw(record, "交易对手户名", record.OppositeUsername);
+        SetFlowRaw(record, "二级商户名称", record.MerchantName);
+        SetFlowRaw(record, "交易对手账号", record.OppositeAccount);
+        SetFlowRaw(record, "*交易对手信息", counterparty);
+        SetFlowRaw(record, "交易对手信息", counterparty);
+        SetFlowRaw(record, "留言", record.Remark);
+        SetFlowRaw(record, "流水号", record.SequenceNum);
+        return true;
+    }
+
+    private static bool TryParsePingAnPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var sequence = GetPositionedCell(row, "Sequence");
+        var date = GetPositionedCell(row, "Date");
+        var amountText = GetPositionedCell(row, "Amount");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(sequence, @"^\d+$")
+            || !Regex.IsMatch(date, @"^\d{4}-\d{2}-\d{2}$")
+            || string.IsNullOrWhiteSpace(amountText)
+            || string.IsNullOrWhiteSpace(balanceText))
+        {
+            return false;
+        }
+
+        var summary = GetPositionedCell(row, "Summary");
+        var remark = GetPositionedCell(row, "Remark");
+        var extractedCounterparty = GetPositionedCell(row, "Counterparty");
+        var counterparty = IsPingAnInterestSummary(summary)
+            ? string.Empty
+            : extractedCounterparty;
+        var counterpartyInfo = string.IsNullOrWhiteSpace(counterparty)
+            ? PingAnCounterpartyInformation.Empty
+            : SplitPingAnCounterpartyInformation(counterparty);
+        var amount = ParseDoubleOrNull(amountText);
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.SequenceNum = sequence;
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.TradePlace = GetPositionedCell(row, "TradePlace");
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.TradeExplain = summary;
+        record.Remark = remark;
+        record.OppositeUsername = counterpartyInfo.AccountName;
+        record.OppositeAccount = counterpartyInfo.AccountNumber;
+        record.OppositeBank = counterpartyInfo.CounterpartyBank;
+        record.MerchantName = counterpartyInfo.SecondaryMerchantName;
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "交易日期", date);
+        SetFlowRaw(record, "交易网点", record.TradePlace);
+        SetFlowRaw(record, "交易地点", record.TradePlace);
+        SetFlowRaw(record, "起息日", date);
+        SetFlowRaw(record, "摘要", record.ProductBrief);
+        SetFlowRaw(record, "摘要2", record.Remark);
+        SetFlowRaw(record, "摘要3", record.OppositeUsername);
+        SetFlowRaw(record, "借方发生额", amount is < 0 ? FormatMoney(Math.Abs(amount.Value)) : string.Empty);
+        SetFlowRaw(record, "贷方发生额", amount is > 0 ? FormatMoney(amount.Value) : string.Empty);
+        SetFlowRaw(record, "账户余额", balanceText);
+        SetFlowRaw(record, "传票号码", record.SequenceNum);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方开户行", record.OppositeBank);
+        SetFlowRaw(record, "交易对手行", record.OppositeBank);
+        SetFlowRaw(record, "交易对手户名", record.OppositeUsername);
+        SetFlowRaw(record, "二级商户名称", record.MerchantName);
+        SetFlowRaw(record, "交易对手账号", record.OppositeAccount);
+        SetFlowRaw(record, "借贷发生额(借:-贷:+)", amountText);
+        SetFlowRaw(record, "交易对方账户", record.OppositeAccount);
+        SetFlowRaw(record, "交易对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "交易对方行名称", record.OppositeBank);
+        SetFlowRaw(record, "*交易对手信息", counterparty);
+        SetFlowRaw(record, "交易对手信息", counterparty);
         SetFlowRaw(record, "留言", record.Remark);
         SetFlowRaw(record, "流水号", record.SequenceNum);
         return true;
@@ -4434,6 +4562,7 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "账户余额", match.Groups["balance"].Value);
         SetFlowRaw(record, "对手方户名", record.OppositeUsername);
         SetFlowRaw(record, "对手方账户", record.OppositeAccount);
+        SetFlowRaw(record, "对手方账号", record.OppositeAccount);
         SetFlowRaw(record, "对方户名", record.OppositeUsername);
         SetFlowRaw(record, "对方账号", record.OppositeAccount);
         SetFlowRaw(record, "摘要", record.Remark);
@@ -6053,6 +6182,7 @@ public sealed partial class PdfImportService : IPdfImportService
             || text.Contains("Information", StringComparison.Ordinal)
             || text.Contains("当前第", StringComparison.Ordinal)
             || text.Contains("Page ", StringComparison.Ordinal)
+            || Regex.IsMatch(text, @"共\s*\d+\s*页\s*[，,]?\s*\d+\s*/\s*\d+\s*$")
             || text.Contains("银行签章", StringComparison.Ordinal)
             || text.Contains("Account Name:", StringComparison.Ordinal)
             || text.Contains("A/C No:", StringComparison.Ordinal)
@@ -6075,6 +6205,26 @@ public sealed partial class PdfImportService : IPdfImportService
             || Regex.IsMatch(text, @"^(RMB|人民币)\s+.*银行")
             || Regex.IsMatch(text, @"^\d{8}\s*-\s*\d{8}\s+全部交易$")
             || text == "平安银行总行";
+    }
+
+    private static bool IsPingAnPositionedHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "序号" or "交易日期" or "交易金额" or "余额" or "交易地点" or "摘要" or "备注" or "交易对手信息"
+            or "No." or "Transaction" or "Date" or "Amount" or "Balance" or "Trading" or "Place" or "Remark" or "Notes" or "Counterparty" or "Information";
+    }
+
+    private static bool IsPingAnPositionedFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value.StartsWith("平安银行（银行签章）", StringComparison.Ordinal)
+            || value.StartsWith("当前第", StringComparison.Ordinal)
+            || value.StartsWith("Page", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"共\s*\d+\s*页\s*[，,]?\s*\d+\s*/\s*\d+\s*$");
+    }
+
+    private static bool IsPingAnWatermarkWord(PdfTextWord word)
+    {
+        return word.Text is "P" or "A" or "B";
     }
 
     private static bool IsSpdbIgnoredLine(string text)
@@ -6703,6 +6853,84 @@ public sealed partial class PdfImportService : IPdfImportService
         var allCounterparty = NormalizeCounterpartyText(string.Join(' ', cleanedTokens));
         var (fullName, fullAccount) = SplitTrailingNameAccount(allCounterparty);
         return (string.Empty, fullName, fullAccount, string.Empty);
+    }
+
+    private readonly record struct PingAnCounterpartyInformation(
+        string CounterpartyBank,
+        string AccountName,
+        string SecondaryMerchantName,
+        string AccountNumber)
+    {
+        public static PingAnCounterpartyInformation Empty { get; } = new(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+    }
+
+    private static bool IsPingAnInterestSummary(string summary)
+    {
+        return CleanPdfValue(summary).Contains("利息", StringComparison.Ordinal);
+    }
+
+    private static string BuildPingAnCounterpartyText(
+        string counterpartyBank,
+        string accountName,
+        string accountNumber)
+    {
+        return string.Join(
+            '-',
+            new[] { counterpartyBank, accountName, accountNumber }
+                .Select(CleanPdfValue)
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+    }
+
+    private static PingAnCounterpartyInformation SplitPingAnCounterpartyInformation(string value)
+    {
+        var normalized = NormalizeCounterpartyText(value).Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return PingAnCounterpartyInformation.Empty;
+        }
+
+        var (nameText, accountNumber) = SplitTrailingNameAccount(normalized);
+        if (string.IsNullOrWhiteSpace(accountNumber))
+        {
+            return new PingAnCounterpartyInformation(
+                CleanPdfValue(nameText),
+                string.Empty,
+                string.Empty,
+                string.Empty);
+        }
+
+        var names = nameText
+            .Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(CleanPdfValue)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        if (names.Count == 0)
+        {
+            return new PingAnCounterpartyInformation(
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                accountNumber);
+        }
+
+        var counterpartyBank = names[0];
+        var accountName = names.Count > 1
+            ? string.Join('-', names.Skip(1))
+            : string.Empty;
+        var secondaryMerchantName = names.Count > 2
+            ? string.Join('-', names.Skip(2))
+            : string.Empty;
+
+        return new PingAnCounterpartyInformation(
+            counterpartyBank,
+            accountName,
+            secondaryMerchantName,
+            accountNumber);
     }
 
     private static bool IsPingAnNoteToken(string value)

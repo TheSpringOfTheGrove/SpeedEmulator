@@ -15170,6 +15170,7 @@ public sealed class FlowAutoGenerator
         }
 
         ApplyBankSpecificGeneratedRecordFallbacks(request.Bank, rule, record);
+        NormalizeGeneratedTransactionType(record);
 
         ApplyUserAccountToRecord(request, record);
 
@@ -16917,6 +16918,46 @@ public sealed class FlowAutoGenerator
         }
 
         return changed;
+    }
+
+    private static void NormalizeGeneratedTransactionType(FlowRecord record)
+    {
+        if (!IsNumericTransactionType(record.ProductName))
+        {
+            return;
+        }
+
+        var numericType = record.ProductName;
+        if (string.IsNullOrWhiteSpace(record.ProductCode))
+        {
+            record.ProductCode = numericType;
+        }
+
+        var transactionType = FirstDescriptiveTransactionText(
+            record.ProductBrief,
+            record.Remark,
+            record.TradeExplain,
+            record.Usage);
+        record.ProductName = string.IsNullOrWhiteSpace(transactionType) ? "转账" : transactionType;
+
+        if (IsNumericTransactionType(record["交易类型"]))
+        {
+            record["交易类型"] = record.ProductName;
+        }
+    }
+
+    private static string FirstDescriptiveTransactionText(params string?[] values)
+    {
+        return values
+            .Select(value => value?.Trim() ?? string.Empty)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value) && !IsNumericTransactionType(value))
+            ?? string.Empty;
+    }
+
+    private static bool IsNumericTransactionType(string? value)
+    {
+        var text = value?.Trim() ?? string.Empty;
+        return text.Length > 0 && text.All(char.IsDigit);
     }
 
     private static bool TryReselectRepeatedIntegerAmount(
@@ -19641,7 +19682,7 @@ public sealed class FlowAutoGenerator
         {
             ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "交易对方", "对方户名", "户名", "对方名称", "对方姓名", "对方账号名称"), rule.OppositeUsername, record.OppositeUsername), "交易对方", "对方户名", "户名", "对方名称", "对方姓名", "对方账号名称");
         }
-        ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "对方账号", "对方账户", "对手账号", "交易对手账号", "对方卡号账号", "对方帐号"), rule.OppositeAccount, record.OppositeAccount), "对方账号", "对方账户", "对手账号", "交易对手账号", "对方卡号账号", "对方帐号");
+        ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "对方账号", "对方账户", "对手账号", "对手方账号", "交易对手账号", "对方卡号账号", "对方帐号"), rule.OppositeAccount, record.OppositeAccount), "对方账号", "对方账户", "对手账号", "对手方账号", "交易对手账号", "对方卡号账号", "对方帐号");
         ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "对方开户行", "对方银行", "对方行名"), rule.OppositeBank, record.OppositeBank), "对方开户行", "对方银行", "对方行名");
         ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "商家订单号", "商户单号", "商户名称"), rule.MerchantName, record.MerchantName), "商家订单号", "商户单号", "商户名称");
         ApplyColumnValue(bank, record, FirstNonEmpty(GetRuleColumnText(rule, ruleColumns, "地点", "交易地点", "交易场所", "交易网点", "交易行所"), rule.TradePlace, record.TradePlace), "地点", "交易地点", "交易场所", "交易网点", "交易行所");
@@ -19665,7 +19706,7 @@ public sealed class FlowAutoGenerator
             IsWechatBank(bank)
                 ? ["交易对方"]
                 : ["交易对方", "对方户名", "户名", "对方名称", "对方姓名", "对方账号名称"]);
-        ApplyColumnValue(bank, record, record.OppositeAccount, "对方账号", "对方账户", "对手账号", "交易对手账号", "对方卡号账号", "对方帐号");
+        ApplyColumnValue(bank, record, record.OppositeAccount, "对方账号", "对方账户", "对手账号", "对手方账号", "交易对手账号", "对方卡号账号", "对方帐号");
         ApplyColumnValue(bank, record, record.OppositeBank, "对方开户行", "对方银行", "对方行名");
         ApplyColumnValue(bank, record, record.MerchantName, "商家订单号", "商户单号", "商户名称");
         ApplyColumnValue(bank, record, record.TradePlace, "地点", "交易地点", "交易场所", "交易网点", "交易行所");

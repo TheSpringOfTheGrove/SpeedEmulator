@@ -5316,6 +5316,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return bank.Name.Contains("\u5E73\u5B89", StringComparison.Ordinal);
     }
 
+    private static bool IsPingAnPrintContext(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        return IsPingAnBank(context.Bank)
+            || context.Bank.Id == 19
+            || context.Template.BankId == 19
+            || context.Template.VendorBankId == 54
+            || templateName.Contains("\u5E73\u5B89", StringComparison.Ordinal);
+    }
+
     private static bool IsSpdbBank(Bank bank)
     {
         return bank.Name.Contains("\u6D66\u53D1", StringComparison.Ordinal)
@@ -5392,6 +5402,31 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         string merchantName)
     {
+        var direction = FirstNotBlank(
+            source.IncomeAttribute,
+            GetValue(values, nameof(FlowRecord.IncomeAttribute)),
+            source.IncomeFlag,
+            GetValue(values, nameof(FlowRecord.IncomeFlag)),
+            source.Usage,
+            GetValue(values, nameof(FlowRecord.Usage)));
+        var paymentMethod = FirstNotBlank(
+            source.TradeChannel,
+            GetValue(values, nameof(FlowRecord.TradeChannel)),
+            source.CashCheck,
+            GetValue(values, nameof(FlowRecord.CashCheck)));
+        var tradeOrder = FirstNotBlank(
+            source.SerialNum,
+            GetValue(values, nameof(FlowRecord.SerialNum)),
+            source.ReceiptNum,
+            GetValue(values, nameof(FlowRecord.ReceiptNum)));
+        var counterparty = FirstNotBlank(
+            source.OppositeUsername,
+            GetValue(values, nameof(FlowRecord.OppositeUsername)));
+        var product = FirstNotBlank(
+            source.ProductBrief,
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            source.ProductName,
+            GetValue(values, nameof(FlowRecord.ProductName)));
         var receiptNum = FirstNotBlank(
             source.ReceiptNum,
             GetValue(values, nameof(FlowRecord.ReceiptNum)),
@@ -5401,10 +5436,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         SetTargetValueIfBlank(target, nameof(FlowRecord.ReceiptNum), receiptNum);
         SetTargetValueIfBlank(target, nameof(FlowRecord.MerchantName), receiptNum);
-        Set(target, nameof(FlowRecord.ProductType), string.Empty);
-        Set(target, nameof(FlowRecord.OppositeUsername), string.Empty);
-        Set(target, nameof(FlowRecord.Remark), string.Empty);
-        Set(target, nameof(FlowRecord.TradeChannel), string.Empty);
+        Set(target, nameof(FlowRecord.ProductType), direction);
+        Set(target, nameof(FlowRecord.OppositeUsername), counterparty);
+        Set(target, nameof(FlowRecord.ProductBrief), product);
+        Set(target, nameof(FlowRecord.ProductName), product);
+        Set(target, nameof(FlowRecord.TradeChannel), paymentMethod);
+        Set(target, nameof(FlowRecord.CashCheck), paymentMethod);
+        SetPrintFieldAlias(target, "收/支", direction);
+        SetPrintFieldAlias(target, "收/付款方式", paymentMethod);
+        SetPrintFieldAlias(target, "交易订单号", tradeOrder);
+        SetPrintFieldAlias(target, "交易对方", counterparty);
+        SetPrintFieldAlias(target, "商品说明", product);
     }
 
     private static void ApplyWechatPrintFieldAliases(
@@ -8181,6 +8223,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return IsSpdbCorporatePrintContext(context)
             || IsChinaMerchantsCorporatePrintContext(context)
             || IsCiticCorporatePrintContext(context)
+            || IsPingAnPrintContext(context)
             ? NormalizeSingleLinePrintText(value)
             : NormalizePrintNumber(value);
     }
