@@ -1967,17 +1967,25 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
+        List<FlowRecord> importedRecords;
         if (textRecords.Count > positionedRecords.Count)
         {
             MergeSpdbCorporatePositionedRecords(textRecords, positionedRecords);
-            result.FlowRecords.AddRange(textRecords);
+            importedRecords = textRecords;
         }
         else
         {
-            result.FlowRecords.AddRange(positionedRecords);
+            importedRecords = positionedRecords;
         }
 
-        InferSpdbCorporateMoneyDirections(result.FlowRecords);
+        foreach (var record in importedRecords)
+        {
+            StripSpdbCorporatePositionedArtifacts(record);
+            NormalizeSpdbCorporateRefundRecord(record);
+        }
+
+        result.FlowRecords.AddRange(importedRecords);
+        InferSpdbCorporateMoneyDirections(importedRecords);
         return parsedUser;
     }
 
@@ -3297,10 +3305,10 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         var serial = GetPositionedCell(row, "Serial");
-        var summary = GetPositionedCell(row, "Summary");
-        var remark = GetPositionedCell(row, "Remark");
-        var oppositeBank = GetPositionedCell(row, "OppositeBank");
-        var oppositeName = GetPositionedCell(row, "OppositeName");
+        var summary = StripSpdbCorporatePositionedArtifacts(GetPositionedCell(row, "Summary"));
+        var remark = StripSpdbCorporatePositionedArtifacts(GetPositionedCell(row, "Remark"));
+        var oppositeBank = StripSpdbCorporatePositionedArtifacts(GetPositionedCell(row, "OppositeBank"));
+        var oppositeName = StripSpdbCorporatePositionedArtifacts(GetPositionedCell(row, "OppositeName"));
         var fallbackAmountText = string.Empty;
         if (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText))
         {
@@ -3346,6 +3354,90 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "备注", remark);
         SetFlowRaw(record, "业务产品种类", summary);
         return true;
+    }
+
+    private static void StripSpdbCorporatePositionedArtifacts(FlowRecord record)
+    {
+        record.ProductBrief = StripSpdbCorporatePositionedArtifacts(record.ProductBrief);
+        record.ProductName = StripSpdbCorporatePositionedArtifacts(record.ProductName);
+        record.Remark = StripSpdbCorporatePositionedArtifacts(record.Remark);
+        record.OppositeUsername = StripSpdbCorporatePositionedArtifacts(record.OppositeUsername);
+        record.OppositeBank = StripSpdbCorporatePositionedArtifacts(record.OppositeBank);
+
+        foreach (var field in record.ExtraFields.Keys.ToArray())
+        {
+            record[field] = StripSpdbCorporatePositionedArtifacts(record[field]);
+        }
+    }
+
+    private static void NormalizeSpdbCorporateRefundRecord(FlowRecord record)
+    {
+        const string refundSummaryPrefix = "\u6c47\u51fa\u9000";
+        var combinedName = CleanPdfValue(record.OppositeUsername);
+        var summaryStart = combinedName.IndexOf(refundSummaryPrefix, StringComparison.Ordinal);
+        if (summaryStart <= 0)
+        {
+            return;
+        }
+
+        var detailStart = new[]
+            {
+                "\u9000\u6c47\u6765\u8d26",
+                "\u539f\u4e1a\u52a1\u7f16\u53f7"
+            }
+            .Select(prefix => combinedName.IndexOf(prefix, summaryStart + refundSummaryPrefix.Length, StringComparison.Ordinal))
+            .Where(index => index > summaryStart)
+            .DefaultIfEmpty(-1)
+            .Min();
+        if (detailStart <= summaryStart)
+        {
+            return;
+        }
+
+        var counterpartyName = CleanPdfValue(combinedName[..summaryStart]);
+        var summary = CleanPdfValue(combinedName[summaryStart..detailStart]);
+        var remark = CleanPdfValue(combinedName[detailStart..]);
+        var residualSummary = CleanPdfValue(record.ProductBrief);
+        if (!string.IsNullOrWhiteSpace(residualSummary)
+            && !residualSummary.StartsWith(refundSummaryPrefix, StringComparison.Ordinal))
+        {
+            remark = string.Concat(remark, residualSummary);
+        }
+
+        if (string.IsNullOrWhiteSpace(counterpartyName)
+            || string.IsNullOrWhiteSpace(summary)
+            || string.IsNullOrWhiteSpace(remark))
+        {
+            return;
+        }
+
+        record.OppositeUsername = counterpartyName;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.Remark = remark;
+        SetFlowRaw(record, "\u5bf9\u65b9\u6237\u540d", counterpartyName);
+        SetFlowRaw(record, "\u6458\u8981", summary);
+        SetFlowRaw(record, "\u5907\u6ce8", remark);
+        SetFlowRaw(record, "\u4e1a\u52a1\u4ea7\u54c1\u79cd\u7c7b", summary);
+    }
+
+    private static string StripSpdbCorporatePositionedArtifacts(string value)
+    {
+        var cleaned = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return string.Empty;
+        }
+
+        // The SPDB corporate statement prints its page signature beside the last table row.
+        // Pdf text extraction can place that signature and the repeated English header in table cells.
+        cleaned = Regex.Replace(cleaned, @"2\s*U35CJLE\s*[A-Za-z0-9]*", string.Empty, RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"Teller'?s\s*Serial\s*Number", string.Empty, RegexOptions.IgnoreCase);
+        cleaned = cleaned
+            .Replace("\u501f\u65b9", string.Empty, StringComparison.Ordinal)
+            .Replace("Debit", string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        return CleanPdfValue(cleaned);
     }
 
     private static bool TryParseSpdbCorporateTextRecord(
@@ -5296,7 +5388,9 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool IsSpdbCorporateFooterWord(string text)
     {
-        return text.StartsWith("Page", StringComparison.Ordinal)
+        var value = CleanPdfValue(text);
+        return value.StartsWith("2U35CJLE", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("Page", StringComparison.Ordinal)
             || text.StartsWith("本页小计", StringComparison.Ordinal)
             || text.StartsWith("期末余额", StringComparison.Ordinal)
             || text.StartsWith("Ending", StringComparison.Ordinal);
