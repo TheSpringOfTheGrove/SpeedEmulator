@@ -966,7 +966,7 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
-        foreach (var group in GroupLinesByStart(lines, IsCibRecordStart, IsCibIgnoredLine))
+        foreach (var group in GroupCibRecords(lines))
         {
             if (TryParseCibRecord(group, bank, user, out var record))
             {
@@ -5667,6 +5667,19 @@ public sealed partial class PdfImportService : IPdfImportService
         return result;
     }
 
+    private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupCibRecords(IReadOnlyList<PdfTextLine> lines)
+    {
+        // Industrial Bank repeats its table header and account metadata on every page. A record
+        // must never consume lines from the next page, even when the page ends with its last row.
+        var result = new List<IReadOnlyList<PdfTextLine>>();
+        foreach (var pageLines in lines.GroupBy(line => line.PageNumber))
+        {
+            result.AddRange(GroupLinesByStart(pageLines.ToList(), IsCibRecordStart, IsCibIgnoredLine));
+        }
+
+        return result;
+    }
+
     private static IReadOnlyList<PdfTextLine> SplitAbcEmbeddedRecordLines(IReadOnlyList<PdfTextLine> lines)
     {
         var result = new List<PdfTextLine>(lines.Count);
@@ -6263,6 +6276,8 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsCibIgnoredLine(string text)
     {
         return IsCommonIgnoredLine(text)
+            || IsCibPageFooterLine(text)
+            || text is "Transaction" or "Amount" or "Account Name" or "Account No." or "Use/Remark"
             || text.Contains("Transaction Time", StringComparison.Ordinal)
             || text.Contains("Accounting Date", StringComparison.Ordinal)
             || text.Contains("Transaction Type", StringComparison.Ordinal)
@@ -6307,6 +6322,24 @@ public sealed partial class PdfImportService : IPdfImportService
             || Regex.IsMatch(text, @"^兴业银行\s+\d{4}-\d{2}-\d{2}")
             || Regex.IsMatch(text, @"^行\s+\d{4}-\d{2}-\d{2}")
             || Regex.IsMatch(text, @"^\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}$");
+    }
+
+    private static bool IsCibPageFooterLine(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value.StartsWith("\u4ea4\u6613\u7c7b\u578b\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("\u8f6c\u8d26\u91d1\u989d\u533a\u95f4\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("\u5bf9\u65b9\u6237\u540d\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("\u5bf9\u65b9\u8d26\u53f7\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("\u7528\u9014/\u5907\u6ce8\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("\u6253\u5370\u65e5\u671f\uff1a", StringComparison.Ordinal)
+            || value.StartsWith("Transaction Type:", StringComparison.Ordinal)
+            || value.StartsWith("Transfer Amount Range:", StringComparison.Ordinal)
+            || value.StartsWith("Counterparty's Account Name:", StringComparison.Ordinal)
+            || value.StartsWith("Counterparty's Account No.:", StringComparison.Ordinal)
+            || value.StartsWith("Use/Remark:", StringComparison.Ordinal)
+            || value.StartsWith("Print Time:", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"^\d{4}\u5e74\d{2}\u6708\d{2}\u65e5(?:\s+[\d.:]+)?$");
     }
 
     private static bool IsPsbcIgnoredLine(string text)
@@ -6497,6 +6530,19 @@ public sealed partial class PdfImportService : IPdfImportService
                 .Replace("-", string.Empty, StringComparison.Ordinal);
 
             if (plain.Length >= 8 && Regex.IsMatch(token, @"^[0-9A-Za-z*\/-]+$"))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindLastCibCounterpartyAccountIndex(IReadOnlyList<string> tokens)
+    {
+        for (var index = tokens.Count - 1; index >= 0; index--)
+        {
+            if (Regex.IsMatch(CleanPdfValue(tokens[index]), @"^\d{6,}$"))
             {
                 return index;
             }
@@ -7040,7 +7086,7 @@ public sealed partial class PdfImportService : IPdfImportService
             return (string.Empty, string.Empty, string.Empty, string.Empty);
         }
 
-        var accountIndex = FindLastCounterpartyAccountIndex(tokens);
+        var accountIndex = FindLastCibCounterpartyAccountIndex(tokens);
         if (accountIndex < 0)
         {
             return (CollapseChineseSeparatedWords(string.Join(' ', tokens)), string.Empty, string.Empty, string.Empty);
