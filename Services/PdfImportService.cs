@@ -483,6 +483,7 @@ public sealed partial class PdfImportService : IPdfImportService
 
         foreach (var record in result.FlowRecords)
         {
+            record.IsDocumentImported = true;
             PdfImportTabularMapper.NormalizeImportedFlowRecord(record, bank, bankUser);
             if (bank.Name == "招行对公")
             {
@@ -491,6 +492,7 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
+        EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
         ReindexFlowRecords(result.FlowRecords);
         if (target == PdfImportTarget.BankUsers && result.Users.Count == 0 && !result.HasBlockingErrors)
         {
@@ -8560,7 +8562,8 @@ public sealed partial class PdfImportService : IPdfImportService
             var record = new FlowRecord
             {
                 BankId = bank.Id,
-                BankUserId = bankUser.Id
+                BankUserId = bankUser.Id,
+                IsDocumentImported = true
             };
 
             foreach (var (columnIndex, column) in headerMap)
@@ -8602,6 +8605,7 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
+        EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
         ReindexFlowRecords(result.FlowRecords);
         if (result.FlowRecords.Count == 0 && !result.HasBlockingErrors)
         {
@@ -8616,6 +8620,28 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         return result;
+    }
+
+    private static void EnsureSystemGeneratedSerialNumbers(
+        IEnumerable<FlowRecord> records,
+        Bank bank,
+        BankUser bankUser)
+    {
+        if (!string.Equals(bank.Name, "光大对公", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var accountNumber = FirstNotBlank(bankUser.AccountNo, bankUser.CardNo);
+        foreach (var record in records)
+        {
+            if (!string.IsNullOrWhiteSpace(FirstNotBlank(record.SerialNum, record.SequenceNum, record.LogNum)))
+            {
+                continue;
+            }
+
+            record.SerialNum = SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(accountNumber);
+        }
     }
 
     private static PdfImportResult CreateResult(

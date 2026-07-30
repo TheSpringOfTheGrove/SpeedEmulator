@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using PdfSharpCore.Pdf.Advanced;
 using PdfSharpCore.Pdf.Content;
 using PdfSharpCore.Pdf.Content.Objects;
 using PdfSharpCore.Pdf;
@@ -1208,13 +1209,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
                     if (!IsDefaultQuestPdfBridgeDisabled()
                         && !IsAgriculturalBankPersonalPaperTemplate(context)
-                        && !ShouldUseVendorCompletePdfPipeline(context)
+                        && !ShouldBypassDefaultQuestPdfBridge(context)
                         && !ShouldUseIcbcFallbackStampCode(context))
                     {
                         try
                         {
                             if (DefaultQuestPdfExporter.ExportOrThrow(vendorDir, context, path))
                             {
+                                NormalizeImportedDocumentSerialNumbersInPdf(context, path);
                                 return true;
                             }
                         }
@@ -1644,8 +1646,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SequenceNum"),
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
-                    $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                    CreateSystemGeneratedPrintSerialNumber(context, index));
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
@@ -1707,6 +1709,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     NormalizeVendorDynamicImageDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, path]);
                     NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+                    NormalizeImportedDocumentSerialNumbersInPdf(context, path);
                     ApplyVendorDigitalSignature(context, path);
                     return true;
                 }
@@ -1847,6 +1850,18 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 && templateName.Contains("电子", StringComparison.Ordinal);
         }
 
+        private static bool ShouldBypassDefaultQuestPdfBridge(PrintRenderContext context)
+        {
+            return ShouldUseVendorCompletePdfPipeline(context)
+                || IsEverbrightCorporateElectronicTemplate(context);
+        }
+
+        private static bool IsEverbrightCorporateElectronicTemplate(PrintRenderContext context)
+        {
+            return IsEverbrightCorporatePrintContext(context)
+                && context.Template.Name.Contains("光大对公电子版", StringComparison.Ordinal);
+        }
+
         private void ExportIcbcPerPageFallbackStampCodes(
             PrintRenderContext context,
             ResolvedTemplate resolvedTemplate,
@@ -1889,6 +1904,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     NormalizeVendorDynamicImageDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, tempPath]);
                     NormalizeEverbrightPersonalElectronicFooterPdf(context, tempPath);
+                    NormalizeImportedDocumentSerialNumbersInPdf(context, tempPath);
 
                     var actualPageCount = GetPdfPageCount(tempPath);
                     if (pageIndex == 0)
@@ -2473,6 +2489,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             NormalizeVendorDynamicImageDocument(context, document);
             generatePdfMethod.Invoke(null, [document, path]);
             NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+            NormalizeImportedDocumentSerialNumbersInPdf(context, path);
             return File.Exists(path);
         }
 
@@ -2652,8 +2669,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SequenceNum"),
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
-                    $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                    CreateSystemGeneratedPrintSerialNumber(context, index));
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
@@ -3569,8 +3586,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "SequenceNum"),
                     GetValue(values, "SerialNum"),
                     GetValue(values, "LogNum"),
-                    $"P{index + 1:000000000}");
-                var serialNumber = NormalizePrintNumber(context, FirstNotBlank(GetValue(values, "SerialNum"), sequenceNumber));
+                    CreateSystemGeneratedPrintSerialNumber(context, index));
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
@@ -7743,6 +7760,205 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static void NormalizeImportedDocumentSerialNumbersInPdf(PrintRenderContext context, string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var documentSerials = context.Records
+            .Where(record => record.IsDocumentImported)
+            .Select(record => NormalizeDocumentImportSerialNumber(FirstNotBlank(
+                record.SerialNum,
+                record.SequenceNum,
+                record.LogNum)))
+            .Where(serial => !string.IsNullOrWhiteSpace(serial))
+            .ToHashSet(StringComparer.Ordinal);
+        if (documentSerials.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            var changed = false;
+            foreach (var page in document.Pages)
+            {
+                var fontMaps = ReadPdfFontUnicodeMaps(page);
+                if (fontMaps.Count == 0)
+                {
+                    continue;
+                }
+
+                var sequence = ContentReader.ReadContent(page);
+                if (!TryNormalizeImportedDocumentSerialNumbers(sequence, fontMaps, documentSerials))
+                {
+                    continue;
+                }
+
+                page.Contents.ReplaceContent(sequence);
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            var tempPath = path + ".document-serials.tmp";
+            try
+            {
+                document.Save(tempPath);
+                document.Close();
+                File.Copy(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteLocalFile(tempPath);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static Dictionary<string, IReadOnlyDictionary<ushort, string>> ReadPdfFontUnicodeMaps(PdfPage page)
+    {
+        var fonts = page.Resources?.Elements.GetDictionary("/Font");
+        if (fonts is null)
+        {
+            return new Dictionary<string, IReadOnlyDictionary<ushort, string>>(StringComparer.Ordinal);
+        }
+
+        return fonts.Elements
+            .Where(item => item.Value is PdfReference)
+            .Select(item => new
+            {
+                Name = item.Key,
+                Map = ReadPdfFontUnicodeMap(((PdfReference)item.Value!).Value as PdfDictionary)
+            })
+            .Where(item => item.Map.Count > 0)
+            .ToDictionary(item => item.Name, item => (IReadOnlyDictionary<ushort, string>)item.Map, StringComparer.Ordinal);
+    }
+
+    private static Dictionary<ushort, string> ReadPdfFontUnicodeMap(PdfDictionary? font)
+    {
+        var toUnicode = font?.Elements.GetObject("/ToUnicode") as PdfDictionary;
+        if (toUnicode?.Stream?.UnfilteredValue is not { Length: > 0 } bytes)
+        {
+            return [];
+        }
+
+        var map = new Dictionary<ushort, string>();
+        var cmap = Encoding.ASCII.GetString(bytes);
+        foreach (Match match in Regex.Matches(
+                     cmap,
+                     @"^\s*<(?<source>[0-9A-Fa-f]{4})>[ \t]+<(?<value>[0-9A-Fa-f]{4,})>\s*$",
+                     RegexOptions.Multiline))
+        {
+            map[Convert.ToUInt16(match.Groups["source"].Value, 16)] =
+                Encoding.BigEndianUnicode.GetString(Convert.FromHexString(match.Groups["value"].Value));
+        }
+
+        foreach (Match match in Regex.Matches(
+                     cmap,
+                     @"^\s*<(?<start>[0-9A-Fa-f]{4})>[ \t]+<(?<end>[0-9A-Fa-f]{4})>[ \t]+<(?<value>[0-9A-Fa-f]{4,})>\s*$",
+                     RegexOptions.Multiline))
+        {
+            var start = Convert.ToUInt16(match.Groups["start"].Value, 16);
+            var end = Convert.ToUInt16(match.Groups["end"].Value, 16);
+            var value = Convert.ToUInt32(match.Groups["value"].Value, 16);
+            for (var current = start; current <= end; current++, value++)
+            {
+                map[current] = char.ConvertFromUtf32((int)value);
+            }
+        }
+
+        return map;
+    }
+
+    private static bool TryNormalizeImportedDocumentSerialNumbers(
+        CSequence sequence,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<ushort, string>> fontMaps,
+        IReadOnlySet<string> documentSerials)
+    {
+        var currentFont = string.Empty;
+        var changed = false;
+        foreach (var item in sequence)
+        {
+            if (item is not COperator operation)
+            {
+                continue;
+            }
+
+            if (operation.Name == "Tf"
+                && operation.Operands.Count > 0
+                && operation.Operands[0] is CName fontName)
+            {
+                currentFont = fontName.ToString();
+                continue;
+            }
+
+            if (operation.Name != "Tj"
+                || operation.Operands.Count == 0
+                || operation.Operands[0] is not CString text
+                || !fontMaps.TryGetValue(currentFont, out var fontMap))
+            {
+                continue;
+            }
+
+            var renderedValue = DecodePdfCidText(text.Value, fontMap);
+            var documentSerial = documentSerials
+                .OrderByDescending(serial => serial.Length)
+                .FirstOrDefault(serial => renderedValue.Length > serial.Length
+                    && renderedValue.EndsWith(serial, StringComparison.Ordinal)
+                    && renderedValue[..^serial.Length].All(char.IsDigit));
+            if (documentSerial is null)
+            {
+                continue;
+            }
+
+            var prefixLength = renderedValue.Length - documentSerial.Length;
+            if (text.Value.Length < prefixLength * 2)
+            {
+                continue;
+            }
+
+            text.Value = text.Value[(prefixLength * 2)..];
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static string DecodePdfCidText(string value, IReadOnlyDictionary<ushort, string> unicodeMap)
+    {
+        if (value.Length == 0 || value.Length % 2 != 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(value.Length / 2);
+        for (var index = 0; index < value.Length; index += 2)
+        {
+            var code = (ushort)((value[index] << 8) | value[index + 1]);
+            if (!unicodeMap.TryGetValue(code, out var character))
+            {
+                return string.Empty;
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
+    }
+
     private static void TryDeleteLocalFile(string path)
     {
         try
@@ -8223,9 +8439,72 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return IsSpdbCorporatePrintContext(context)
             || IsChinaMerchantsCorporatePrintContext(context)
             || IsCiticCorporatePrintContext(context)
+            || IsEverbrightCorporatePrintContext(context)
             || IsPingAnPrintContext(context)
             ? NormalizeSingleLinePrintText(value)
             : NormalizePrintNumber(value);
+    }
+
+    private static string CreateSystemGeneratedPrintSerialNumber(PrintRenderContext context, int index)
+    {
+        if (IsEverbrightCorporatePrintContext(context))
+        {
+            return SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(context.BankUser.AccountNo);
+        }
+
+        return $"P{index + 1:000000000}";
+    }
+
+    private static bool IsEverbrightCorporatePrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Name.Contains("光大", StringComparison.Ordinal)
+            && context.Bank.Name.Contains("对公", StringComparison.Ordinal);
+    }
+
+    private static string ResolveVendorPrintSerialNumber(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        string generatedFallback)
+    {
+        if (!source.IsDocumentImported && IsEverbrightCorporatePrintContext(context))
+        {
+            return SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(context.BankUser.AccountNo);
+        }
+
+        var serialNumber = FirstNotBlank(
+            source.SerialNum,
+            GetValue(values, "SerialNum"),
+            source.SequenceNum,
+            GetValue(values, "SequenceNum"),
+            source.LogNum,
+            GetValue(values, "LogNum"));
+
+        if (source.IsDocumentImported && !string.IsNullOrWhiteSpace(serialNumber))
+        {
+            return NormalizeDocumentImportSerialNumber(serialNumber);
+        }
+
+        return NormalizePrintNumber(context, FirstNotBlank(serialNumber, generatedFallback));
+    }
+
+    private static string NormalizeDocumentImportSerialNumber(string value)
+    {
+        var normalized = value.Normalize(NormalizationForm.FormKC);
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var character in normalized)
+        {
+            if (char.IsWhiteSpace(character)
+                || char.IsControl(character)
+                || char.GetUnicodeCategory(character) == UnicodeCategory.Format)
+            {
+                continue;
+            }
+
+            builder.Append(character);
+        }
+
+        return builder.ToString();
     }
 
     private static string NormalizeCurrency(string value)

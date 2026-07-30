@@ -11,6 +11,7 @@ public sealed class FlowRecord : ObservableObject
     private long bankId;
     private long bankUserId;
     private bool moveFlag;
+    private bool isDocumentImported;
     private DateTime? accountTime;
     private double? tradeMoney;
     private double? balance;
@@ -68,6 +69,7 @@ public sealed class FlowRecord : ObservableObject
     public long BankId { get => bankId; set => SetProperty(ref bankId, value); }
     public long BankUserId { get => bankUserId; set => SetProperty(ref bankUserId, value); }
     public bool MoveFlag { get => moveFlag; set => SetProperty(ref moveFlag, value); }
+    public bool IsDocumentImported { get => isDocumentImported; set => SetProperty(ref isDocumentImported, value); }
     public DateTime? AccountTime { get => accountTime; set => SetProperty(ref accountTime, value); }
     public double? TradeMoney { get => tradeMoney; set => SetProperty(ref tradeMoney, value); }
     public double? Balance { get => balance; set => SetProperty(ref balance, value); }

@@ -162,7 +162,8 @@ public sealed class TableExcelService : ITableExcelService
             var record = new FlowRecord
             {
                 BankId = bank.Id,
-                BankUserId = bankUser.Id
+                BankUserId = bankUser.Id,
+                IsDocumentImported = true
             };
 
             foreach (var (columnIndex, column) in headerMap)
