@@ -154,6 +154,7 @@
                         <DataGridTextColumn Header="对方账号" Binding="{Binding OppositeAccount}" Width="150" />
                         <DataGridTextColumn Header="附言/备注" Binding="{Binding Remark}" Width="160" />
                         <DataGridTextColumn Header="交易渠道" Binding="{Binding TradeChannel}" Width="120" />
+                        <DataGridTextColumn Header="&#x5916;&#x90E8;&#x7CFB;&#x7EDF;&#x6D41;&#x6C34;" Binding="{Binding VoucherNum}" Width="200" />
                     </DataGrid.Columns>
                 </DataGrid>
             </TabItem>

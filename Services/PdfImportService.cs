@@ -322,6 +322,7 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             "平安" => true,
             "华夏" => true,
+            "支付宝" => true,
             "浦发对公" => true,
             "中信对公" => true,
             "工行对公" => true,
@@ -1689,11 +1690,12 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
+        var parsedRecords = new List<FlowRecord>();
         foreach (var group in GroupAlipayRecords(lines))
         {
             if (TryParseAlipayRecord(group, bank, user, out var record))
             {
-                result.FlowRecords.Add(record);
+                parsedRecords.Add(record);
             }
             else
             {
@@ -1701,7 +1703,181 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
+        ApplyAlipayPositionedOrderFields(parsedRecords, ParseAlipayPositionedRecords(bank, user, document));
+        result.FlowRecords.AddRange(parsedRecords);
         return parsedUser;
+    }
+
+    private static IEnumerable<FlowRecord> ParseAlipayPositionedRecords(
+        Bank bank,
+        BankUser user,
+        PdfExtractedDocument document)
+    {
+        foreach (var row in BuildAlipayPositionedRows(document.Words))
+        {
+            if (TryParseAlipayPositionedRecord(row, bank, user, out var record))
+            {
+                yield return record;
+            }
+        }
+    }
+
+    private static void ApplyAlipayPositionedOrderFields(
+        IReadOnlyList<FlowRecord> parsedRecords,
+        IEnumerable<FlowRecord> positionedRecords)
+    {
+        var positionedByKey = new Dictionary<(long TimeTicks, double? Amount), Queue<FlowRecord>>();
+        foreach (var positionedRecord in positionedRecords.Where(record =>
+                     record.AccountTime.HasValue
+                     && (!string.IsNullOrWhiteSpace(record.SerialNum) || !string.IsNullOrWhiteSpace(record.MerchantName))))
+        {
+            var key = (positionedRecord.AccountTime!.Value.Ticks, positionedRecord.TradeMoney);
+            if (!positionedByKey.TryGetValue(key, out var queue))
+            {
+                queue = new Queue<FlowRecord>();
+                positionedByKey[key] = queue;
+            }
+
+            queue.Enqueue(positionedRecord);
+        }
+
+        foreach (var parsedRecord in parsedRecords.Where(record => record.AccountTime.HasValue))
+        {
+            var key = (parsedRecord.AccountTime!.Value.Ticks, parsedRecord.TradeMoney);
+            if (!positionedByKey.TryGetValue(key, out var queue) || queue.Count == 0)
+            {
+                continue;
+            }
+
+            var positionedRecord = queue.Dequeue();
+            if (!string.IsNullOrWhiteSpace(positionedRecord.SerialNum))
+            {
+                parsedRecord.SerialNum = positionedRecord.SerialNum;
+                SetFlowRaw(parsedRecord, "交易订单号", parsedRecord.SerialNum);
+                SetFlowRaw(parsedRecord, "流水号", parsedRecord.SerialNum);
+            }
+
+            if (!string.IsNullOrWhiteSpace(positionedRecord.MerchantName))
+            {
+                parsedRecord.MerchantName = positionedRecord.MerchantName;
+                SetFlowRaw(parsedRecord, "商家订单号", parsedRecord.MerchantName);
+            }
+        }
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildAlipayPositionedRows(IReadOnlyList<PdfTextWord> words)
+    {
+        var columns = new[]
+        {
+            new PdfPositionedColumnSpec("Direction", 40d, 72d),
+            new PdfPositionedColumnSpec("Counterparty", 72d, 130d),
+            new PdfPositionedColumnSpec("Product", 130d, 206d),
+            new PdfPositionedColumnSpec("Payment", 206d, 254d),
+            new PdfPositionedColumnSpec("Amount", 254d, 294d),
+            new PdfPositionedColumnSpec("TradeOrder", 294d, 394d),
+            new PdfPositionedColumnSpec("MerchantOrder", 394d, 490d),
+            new PdfPositionedColumnSpec("TradeTime", 490d, 560d)
+        };
+
+        return BuildPositionedRowsWithTopLead(
+            words,
+            columns,
+            IsAlipayPositionedHeaderWord,
+            IsAlipayPositionedFooterWord,
+            @"^(?:收入|支出|不计)$",
+            72d,
+            0d,
+            0d);
+    }
+
+    private static bool TryParseAlipayPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var direction = NormalizeAlipayPositionedDirection(GetPositionedCell(row, "Direction"));
+        var amountText = GetPositionedCell(row, "Amount");
+        var accountTime = ParseAlipayPositionedDateTime(GetPositionedCell(row, "TradeTime"));
+        var amount = ParseDoubleOrNull(amountText);
+        if (string.IsNullOrWhiteSpace(direction) || !accountTime.HasValue || !amount.HasValue)
+        {
+            return false;
+        }
+
+        var signedAmount = ApplyPaymentDirection(amount, direction);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = accountTime;
+        record.SerialNum = GetPositionedCell(row, "TradeOrder");
+        record.ProductBrief = GetPositionedCell(row, "Product");
+        record.ProductName = record.ProductBrief;
+        record.TradeChannel = GetPositionedCell(row, "Payment");
+        record.CashCheck = record.TradeChannel;
+        record.OppositeUsername = GetPositionedCell(row, "Counterparty");
+        record.MerchantName = GetPositionedCell(row, "MerchantOrder");
+        record.TradeMoney = signedAmount;
+        record.IncomeAttribute = direction;
+        record.IncomeFlag = direction;
+        record.Usage = direction;
+        ApplySignedAmountColumns(record, signedAmount);
+
+        if (direction == "不计收支")
+        {
+            record.CreditAmount = null;
+            record.DebitAmount = null;
+        }
+
+        SetFlowRaw(record, "交易订单号", record.SerialNum);
+        SetFlowRaw(record, "流水号", record.SerialNum);
+        SetFlowRaw(record, "交易时间", accountTime.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+        SetFlowRaw(record, "收支", direction);
+        SetFlowRaw(record, "金额", amountText);
+        SetFlowRaw(record, "资金渠道", record.TradeChannel);
+        SetFlowRaw(record, "收/付款方式", record.TradeChannel);
+        SetFlowRaw(record, "交易对方", record.OppositeUsername);
+        SetFlowRaw(record, "商品说明", record.ProductBrief);
+        SetFlowRaw(record, "商家订单号", record.MerchantName);
+        return true;
+    }
+
+    private static bool IsAlipayPositionedHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "收/支" or "交易对方" or "商品说明" or "收/付款方式" or "金额"
+            or "交易订单号" or "商家订单号" or "交易时间";
+    }
+
+    private static bool IsAlipayPositionedFooterWord(string text)
+    {
+        return text.Contains("支付宝支付科技有限公司", StringComparison.Ordinal)
+            || text == "第"
+            || text == "页/共"
+            || Regex.IsMatch(text, @"^第\s*\d+\s*页(?:\s*/\s*共\s*\d+\s*页)?$");
+    }
+
+    private static string NormalizeAlipayPositionedDirection(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (text.Contains("不计", StringComparison.Ordinal))
+        {
+            return "不计收支";
+        }
+
+        return text.Contains("收入", StringComparison.Ordinal)
+            ? "收入"
+            : text.Contains("支出", StringComparison.Ordinal)
+                ? "支出"
+                : string.Empty;
+    }
+
+    private static DateTime? ParseAlipayPositionedDateTime(string value)
+    {
+        var match = Regex.Match(CleanPdfValue(value), @"(?<date>\d{4}-\d{2}-\d{2})(?<time>\d{2}:\d{2}:\d{2})");
+        return match.Success
+            ? ParseDateTimeOrNull($"{match.Groups["date"].Value} {match.Groups["time"].Value}")
+            : null;
     }
 
     private static bool ParseSpdbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
@@ -4550,6 +4726,7 @@ public sealed partial class PdfImportService : IPdfImportService
         record.Remark = summary;
         record.TradeExplain = summary;
         record.SerialNum = externalSerial;
+        record.VoucherNum = externalSerial;
         record.ReceiptNum = externalSerial;
         record.OppositeUsername = oppositeName;
         record.OppositeAccount = oppositeAccount;
@@ -7261,7 +7438,7 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static (string Counterparty, string MerchantOrder) SplitWechatCounterpartyAndMerchant(IReadOnlyList<string> tokens)
     {
-        var cleanedTokens = tokens
+        var cleanedTokens = SplitEmbeddedWechatMerchantOrderTokens(tokens)
             .Select(CleanPdfValue)
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .ToList();
@@ -7278,7 +7455,7 @@ public sealed partial class PdfImportService : IPdfImportService
                 "/");
         }
 
-        var merchantStart = cleanedTokens.FindIndex(item => Regex.IsMatch(item, @"^\d{8,}$"));
+        var merchantStart = cleanedTokens.FindIndex(IsWechatMerchantOrderStart);
         if (merchantStart <= 0)
         {
             return (CollapseChineseSeparatedWords(string.Join(' ', cleanedTokens)), string.Empty);
@@ -7298,6 +7475,53 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         var text = CleanPdfValue(value);
         return text == "/" || Regex.IsMatch(text, @"^[A-Za-z0-9][A-Za-z0-9_./-]*$");
+    }
+
+    private static bool IsWechatMerchantOrderStart(string value)
+    {
+        var text = CleanPdfValue(value);
+        return Regex.IsMatch(text, @"^\d{8,}$")
+            || Regex.IsMatch(text, @"^\d{8}[A-Za-z_./-][A-Za-z0-9_./-]*$")
+            || Regex.IsMatch(text, @"^[A-Za-z]{1,8}\d{8,}[A-Za-z0-9_./-]*$")
+            || Regex.IsMatch(text, @"^\d{1,7}[A-Za-z]{1,8}\d{6,}[A-Za-z0-9_./-]*$")
+            || (Regex.IsMatch(text, @"^[A-Za-z0-9_./-]+$")
+                && text.Any(character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z')
+                && text.Count(char.IsDigit) >= 8);
+    }
+
+    private static IReadOnlyList<string> SplitEmbeddedWechatMerchantOrderTokens(IReadOnlyList<string> tokens)
+    {
+        var result = new List<string>(tokens.Count + 1);
+        foreach (var token in tokens)
+        {
+            var text = CleanPdfValue(token);
+            var merchantStart = FindEmbeddedWechatMerchantOrderStart(text);
+            if (merchantStart <= 0)
+            {
+                result.Add(text);
+                continue;
+            }
+
+            result.Add(text[..merchantStart]);
+            result.Add(text[merchantStart..]);
+        }
+
+        return result;
+    }
+
+    private static int FindEmbeddedWechatMerchantOrderStart(string value)
+    {
+        for (var index = 1; index < value.Length; index++)
+        {
+            if (!Regex.IsMatch(value[..index], @"[\u4e00-\u9fff]") || !IsWechatMerchantOrderStart(value[index..]))
+            {
+                continue;
+            }
+
+            return index;
+        }
+
+        return -1;
     }
 
     private static (string Counterparty, string Product) SplitAlipayCounterpartyAndProduct(string firstRest, IEnumerable<string> continuationLines)
