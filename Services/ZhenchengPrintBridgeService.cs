@@ -5000,7 +5000,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 continue;
             }
 
-            var (field, _) = ExcelColumnFieldResolver.ResolveFlowRecordField(columnName);
+            var (field, _) = ExcelColumnFieldResolver.ResolveFlowRecordField(bank.Name, columnName);
             if (string.IsNullOrWhiteSpace(field) || IsValuePresent(values, field))
             {
                 flowColumnIndex++;

@@ -13,6 +13,17 @@ public static class ExcelColumnFieldResolver
             return (nameof(FlowRecord.IncomeAttribute), "Text");
         }
 
+        if (string.Equals(bankName, "中行对公", StringComparison.Ordinal))
+        {
+            return normalizedName switch
+            {
+                "凭证" => (nameof(FlowRecord.VoucherType), "Text"),
+                "凭证号码业务" => (nameof(FlowRecord.VoucherNum), "Text"),
+                "凭证号码业务编号用途摘要" => (nameof(FlowRecord.VoucherNum), "Text"),
+                _ => ResolveFlowRecordField(columnName)
+            };
+        }
+
         if (IsPostalBankName(bankName))
         {
             return normalizedName switch

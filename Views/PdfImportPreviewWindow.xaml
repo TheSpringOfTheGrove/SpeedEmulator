@@ -145,6 +145,18 @@
                           VerticalScrollBarVisibility="Auto">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="ID" Binding="{Binding Index}" Width="54" />
+                        <DataGridTextColumn Header="&#x8D26;&#x53F7;" Binding="{Binding Account}" Width="150" />
+                        <DataGridTextColumn Header="&#x4EA4;&#x6613;&#x7C7B;&#x578B;" Binding="{Binding ProductType}" Width="110" />
+                        <DataGridTextColumn Header="&#x501F;&#x65B9;&#x53D1;&#x751F;&#x989D;" Binding="{Binding DebitAmount, StringFormat=0.00}" Width="110" />
+                        <DataGridTextColumn Header="&#x8D37;&#x65B9;&#x53D1;&#x751F;&#x989D;" Binding="{Binding CreditAmount, StringFormat=0.00}" Width="110" />
+                        <DataGridTextColumn Header="&#x51ED;&#x8BC1;" Binding="{Binding VoucherType}" Width="120" />
+                        <DataGridTextColumn Header="&#x4E1A;&#x52A1;&#x7F16;&#x53F7;" Binding="{Binding ProductCode}" Width="150" />
+                        <DataGridTextColumn Header="&#x6D41;&#x6C34;&#x53F7;" Binding="{Binding SerialNum}" Width="150" />
+                        <DataGridTextColumn Header="&#x673A;&#x6784;&#x67DC;&#x5458;&#x6D41;&#x6C34;" Binding="{Binding LogNum}" Width="170" />
+                        <DataGridTextColumn Header="&#x7528;&#x9014;" Binding="{Binding Usage}" Width="150" />
+                        <DataGridTextColumn Header="&#x4EA4;&#x6613;&#x8BF4;&#x660E;" Binding="{Binding TradeExplain}" Width="160" />
+                        <DataGridTextColumn Header="&#x5BF9;&#x65B9;&#x5F00;&#x6237;&#x884C;" Binding="{Binding OppositeBank}" Width="170" />
+                        <DataGridTextColumn Header="&#x5E01;&#x79CD;" Binding="{Binding Currency}" Width="80" />
                         <DataGridTextColumn Header="交易时间" Binding="{Binding AccountTime, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="150" />
                         <DataGridTextColumn Header="交易金额" Binding="{Binding TradeMoney, StringFormat=0.00}" Width="100" />
                         <DataGridTextColumn Header="余额" Binding="{Binding Balance, StringFormat=0.00}" Width="100" />
@@ -154,7 +166,7 @@
                         <DataGridTextColumn Header="对方账号" Binding="{Binding OppositeAccount}" Width="150" />
                         <DataGridTextColumn Header="附言/备注" Binding="{Binding Remark}" Width="160" />
                         <DataGridTextColumn Header="交易渠道" Binding="{Binding TradeChannel}" Width="120" />
-                        <DataGridTextColumn Header="&#x5916;&#x90E8;&#x7CFB;&#x7EDF;&#x6D41;&#x6C34;" Binding="{Binding VoucherNum}" Width="200" />
+                        <DataGridTextColumn Header="&#x51ED;&#x8BC1;&#x53F7;/&#x5916;&#x90E8;&#x7CFB;&#x7EDF;&#x6D41;&#x6C34;" Binding="{Binding VoucherNum}" Width="240" />
                     </DataGrid.Columns>
                 </DataGrid>
             </TabItem>

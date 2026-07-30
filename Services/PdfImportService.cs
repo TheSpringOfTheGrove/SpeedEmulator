@@ -484,6 +484,10 @@ public sealed partial class PdfImportService : IPdfImportService
         foreach (var record in result.FlowRecords)
         {
             PdfImportTabularMapper.NormalizeImportedFlowRecord(record, bank, bankUser);
+            if (bank.Name == "招行对公")
+            {
+                StripCmbCorporatePageArtifacts(record);
+            }
         }
 
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
@@ -4052,6 +4056,16 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         var (oppositeName, oppositeBank) = SplitBocCorporateCounterparty(note);
+        var templateDetail = NormalizeBocCorporateTemplateDetail(detail);
+        var detailParts = SplitBocCorporateDetail(templateDetail);
+        // The statement's narrow "凭证" column and the following combined detail
+        // column are separate template fields. Do not move the first detail token
+        // into the narrow column, otherwise the printed layout wraps vertically.
+        var voucherNumber = CleanPdfValue(voucher);
+        var voucherBusiness = detailParts.VoucherBusiness;
+        var businessNumber = detailParts.BusinessNumber;
+        var usage = detailParts.Usage;
+        var summary = FirstNotBlank(detailParts.Summary, usage, voucherBusiness);
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
         record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
@@ -4059,12 +4073,14 @@ public sealed partial class PdfImportService : IPdfImportService
         record.SequenceNum = sequence;
         record.ProductType = tradeType;
         record.ProductName = tradeType;
-        record.ProductBrief = detail;
-        record.VoucherType = voucher;
-        record.VoucherNum = voucher;
+        record.ProductBrief = summary;
+        record.ProductCode = businessNumber;
+        record.VoucherType = voucherNumber;
+        record.VoucherNum = templateDetail;
         record.SerialNum = reference;
         record.LogNum = reference;
-        record.Usage = detail;
+        record.Usage = usage;
+        record.AppNum = businessNumber;
         record.Remark = note;
         record.OppositeUsername = oppositeName;
         record.OppositeBank = oppositeBank;
@@ -4077,14 +4093,18 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "记账日", accountDate);
         SetFlowRaw(record, "起息日", interestDate);
         SetFlowRaw(record, "交易类型", tradeType);
-        SetFlowRaw(record, "凭证", voucher);
-        SetFlowRaw(record, "凭证号码业务编号用途摘要", detail);
+        SetFlowRaw(record, "凭证", voucherNumber);
+        SetFlowRaw(record, "凭证号码业务编号用途摘要", templateDetail);
         SetFlowRaw(record, "余额", balanceText);
         SetFlowRaw(record, "机构柜员流水", reference);
-        SetFlowRaw(record, "用途", detail);
         SetFlowRaw(record, "对方户名", oppositeName);
         SetFlowRaw(record, "对方开户行", oppositeBank);
         SetFlowRaw(record, "备注", note);
+        SetFlowRaw(record, "\u51ed\u8bc1\u53f7\u7801\u4e1a\u52a1", voucherBusiness);
+        SetFlowRaw(record, "\u51ed\u8bc1\u53f7\u7801", templateDetail);
+        SetFlowRaw(record, "\u4e1a\u52a1\u7f16\u53f7", businessNumber);
+        SetFlowRaw(record, "\u7528\u9014", usage);
+        SetFlowRaw(record, "\u6458\u8981", summary);
         return true;
     }
 
@@ -4115,8 +4135,9 @@ public sealed partial class PdfImportService : IPdfImportService
         record.BankUserId = user.Id;
         record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
         record.AccountTime = ParseDateTimeOrNull(date);
-        record.SerialNum = tellerSerial;
-        record.LogNum = tellerSerial;
+        // The source statement exposes this value as "柜员交易号". It is not a
+        // core serial number, so keep it in the field used by that exact column.
+        record.OperatorNum = tellerSerial;
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.OppositeAccount = oppositeAccount;
@@ -4130,7 +4151,6 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "交易日期", date);
         SetFlowRaw(record, "摘要", summary);
         SetFlowRaw(record, "柜员交易号", tellerSerial);
-        SetFlowRaw(record, "核心流水号", tellerSerial);
         SetFlowRaw(record, "余额", balanceText);
         SetFlowRaw(record, "对方户名", oppositeName);
         SetFlowRaw(record, "对方账号", oppositeAccount);
@@ -5478,7 +5498,57 @@ public sealed partial class PdfImportService : IPdfImportService
             || value.StartsWith("账户名称:", StringComparison.Ordinal)
             || value.StartsWith("日期 业务类型", StringComparison.Ordinal)
             || value.StartsWith("Date Business Type", StringComparison.Ordinal)
+            || value.StartsWith("A/C Opening Bank", StringComparison.Ordinal)
+            || value.StartsWith("A/C No. Currency", StringComparison.Ordinal)
+            || value.StartsWith("Account Name Last Balance", StringComparison.Ordinal)
+            || value.StartsWith("\u65e5\u671fDate", StringComparison.Ordinal)
+            || value.StartsWith("\u671f\u672b\u4f59\u989d", StringComparison.Ordinal)
+            || value.Contains("Special Notice", StringComparison.Ordinal)
+            || value.Contains("\u82e5\u6bcf\u67085\u65e5", StringComparison.Ordinal)
+            || value.Contains("\u82e5\u672c\u884c\u4e8e\u53d1\u51fa", StringComparison.Ordinal)
+            || value.StartsWith("If you do not receive the Statement of Account", StringComparison.Ordinal)
+            || value.StartsWith("If no discrepancies are reported", StringComparison.Ordinal)
             || value.StartsWith("--------------------------------------------------------------------------------", StringComparison.Ordinal);
+    }
+
+    private static void StripCmbCorporatePageArtifacts(FlowRecord record)
+    {
+        record.ProductName = StripCmbCorporatePageArtifacts(record.ProductName);
+        record.ProductBrief = StripCmbCorporatePageArtifacts(record.ProductBrief);
+        record.Remark = StripCmbCorporatePageArtifacts(record.Remark);
+        record.OppositeUsername = StripCmbCorporatePageArtifacts(record.OppositeUsername);
+        record.OppositeBank = StripCmbCorporatePageArtifacts(record.OppositeBank);
+        record.TradeExplain = StripCmbCorporatePageArtifacts(record.TradeExplain);
+
+        foreach (var field in record.ExtraFields.Keys.ToArray())
+        {
+            record[field] = StripCmbCorporatePageArtifacts(record[field]);
+        }
+    }
+
+    private static string StripCmbCorporatePageArtifacts(string value)
+    {
+        var cleaned = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return string.Empty;
+        }
+
+        var markers = new[]
+        {
+            "\u65e5\u671fDate",
+            "A/C Opening Bank",
+            "A/C No. Currency",
+            "Special Notice",
+            "If you do not receive the Statement of Account",
+            "If no discrepancies are reported"
+        };
+        var cutoff = markers
+            .Select(marker => cleaned.IndexOf(marker, StringComparison.Ordinal))
+            .Where(index => index >= 0)
+            .DefaultIfEmpty(cleaned.Length)
+            .Min();
+        return CleanPdfValue(cleaned[..cutoff]);
     }
 
     private static bool IsCmbCorporateLeadingContinuation(string text)
@@ -5877,6 +5947,106 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsPdfMoneyToken(string value)
     {
         return Regex.IsMatch(CleanPdfValue(value), @"^[+-]?\d[\d,]*\.\d{2}$");
+    }
+
+    private static BocCorporateDetailParts SplitBocCorporateDetail(string value)
+    {
+        var detail = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return default;
+        }
+
+        var segments = detail.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(CleanPdfValue)
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
+            .ToArray();
+        var voucherNumber = GetBocCorporateVoucherNumber(segments);
+        var businessNumber = string.Empty;
+        var textParts = new List<string>();
+        foreach (var part in segments)
+        {
+            if (string.Equals(part, voucherNumber, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var textTokens = new List<string>();
+            foreach (var token in Regex.Split(part, @"\s+", RegexOptions.CultureInvariant))
+            {
+                var valueToken = CleanPdfValue(token);
+                if (string.IsNullOrWhiteSpace(valueToken))
+                {
+                    continue;
+                }
+
+                if (string.Equals(valueToken, voucherNumber, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(businessNumber) && IsBocCorporateBusinessNumber(valueToken))
+                {
+                    businessNumber = valueToken;
+                    continue;
+                }
+
+                textTokens.Add(valueToken);
+            }
+
+            var textPart = CleanPdfValue(string.Join(" ", textTokens));
+            if (!string.IsNullOrWhiteSpace(textPart))
+            {
+                textParts.Add(textPart);
+            }
+        }
+
+        var usage = textParts.FirstOrDefault() ?? string.Empty;
+        var summary = textParts.Count > 1 ? textParts[^1] : usage;
+        return new BocCorporateDetailParts(voucherNumber, usage, businessNumber, usage, summary);
+    }
+
+    private static string NormalizeBocCorporateTemplateDetail(string value)
+    {
+        var detail = CleanPdfValue(value);
+        return Regex.Replace(
+            detail,
+            @"^(?<voucher>(?:BEPS|HVPS)\d{12})(?<business>\d{13,})(?=/)",
+            "${voucher} ${business}",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private readonly record struct BocCorporateDetailParts(
+        string VoucherNumber,
+        string VoucherBusiness,
+        string BusinessNumber,
+        string Usage,
+        string Summary);
+
+    private static bool IsBocCorporateVoucherNumber(string value)
+    {
+        var token = CleanPdfValue(value);
+        return Regex.IsMatch(token, @"^(?:(?:BEPS|HVPS)[A-Z0-9]+|\d{6,})$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string GetBocCorporateVoucherNumber(IReadOnlyList<string> segments)
+    {
+        if (segments.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return Regex.Split(segments[0], @"\s+", RegexOptions.CultureInvariant)
+            .Select(CleanPdfValue)
+            .FirstOrDefault(IsBocCorporateVoucherNumber)
+            ?? string.Empty;
+    }
+
+    private static bool IsBocCorporateBusinessNumber(string value)
+    {
+        var token = CleanPdfValue(value);
+        return Regex.IsMatch(token, @"^\d{13,}$", RegexOptions.CultureInvariant)
+            || Regex.IsMatch(token, @"^(?:OBSS|GIRO)[A-Z0-9]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static (string OppositeName, string OppositeBank) SplitBocCorporateCounterparty(string value)

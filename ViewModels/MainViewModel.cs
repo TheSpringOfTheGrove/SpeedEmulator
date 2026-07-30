@@ -457,7 +457,7 @@ public sealed class MainViewModel : ObservableObject
         for (var index = 0; index < columnNames.Count; index++)
         {
             var columnName = columnNames[index];
-            var (field, type) = ResolveFlowRuleField(columnName, kind);
+            var (field, type) = ResolveFlowRuleField(bankName, columnName, kind);
             if (field is null || ShouldUseExtraFlowRuleField(field, usedFixedFields))
             {
                 field = CreateFlowRuleExtraFieldPath(bankName, kind, columnName, index);
@@ -478,7 +478,10 @@ public sealed class MainViewModel : ObservableObject
         return !usedFixedFields.Add(field);
     }
 
-    private static (string? Field, string Type) ResolveFlowRuleField(string columnName, FlowRuleColumnKind kind)
+    private static (string? Field, string Type) ResolveFlowRuleField(
+        string bankName,
+        string columnName,
+        FlowRuleColumnKind kind)
     {
         if (kind == FlowRuleColumnKind.Reference && columnName == "每月出现次数")
         {
@@ -498,6 +501,22 @@ public sealed class MainViewModel : ObservableObject
             }
         }
 
+        if (bankName == "中行对公")
+        {
+            return columnName switch
+            {
+                "凭证" => (nameof(FlowRuleBase.VoucherType), "Text"),
+                "凭证号码业务" => (nameof(FlowRuleBase.VoucherNum), "Text"),
+                "凭证号码业务编号用途摘要" => (nameof(FlowRuleBase.VoucherNum), "Text"),
+                _ => ResolveFlowRuleFieldCore(columnName)
+            };
+        }
+
+        return ResolveFlowRuleFieldCore(columnName);
+    }
+
+    private static (string? Field, string Type) ResolveFlowRuleFieldCore(string columnName)
+    {
         return columnName switch
         {
             "ID" => (nameof(FlowRuleBase.Id), "Text"),
