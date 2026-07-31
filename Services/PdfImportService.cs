@@ -59,6 +59,20 @@ public sealed partial class PdfImportService : IPdfImportService
         new("农行对公", "中国农业银行对公账户明细 PDF", ["账户明细", "户名", "收入金额", "对方开户行"])
     ];
 
+    private static readonly string[] IcbcPersonalChannels =
+    [
+        "电话银行",
+        "网上银行",
+        "快捷支付",
+        "手机银行",
+        "批量业务",
+        "ATM交易",
+        "其他",
+        "柜面",
+        "ATM",
+        "POS"
+    ];
+
     private static readonly HuaxiaColumnSpec[] HuaxiaPersonalElectronicColumns =
     [
         new("Date", 30, 76),
@@ -82,6 +96,22 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Summary", 340, 405),
         new("Remark", 405, 465),
         new("Counterparty", 465, 600)
+    ];
+
+    private static readonly PdfPositionedColumnSpec[] BocPersonalElectronicColumns =
+    [
+        new("Date", 36, 100),
+        new("Time", 100, 165),
+        new("Currency", 165, 230),
+        new("Amount", 230, 300),
+        new("Balance", 300, 343),
+        new("ProductName", 343, 398),
+        new("Channel", 398, 445),
+        new("TradePlace", 445, 516),
+        new("Remark", 516, 593),
+        new("OppositeName", 593, 671),
+        new("OppositeAccount", 671, 744),
+        new("OppositeBank", 744, 813)
     ];
 
     private static readonly PdfPositionedColumnSpec[] SpdbCorporateColumns =
@@ -320,6 +350,7 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         return bankName switch
         {
+            "中行" => true,
             "平安" => true,
             "华夏" => true,
             "支付宝" => true,
@@ -549,6 +580,30 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
+        parsedUser |= ApplyBocHeaderUserInfo(bank, user, lines.Take(80));
+
+        var positionedRecords = new List<FlowRecord>();
+        foreach (var row in BuildPositionedRows(
+            document.Words,
+            BocPersonalElectronicColumns,
+            IsBocPositionedHeaderWord,
+            IsBocPositionedFooterWord,
+            @"^\d{4}-\d{2}-\d{2}$",
+            100,
+            0))
+        {
+            if (TryParseBocPositionedRecord(row, bank, user, out var record))
+            {
+                positionedRecords.Add(record);
+            }
+        }
+
+        if (positionedRecords.Count > 0)
+        {
+            result.FlowRecords.AddRange(positionedRecords);
+            return parsedUser;
+        }
+
         foreach (var group in GroupLinesByStart(lines, IsBocRecordStart, IsBocIgnoredLine))
         {
             if (TryParseBocRecord(group, bank, user, out var record))
@@ -564,6 +619,73 @@ public sealed partial class PdfImportService : IPdfImportService
         return parsedUser;
     }
 
+    private static bool ApplyBocHeaderUserInfo(Bank bank, BankUser user, IEnumerable<PdfTextLine> lines)
+    {
+        var headerText = string.Concat(lines.Select(line => line.Text));
+        var matched = false;
+
+        var rangeMatch = Regex.Match(headerText, @"交易区间[：:]\s*(?<start>\d{4}-\d{2}-\d{2})\s*至\s*(?<end>\d{4}-\d{2}-\d{2})");
+        if (rangeMatch.Success)
+        {
+            SetUserNamed(user, bank, "起始日期", rangeMatch.Groups["start"].Value);
+            SetUserNamed(user, bank, "终止日期", rangeMatch.Groups["end"].Value);
+            matched = true;
+        }
+
+        var cardMatch = Regex.Match(headerText, @"借记卡号[：:]\s*(?<card>\d{8,})");
+        if (cardMatch.Success)
+        {
+            var cardNumber = cardMatch.Groups["card"].Value;
+            user.CardNo = cardNumber;
+            SetUserNamed(user, bank, "借记卡号", cardNumber);
+            matched = true;
+        }
+
+        var accountMatch = Regex.Match(headerText, @"账号[：:]\s*(?<account>\d{8,})");
+        if (accountMatch.Success)
+        {
+            var accountNumber = accountMatch.Groups["account"].Value;
+            user.AccountNo = accountNumber;
+            SetUserNamed(user, bank, "账号", accountNumber);
+            matched = true;
+        }
+
+        var nameMatch = Regex.Match(headerText, @"客户姓名[：:]\s*(?<name>.+?)(?=借方发生数[：:]|按收支筛选[：:]|贷方发生数[：:]|按币种筛选[：:]|页数[：:]|行数[：:]|打印时间[：:]|借记卡号[：:]|账号[：:]|记账日期)");
+        if (nameMatch.Success)
+        {
+            var accountName = CleanPdfValue(nameMatch.Groups["name"].Value);
+            if (!string.IsNullOrWhiteSpace(accountName))
+            {
+                user.AccountName = accountName;
+                SetUserNamed(user, bank, "客户姓名", accountName);
+                matched = true;
+            }
+        }
+
+        var incomeMatch = Regex.Match(headerText, @"按收支筛选[：:]\s*(?<income>全部|收入|支出)");
+        if (incomeMatch.Success)
+        {
+            SetUserNamed(user, bank, "按收支筛选", incomeMatch.Groups["income"].Value);
+            matched = true;
+        }
+
+        var currencyMatch = Regex.Match(headerText, @"按币种筛选[：:]\s*(?<currency>全部|人民币|RMB)");
+        if (currencyMatch.Success)
+        {
+            SetUserNamed(user, bank, "按货币筛选", currencyMatch.Groups["currency"].Value);
+            matched = true;
+        }
+
+        var printMatch = Regex.Match(headerText, @"打印时间[：:]\s*(?<print>\d{4}/\d{2}/\d{2}\s*\d{2}:\d{2}:\d{2})");
+        if (printMatch.Success)
+        {
+            SetUserNamed(user, bank, "打印日期", printMatch.Groups["print"].Value);
+            matched = true;
+        }
+
+        return matched;
+    }
+
     private static bool ParseIcbcPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
         var parsedUser = false;
@@ -571,16 +693,30 @@ public sealed partial class PdfImportService : IPdfImportService
         var lines = document.Lines.ToList();
         foreach (var line in lines.Take(80))
         {
-            var match = Regex.Match(line.Text, @"卡号\s+(?<card>\S+)\s+户名：(?<name>\S+)\s+起止日期：(?<start>\d{4}-\d{2}-\d{2})\s*[—-]\s*(?<end>\d{4}-\d{2}-\d{2})");
+            var match = Regex.Match(
+                line.Text,
+                @"卡号[：:]?\s*(?<card>\d+)\s*户名[：:]?\s*(?<name>\S+)\s*起止日期[：:]?\s*(?<start>\d{4}-\d{2}-\d{2})(?:\s*[—–-]?\s*)(?<end>\d{4}-\d{2}-\d{2})");
             if (!match.Success)
             {
                 continue;
             }
 
-            SetUserNamed(user, bank, "卡号", match.Groups["card"].Value);
-            SetUserNamed(user, bank, "户名", match.Groups["name"].Value);
-            SetUserNamed(user, bank, "起始日期", match.Groups["start"].Value);
-            SetUserNamed(user, bank, "截止日期", match.Groups["end"].Value);
+            var cardNumber = CleanPdfValue(match.Groups["card"].Value);
+            var accountName = CleanPdfValue(match.Groups["name"].Value);
+            var startDate = match.Groups["start"].Value;
+            var endDate = match.Groups["end"].Value;
+
+            // ICBC uses both a card number in the statement header and an account
+            // number in its transaction table. Persist the header fields directly
+            // so a user-defined column layout cannot change their fixed mappings.
+            user.CardNo = cardNumber;
+            user.AccountName = accountName;
+            user.StartDate = ParseDateTimeOrNull(startDate) ?? user.StartDate;
+            user.EndDate = ParseDateTimeOrNull(endDate) ?? user.EndDate;
+            SetUserNamed(user, bank, "卡号", cardNumber);
+            SetUserNamed(user, bank, "户名", accountName);
+            SetUserNamed(user, bank, "起始日期", startDate);
+            SetUserNamed(user, bank, "截止日期", endDate);
             parsedUser = true;
             break;
         }
@@ -602,6 +738,7 @@ public sealed partial class PdfImportService : IPdfImportService
         // number in the transaction table. They must remain separate user fields.
         if (!string.IsNullOrWhiteSpace(accountNumber))
         {
+            user.AccountNo = accountNumber;
             SetUserNamed(user, bank, "账号", accountNumber);
         }
 
@@ -4164,6 +4301,118 @@ public sealed partial class PdfImportService : IPdfImportService
         return true;
     }
 
+    private static bool TryParseBocPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var date = NormalizeBocPositionedCell(GetPositionedCell(row, "Date"));
+        var time = NormalizeBocPositionedCell(GetPositionedCell(row, "Time"));
+        var amountText = NormalizeBocPositionedCell(GetPositionedCell(row, "Amount"));
+        var balanceText = NormalizeBocPositionedCell(GetPositionedCell(row, "Balance"));
+        var amount = ParseDoubleOrNull(amountText);
+        if (!Regex.IsMatch(date, @"^\d{4}-\d{2}-\d{2}$")
+            || !Regex.IsMatch(time, @"^\d{2}:\d{2}:\d{2}$")
+            || !amount.HasValue
+            || !ParseDoubleOrNull(balanceText).HasValue)
+        {
+            return false;
+        }
+
+        var remark = NormalizeBocPositionedCell(GetPositionedCell(row, "Remark"));
+        var oppositeName = NormalizeBocPositionedCell(GetPositionedCell(row, "OppositeName"));
+        if (string.IsNullOrWhiteSpace(oppositeName)
+            && TrySplitRepeatedBocValue(remark, out var splitRemark, out var splitOppositeName))
+        {
+            remark = splitRemark;
+            oppositeName = splitOppositeName;
+        }
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull($"{date} {time}");
+        record.Currency = NormalizeBocPositionedCell(GetPositionedCell(row, "Currency"));
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        record.ProductName = NormalizeBocPositionedCell(GetPositionedCell(row, "ProductName"));
+        record.ProductBrief = record.ProductName;
+        record.TradeChannel = NormalizeBocPositionedCell(GetPositionedCell(row, "Channel"));
+        record.TradePlace = NormalizeBocPositionedCell(GetPositionedCell(row, "TradePlace"));
+        record.Remark = remark;
+        record.OppositeUsername = oppositeName;
+        record.OppositeAccount = NormalizeBocPositionedCell(GetPositionedCell(row, "OppositeAccount"));
+        record.OppositeBank = NormalizeBocPositionedCell(GetPositionedCell(row, "OppositeBank"));
+
+        SetFlowRaw(record, "记账日期", date);
+        SetFlowRaw(record, "记账时间", time);
+        SetFlowRaw(record, "交易日期", date);
+        SetFlowRaw(record, "交易时间", time);
+        SetFlowRaw(record, "币别", record.Currency);
+        SetFlowRaw(record, "金额", amountText);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "交易名称", record.ProductName);
+        SetFlowRaw(record, "渠道", record.TradeChannel);
+        SetFlowRaw(record, "网点名称", record.TradePlace);
+        SetFlowRaw(record, "附言", record.Remark);
+        SetFlowRaw(record, "对方账户名", record.OppositeUsername);
+        SetFlowRaw(record, "对方卡号账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方开户行", record.OppositeBank);
+        return true;
+    }
+
+    private static bool IsBocPositionedHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "记账日期" or "记账时间" or "币别" or "金额" or "余额"
+            or "交易名称" or "渠道" or "网点名称" or "附言" or "对方账户名"
+            or "对方卡号/账号" or "对方开户行";
+    }
+
+    private static bool IsBocPositionedFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value.Contains("END", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("温馨提示", StringComparison.Ordinal)
+            || value.StartsWith("第", StringComparison.Ordinal) && value.Contains("页", StringComparison.Ordinal)
+            || value.StartsWith("账号：", StringComparison.Ordinal)
+            || value.StartsWith("客户姓名：", StringComparison.Ordinal)
+            || value.StartsWith("借方发生数：", StringComparison.Ordinal)
+            || value.StartsWith("贷方发生数：", StringComparison.Ordinal)
+            || value.StartsWith("按收支筛选：", StringComparison.Ordinal)
+            || value.StartsWith("按币种筛选：", StringComparison.Ordinal)
+            || value.StartsWith("打印时间：", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeBocPositionedCell(string value)
+    {
+        var normalized = CleanPdfValue(value);
+        return Regex.IsMatch(normalized, @"^-+$") ? string.Empty : normalized;
+    }
+
+    private static bool TrySplitRepeatedBocValue(string value, out string first, out string second)
+    {
+        first = string.Empty;
+        second = string.Empty;
+        if (value.Length < 2 || value.Length % 2 != 0)
+        {
+            return false;
+        }
+
+        var halfLength = value.Length / 2;
+        var candidate = value[..halfLength];
+        if (!string.Equals(candidate, value[halfLength..], StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        first = candidate;
+        second = candidate;
+        return true;
+    }
+
     private static bool TryParseBocRecord(
         IReadOnlyList<PdfTextLine> group,
         Bank bank,
@@ -4242,6 +4491,11 @@ public sealed partial class PdfImportService : IPdfImportService
         var date = group[0].Text.Trim();
         var text = JoinGroupText(group.Skip(1));
         var match = Regex.Match(text, @"^(?<time>\d{2}:\d{2}:\d{2})\s+(?<account>\d+)\s+(?<store>\S+)\s+(?<seq>\S+)\s+(?<currency>\S+)\s+(?<cash>\S+)\s+(?<summary>.+?)\s+(?<area>\d{4})\s+(?<amount>[+-]?\d[\d,]*\.\d{2})\s+(?<balance>[+-]?\d[\d,]*\.\d{2})\s+(?<channel>.+)$");
+        var hasCashCheck = match.Success;
+        if (!match.Success)
+        {
+            match = Regex.Match(text, @"^(?<time>\d{2}:\d{2}:\d{2})\s+(?<account>\d+)\s+(?<store>\S+)\s+(?<seq>\S+)\s+(?<currency>\S+)\s+(?<summary>.+?)\s+(?<area>\d{4})\s+(?<amount>[+-]?\d[\d,]*\.\d{2})\s+(?<balance>[+-]?\d[\d,]*\.\d{2})\s+(?<channel>.+)$");
+        }
         if (!match.Success)
         {
             return false;
@@ -4254,13 +4508,20 @@ public sealed partial class PdfImportService : IPdfImportService
         record.ProductType = CleanPdfValue(match.Groups["store"].Value);
         record.SequenceNum = CleanPdfValue(match.Groups["seq"].Value);
         record.Currency = CleanPdfValue(match.Groups["currency"].Value);
-        record.CashCheck = CleanPdfValue(match.Groups["cash"].Value);
+        record.CashCheck = hasCashCheck ? CleanPdfValue(match.Groups["cash"].Value) : string.Empty;
         record.ProductBrief = CleanPdfValue(match.Groups["summary"].Value);
         record.TradeExplain = record.ProductBrief;
         record.AreaNum = CleanPdfValue(match.Groups["area"].Value);
         record.TradeMoney = ParseDoubleOrNull(match.Groups["amount"].Value);
         record.Balance = ParseDoubleOrNull(match.Groups["balance"].Value);
-        record.TradeChannel = CleanPdfValue(match.Groups["channel"].Value);
+        SplitIcbcCounterpartyTail(
+            match.Groups["channel"].Value,
+            out var oppositeUsername,
+            out var oppositeAccount,
+            out var tradeChannel);
+        record.OppositeUsername = oppositeUsername;
+        record.OppositeAccount = oppositeAccount;
+        record.TradeChannel = tradeChannel;
         record.InterfacePage = record.TradeChannel;
 
         SetFlowRaw(record, "工作日期", date);
@@ -4275,9 +4536,61 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "收入/支出金额", match.Groups["amount"].Value);
         SetFlowRaw(record, "发生额", match.Groups["amount"].Value);
         SetFlowRaw(record, "余额", match.Groups["balance"].Value);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
         SetFlowRaw(record, "渠道", record.TradeChannel);
         SetFlowRaw(record, "界面", record.InterfacePage);
         return true;
+    }
+
+    private static void SplitIcbcCounterpartyTail(
+        string value,
+        out string oppositeUsername,
+        out string oppositeAccount,
+        out string tradeChannel)
+    {
+        oppositeUsername = string.Empty;
+        oppositeAccount = string.Empty;
+        tradeChannel = string.Empty;
+
+        var tail = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(tail))
+        {
+            return;
+        }
+
+        // A page-end electronic seal is placed directly after the last table row
+        // in some ICBC PDFs and shares the same extracted text line.
+        tail = Regex.Replace(tail, @"业务专用章.*$", string.Empty).Trim();
+
+        var emptyCounterpartyMatch = Regex.Match(
+            tail,
+            @"^(?:（空）|\(空\))\s*(?:（空）|\(空\))\s*(?<channel>.+)$");
+        if (emptyCounterpartyMatch.Success)
+        {
+            tradeChannel = CleanPdfValue(emptyCounterpartyMatch.Groups["channel"].Value);
+            return;
+        }
+
+        var matchedChannel = IcbcPersonalChannels.FirstOrDefault(channel =>
+            tail.EndsWith(channel, StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(matchedChannel))
+        {
+            tradeChannel = tail;
+            return;
+        }
+
+        tradeChannel = matchedChannel;
+        var counterparty = tail[..^matchedChannel.Length].Trim();
+        var accountMatch = Regex.Match(counterparty, @"(?<account>\d{4}\*{4}\d{4}|\d{8,})$");
+        if (!accountMatch.Success)
+        {
+            oppositeUsername = CleanPdfValue(counterparty);
+            return;
+        }
+
+        oppositeUsername = CleanPdfValue(counterparty[..accountMatch.Index]);
+        oppositeAccount = CleanPdfValue(accountMatch.Groups["account"].Value);
     }
 
     private static bool TryParseCcbRecord(

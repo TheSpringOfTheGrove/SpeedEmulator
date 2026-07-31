@@ -8436,7 +8436,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static string NormalizePrintNumber(PrintRenderContext context, string value)
     {
-        return IsSpdbCorporatePrintContext(context)
+        return IsBankOfChina(context.Bank)
+            || IsSpdbCorporatePrintContext(context)
             || IsChinaMerchantsCorporatePrintContext(context)
             || IsCiticCorporatePrintContext(context)
             || IsEverbrightCorporatePrintContext(context)
