@@ -3169,6 +3169,10 @@ public sealed partial class PdfImportService : IPdfImportService
             || text.StartsWith("单位账户对账单", StringComparison.Ordinal)
             || text.StartsWith("客户名称:", StringComparison.Ordinal)
             || text.StartsWith("开户机构:", StringComparison.Ordinal)
+            || text.StartsWith("借方发生", StringComparison.Ordinal)
+            || text.StartsWith("贷方发生", StringComparison.Ordinal)
+            || text.StartsWith("合计笔数:", StringComparison.Ordinal)
+            || text.StartsWith("期末余额:", StringComparison.Ordinal)
             || text.StartsWith("第", StringComparison.Ordinal)
             || text.StartsWith("__", StringComparison.Ordinal);
     }
