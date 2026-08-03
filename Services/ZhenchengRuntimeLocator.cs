@@ -35,13 +35,15 @@ public static class ZhenchengRuntimeLocator
     {
         var candidates = new List<string>();
         AddIfNotBlank(candidates, Environment.GetEnvironmentVariable(VendorDirEnvName));
-        // During development, compare and synchronize against the currently installed
-        // vendor runtime. Bundled copies remain fallbacks for deployed builds.
-        AddIfNotBlank(candidates, CurrentInstallVendorDir);
+        // The packaged runtime is the version tested with this application. Keeping it
+        // ahead of the installed reference runtime makes preview performance and output
+        // deterministic in development and after deployment.
         AddIfNotBlank(candidates, Path.Combine(AppContext.BaseDirectory, OutputDirectoryName));
         AddIfNotBlank(candidates, Path.Combine(AppContext.BaseDirectory, ProjectRuntimeDirectory));
         AddIfNotBlank(candidates, Path.Combine(Directory.GetCurrentDirectory(), OutputDirectoryName));
         AddIfNotBlank(candidates, Path.Combine(Directory.GetCurrentDirectory(), ProjectRuntimeDirectory));
+        // Read-only development fallback when a bundled runtime is unavailable.
+        AddIfNotBlank(candidates, CurrentInstallVendorDir);
         return candidates;
     }
 
