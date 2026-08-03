@@ -114,6 +114,21 @@ public sealed partial class PdfImportService : IPdfImportService
         new("OppositeBank", 744, 813)
     ];
 
+    // WeChat statements keep the eight transaction fields in stable vertical columns.
+    // Content-order extraction loses those boundaries whenever a counterparty or an order
+    // number wraps, so use the table geometry before falling back to text-order parsing.
+    private static readonly PdfPositionedColumnSpec[] WechatPersonalColumns =
+    [
+        new("TradeOrder", 35, 148),
+        new("TradeTime", 148, 208),
+        new("TradeType", 208, 256),
+        new("Direction", 256, 318),
+        new("PaymentMethod", 318, 370),
+        new("Amount", 370, 418),
+        new("Counterparty", 418, 468),
+        new("MerchantOrder", 468, 560)
+    ];
+
     private static readonly PdfPositionedColumnSpec[] SpdbCorporateColumns =
     [
         new("Date", 18, 82),
@@ -351,6 +366,7 @@ public sealed partial class PdfImportService : IPdfImportService
         return bankName switch
         {
             "中行" => true,
+            "微信" => true,
             "平安" => true,
             "华夏" => true,
             "支付宝" => true,
@@ -1731,32 +1747,20 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool ParseWechatPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
-        var parsedUser = false;
         var lines = document.Lines.ToList();
         foreach (var line in lines.Take(120))
         {
             var text = CleanPdfValue(line.Text);
-            var codeMatch = Regex.Match(text, @"编号\s*:?\s*(?<code>\S+)");
+            var codeMatch = Regex.Match(text, @"编号\s*[：:]\s*(?<code>[A-Za-z0-9_-]+)");
             if (codeMatch.Success)
             {
                 SetUserNamed(user, bank, "编号", codeMatch.Groups["code"].Value);
-                parsedUser = true;
             }
 
-            var identityMatch = Regex.Match(text, @"兹证明：(?<name>.+?)（居民身份证：(?<id>[^）]+)），在其微信号：(?<account>.+?)中的");
-            if (identityMatch.Success)
-            {
-                SetUserNamed(user, bank, "姓名", identityMatch.Groups["name"].Value);
-                SetUserNamed(user, bank, "身份证", identityMatch.Groups["id"].Value);
-                SetUserNamed(user, bank, "微信号", identityMatch.Groups["account"].Value);
-                parsedUser = true;
-            }
-
-            var currencyMatch = Regex.Match(text, @"币种\s*:\s*(?<currency>[^/]+)");
+            var currencyMatch = Regex.Match(text, @"币种\s*[：:]\s*(?<currency>[^/]+)");
             if (currencyMatch.Success)
             {
                 SetUserNamed(user, bank, "币种", currencyMatch.Groups["currency"].Value);
-                parsedUser = true;
             }
 
             var rangeMatch = Regex.Match(text, @"交易明细对应时间段\s*(?<start>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})至(?<end>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
@@ -1764,23 +1768,111 @@ public sealed partial class PdfImportService : IPdfImportService
             {
                 SetUserNamed(user, bank, "起始日期", rangeMatch.Groups["start"].Value);
                 SetUserNamed(user, bank, "终止日期", rangeMatch.Groups["end"].Value);
-                parsedUser = true;
             }
         }
 
-        foreach (var group in GroupWechatRecords(lines))
+        // The identity sentence in WeChat PDFs is frequently split into several PDF text
+        // lines. Parse the first-page header as one normalized string so a table row can
+        // never be mistaken for user information.
+        var parsedUser = TryApplyWechatUserHeader(bank, user, lines);
+        if (!parsedUser)
         {
-            if (TryParseWechatRecord(group, bank, user, out var record))
+            AddWechatUserHeaderWarning(result, lines);
+        }
+
+        var positionedRecords = BuildWechatPositionedRows(document.Words)
+            .Select(row => TryParseWechatPositionedRecord(row, bank, user, out var record) ? record : null)
+            .Where(record => record is not null)
+            .Cast<FlowRecord>()
+            .ToList();
+
+        if (positionedRecords.Count > 0)
+        {
+            result.FlowRecords.AddRange(positionedRecords);
+        }
+        else
+        {
+            foreach (var group in GroupWechatRecords(lines))
             {
-                result.FlowRecords.Add(record);
-            }
-            else if (GroupContainsMoney(group))
-            {
-                AddParseWarning(result, group, "该微信流水行未能按专用模板解析。");
+                if (TryParseWechatRecord(group, bank, user, out var record))
+                {
+                    result.FlowRecords.Add(record);
+                }
+                else if (GroupContainsMoney(group))
+                {
+                    AddParseWarning(result, group, "该微信流水行未能按专用模板解析。");
+                }
             }
         }
 
         return parsedUser;
+    }
+
+    private static bool TryApplyWechatUserHeader(
+        Bank bank,
+        BankUser user,
+        IReadOnlyList<PdfTextLine> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return false;
+        }
+
+        var firstPage = lines.Min(item => item.PageNumber);
+        var headerText = string.Concat(lines
+            .Where(item => item.PageNumber == firstPage)
+            .Take(160)
+            .Select(item => item.Text));
+        var identityMatch = Regex.Match(
+            NormalizeWechatHeaderText(headerText),
+            @"兹证明[：:](?<name>.+?)[（(]居民身份证[：:](?<id>[^）)]+)[）)][，,]?在其微信号[：:](?<account>.+?)中的交易明细");
+        if (!identityMatch.Success)
+        {
+            return false;
+        }
+
+        var name = CleanPdfValue(identityMatch.Groups["name"].Value);
+        var idNumber = CleanPdfValue(identityMatch.Groups["id"].Value).ToUpperInvariant();
+        var wechatAccount = CleanPdfValue(identityMatch.Groups["account"].Value);
+        if (!IsWechatUserHeaderValid(name, idNumber, wechatAccount))
+        {
+            return false;
+        }
+
+        SetUserNamed(user, bank, "姓名", name);
+        SetUserNamed(user, bank, "身份证", idNumber);
+        SetUserNamed(user, bank, "微信号", wechatAccount);
+        return true;
+    }
+
+    private static string NormalizeWechatHeaderText(string value)
+    {
+        return string.Concat(CleanPdfValue(value).Where(character => !char.IsWhiteSpace(character)));
+    }
+
+    private static bool IsWechatUserHeaderValid(string name, string idNumber, string wechatAccount)
+    {
+        return Regex.IsMatch(name, @"^[^\d（）()，,：:\s]{1,60}$")
+            && Regex.IsMatch(idNumber, @"^(?:\d{15}|\d{17}[\dX])$")
+            && Regex.IsMatch(wechatAccount, @"^[A-Za-z][A-Za-z0-9_-]{5,}$");
+    }
+
+    private static void AddWechatUserHeaderWarning(PdfImportResult result, IReadOnlyList<PdfTextLine> lines)
+    {
+        if (result.Issues.Any(item => item.Message.Contains("姓名、身份证号和微信号", StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var line = lines.FirstOrDefault(item => item.Text.Contains("兹证明", StringComparison.Ordinal));
+        result.Issues.Add(new PdfImportIssue
+        {
+            Severity = PdfImportIssueSeverity.Warning,
+            PageNumber = line?.PageNumber,
+            LineNumber = line?.LineNumber,
+            Message = "未能同时识别微信 PDF 的姓名、身份证号和微信号，已跳过用户信息导入。",
+            RawText = line?.Text ?? string.Empty
+        });
     }
 
     private static bool ParseAlipayPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
@@ -5421,6 +5513,112 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "对方开户行", record.OppositeBank);
         SetFlowRaw(record, "附言", record.Remark);
         return true;
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildWechatPositionedRows(IReadOnlyList<PdfTextWord> words)
+    {
+        return BuildPositionedRows(
+            words,
+            WechatPersonalColumns,
+            IsWechatPositionedHeaderWord,
+            IsWechatPositionedFooterWord,
+            @"^\d{16,}",
+            148d,
+            0d);
+    }
+
+    private static bool IsWechatPositionedHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易单号" or "交易时间" or "交易类型" or "收/支/其他" or "交易方式" or "金额(元)" or "交易对方" or "商户单号";
+    }
+
+    private static bool IsWechatPositionedFooterWord(string value)
+    {
+        var text = CleanPdfValue(value);
+        return Regex.IsMatch(text, @"^第\d+页")
+            || Regex.IsMatch(text, @"^共\d+页")
+            || text.StartsWith("温馨提示", StringComparison.Ordinal)
+            || text.StartsWith("本证明", StringComparison.Ordinal)
+            || text.StartsWith("微信支付交易明细证明", StringComparison.Ordinal);
+    }
+
+    private static bool TryParseWechatPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var tradeOrder = ParseWechatPositionedTradeOrder(GetPositionedCell(row, "TradeOrder"));
+        var rowText = string.Concat(
+            GetPositionedCell(row, "TradeOrder"),
+            GetPositionedCell(row, "TradeTime"),
+            GetPositionedCell(row, "TradeType"),
+            GetPositionedCell(row, "Direction"),
+            GetPositionedCell(row, "PaymentMethod"),
+            GetPositionedCell(row, "Amount"));
+        var accountTime = ParseWechatPositionedDateTime(rowText);
+        var tradeType = CollapseChineseSeparatedWords(GetPositionedCell(row, "TradeType"));
+        var direction = Regex.Match(CleanPdfValue(GetPositionedCell(row, "Direction")), @"收入|支出|其他|不计收支").Value;
+        var paymentMethod = CollapseChineseSeparatedWords(GetPositionedCell(row, "PaymentMethod"));
+        var amountText = GetPositionedCell(row, "Amount");
+        var amount = ParseDoubleOrNull(amountText);
+
+        if (string.IsNullOrWhiteSpace(tradeOrder)
+            || !accountTime.HasValue
+            || string.IsNullOrWhiteSpace(tradeType)
+            || string.IsNullOrWhiteSpace(direction)
+            || !amount.HasValue)
+        {
+            return false;
+        }
+
+        var signedAmount = ApplyPaymentDirection(amount, direction);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.SerialNum = tradeOrder;
+        record.AccountTime = accountTime;
+        record.ProductBrief = tradeType;
+        record.ProductName = tradeType;
+        record.IncomeAttribute = direction;
+        record.IncomeFlag = direction;
+        record.CashCheck = paymentMethod;
+        record.TradeChannel = paymentMethod;
+        record.TradeMoney = signedAmount;
+        record.OppositeUsername = CleanPdfValue(GetPositionedCell(row, "Counterparty"));
+        record.MerchantName = CleanPdfValue(GetPositionedCell(row, "MerchantOrder"));
+        ApplySignedAmountColumns(record, signedAmount);
+
+        SetFlowRaw(record, "交易单号", record.SerialNum);
+        SetFlowRaw(record, "流水号", record.SerialNum);
+        SetFlowRaw(record, "交易时间", accountTime.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+        SetFlowRaw(record, "交易类型", record.ProductBrief);
+        SetFlowRaw(record, "收/支/其他", direction);
+        SetFlowRaw(record, "收支其他", direction);
+        SetFlowRaw(record, "收支其它", direction);
+        SetFlowRaw(record, "收入支出其他", direction);
+        SetFlowRaw(record, "收入支出", direction);
+        SetFlowRaw(record, "交易方式", record.CashCheck);
+        SetFlowRaw(record, "金额", amountText);
+        SetFlowRaw(record, "交易对方", record.OppositeUsername);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetFlowRaw(record, "商户单号", record.MerchantName);
+        return true;
+    }
+
+    private static string ParseWechatPositionedTradeOrder(string value)
+    {
+        var text = Regex.Replace(CleanPdfValue(value), @"20\d{2}-\d{2}-\d{2}", string.Empty);
+        return string.Concat(Regex.Matches(text, @"\d+").Select(match => match.Value));
+    }
+
+    private static DateTime? ParseWechatPositionedDateTime(string value)
+    {
+        var match = Regex.Match(CleanPdfValue(value), @"(?<date>20\d{2}-\d{2}-\d{2}).{0,80}?(?<time>\d{2}:\d{2}:\d{2})");
+        return match.Success
+            ? ParseDateTimeOrNull($"{match.Groups["date"].Value} {match.Groups["time"].Value}")
+            : null;
     }
 
     private static bool TryParseWechatRecord(

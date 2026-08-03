@@ -1404,7 +1404,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
-                ApplyBankOfChinaVendorSortDirection(context, vendorConfig);
+                ApplyVendorSortDirection(context, vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, effectivePageRows);
             }
@@ -1418,7 +1418,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
-                    ApplyBankOfChinaVendorSortDirection(context, config);
+                    ApplyVendorSortDirection(context, config);
                     var pageRows = context.Template.PageRows > 0
                         ? context.Template.PageRows
                         : (int)ReadLong(config, "RowCount", 0);
@@ -2640,7 +2640,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
-                ApplyBankOfChinaVendorSortDirection(context, vendorConfig);
+                ApplyVendorSortDirection(context, vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
             }
@@ -2654,7 +2654,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
-                    ApplyBankOfChinaVendorSortDirection(context, config);
+                    ApplyVendorSortDirection(context, config);
                     return new ResolvedTemplate(name, config, null);
                 }
             }
@@ -3939,7 +3939,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IReadOnlyList<FlowRecord> GetVendorPrintRecords(PrintRenderContext context)
     {
-        if (IsBankOfChina(context.Bank))
+        if (IsBankOfChina(context.Bank) || IsWechatBank(context.Bank))
         {
             return context.Records
                 .Select((record, index) => new { record, index })
@@ -5561,11 +5561,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             || bank.Name.Contains("\u4E2D\u56FD\u94F6\u884C", StringComparison.Ordinal);
     }
 
-    private static void ApplyBankOfChinaVendorSortDirection(PrintRenderContext context, object? vendorConfig)
+    private static void ApplyVendorSortDirection(PrintRenderContext context, object? vendorConfig)
     {
-        if (vendorConfig is not null && IsBankOfChina(context.Bank))
+        if (vendorConfig is not null
+            && (IsBankOfChina(context.Bank) || IsWechatBank(context.Bank)))
         {
-            // Bridge records are already sorted newest-first. The vendor renderer
+            // The bridge sends these statements newest-first. The vendor renderer
             // reverses its input when Desc is true, so keep it false here.
             Set(vendorConfig, "Desc", false);
         }
@@ -5651,6 +5652,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         string productName,
         bool usePersonalStatementAliases)
     {
+        // The WeChat statement has dedicated columns for these two values. Keep
+        // them separate from the generic product fields used by other banks.
+        var transactionType = FirstNotBlank(
+            source.ProductBrief,
+            source.ProductName,
+            GetValue(values, "交易类型"),
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            GetValue(values, nameof(FlowRecord.ProductName)),
+            productName);
+        var paymentMethod = FirstNotBlank(
+            source.CashCheck,
+            source.TradeChannel,
+            GetValue(values, "交易方式"),
+            GetValue(values, nameof(FlowRecord.CashCheck)),
+            GetValue(values, nameof(FlowRecord.TradeChannel)));
         var serialNumber = NormalizePrintNumber(FirstNotBlank(
             source.SerialNum,
             GetValue(values, nameof(FlowRecord.SerialNum)),
@@ -5664,8 +5680,18 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         SetTargetValueIfBlank(target, nameof(FlowRecord.TradeCode), serialNumber);
         SetTargetValueIfBlank(target, nameof(FlowRecord.VoucherNum), serialNumber);
         SetTargetValueIfBlank(target, nameof(FlowRecord.ReceiptNum), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.ProductName), productName);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.ProductType), productName);
+        // The vendor WeChat template binds "交易类型" to ProductType and
+        // "交易方式" to ProductBrief. ProductName remains the transaction type
+        // for the other WeChat layouts that use the generic product column.
+        Set(target, nameof(FlowRecord.ProductName), transactionType);
+        Set(target, nameof(FlowRecord.ProductBrief), paymentMethod);
+        Set(target, nameof(FlowRecord.ProductType), transactionType);
+        Set(target, nameof(FlowRecord.TradeChannel), paymentMethod);
+        Set(target, nameof(FlowRecord.CashCheck), paymentMethod);
+        Set(target, "TradeType", transactionType);
+        Set(target, "TransactionType", transactionType);
+        Set(target, "TradeMethod", paymentMethod);
+        Set(target, "PaymentMethod", paymentMethod);
 
         var direction = FirstNotBlank(
             source.IncomeAttribute,
@@ -5673,6 +5699,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             source.IncomeFlag,
             GetValue(values, nameof(FlowRecord.IncomeFlag)),
             GetValue(values, "\u6536/\u652F/\u5176\u4ED6"));
+        SetPrintFieldAlias(target, "\u4EA4\u6613\u7C7B\u578B", transactionType);
+        SetPrintFieldAlias(target, "\u4EA4\u6613\u65B9\u5F0F", paymentMethod);
+        SetPrintFieldAlias(target, "\u6536/\u652F/\u5176\u4ED6", direction);
+        SetPrintFieldAlias(target, "\u6536\u652F\u5176\u4ED6", direction);
+        SetPrintFieldAlias(target, "\u6536\u652F\u5176\u5B83", direction);
         if (usePersonalStatementAliases && !string.IsNullOrWhiteSpace(direction))
         {
             Set(target, nameof(FlowRecord.Usage), direction);
