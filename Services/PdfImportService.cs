@@ -1780,15 +1780,25 @@ public sealed partial class PdfImportService : IPdfImportService
             AddWechatUserHeaderWarning(result, lines);
         }
 
-        var positionedRecords = BuildWechatPositionedRows(document.Words)
-            .Select(row => TryParseWechatPositionedRecord(row, bank, user, out var record) ? record : null)
-            .Where(record => record is not null)
-            .Cast<FlowRecord>()
-            .ToList();
+        var positionedRows = BuildWechatPositionedRows(document.Words);
+        var positionedRecords = new List<FlowRecord>(positionedRows.Count);
+        var failedPositionedRows = new List<PdfPositionedRow>();
+        foreach (var row in positionedRows)
+        {
+            if (TryParseWechatPositionedRecord(row, bank, user, out var record))
+            {
+                positionedRecords.Add(record);
+            }
+            else
+            {
+                failedPositionedRows.Add(row);
+            }
+        }
 
         if (positionedRecords.Count > 0)
         {
             result.FlowRecords.AddRange(positionedRecords);
+            AddWechatPositionedRowWarning(result, failedPositionedRows);
         }
         else
         {
@@ -5517,14 +5527,46 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static IReadOnlyList<PdfPositionedRow> BuildWechatPositionedRows(IReadOnlyList<PdfTextWord> words)
     {
-        return BuildPositionedRows(
+        // WeChat puts a transaction order and the matching date/time on separate vertical
+        // lines. Midpoint bands split those cells between adjacent rows, so each row must
+        // begin at its order-number anchor and extend to the next anchor.
+        return BuildPositionedRowsWithTopLead(
             words,
             WechatPersonalColumns,
             IsWechatPositionedHeaderWord,
             IsWechatPositionedFooterWord,
             @"^\d{16,}",
             148d,
-            0d);
+            0d,
+            2d);
+    }
+
+    private static void AddWechatPositionedRowWarning(
+        PdfImportResult result,
+        IReadOnlyList<PdfPositionedRow> failedRows)
+    {
+        if (failedRows.Count == 0)
+        {
+            return;
+        }
+
+        var samples = string.Join(
+            "；",
+            failedRows.Take(5).Select(row => $"第 {row.PageNumber} 页（Y={row.Top:0.0}）"));
+        result.Issues.Add(new PdfImportIssue
+        {
+            Severity = PdfImportIssueSeverity.Warning,
+            PageNumber = failedRows[0].PageNumber,
+            Message = $"微信 PDF 有 {failedRows.Count} 条表格记录缺少交易单号、时间、类型、收支或金额，未导入。{samples}",
+            RawText = string.Join(Environment.NewLine, failedRows.Take(5).Select(DescribeWechatPositionedRow))
+        });
+    }
+
+    private static string DescribeWechatPositionedRow(PdfPositionedRow row)
+    {
+        return string.Join(
+            " | ",
+            row.Cells.OrderBy(item => item.Key).Select(item => $"{item.Key}={item.Value}"));
     }
 
     private static bool IsWechatPositionedHeaderWord(PdfTextWord word)
@@ -5535,6 +5577,13 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsWechatPositionedFooterWord(string value)
     {
         var text = CleanPdfValue(value);
+        // The legal notice on the final page starts immediately after the final table row.
+        // Treat its label as the table footer so it cannot be appended to that row.
+        if (text is "\u8bf4\u660e\uff1a" or "\u8bf4\u660e:")
+        {
+            return true;
+        }
+
         return Regex.IsMatch(text, @"^第\d+页")
             || Regex.IsMatch(text, @"^共\d+页")
             || text.StartsWith("温馨提示", StringComparison.Ordinal)

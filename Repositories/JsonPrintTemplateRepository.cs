@@ -115,11 +115,25 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 && IsSameSystemTemplatePageRowsIdentity(item, pageRowsOverride));
             if (systemTemplate is not null)
             {
-                systemTemplate.PageRows = pageRowsOverride.PageRows;
-                systemTemplate.Config.RowCount = pageRowsOverride.PageRows;
+                var pageRows = GetCalibratedSystemTemplatePageRows(systemTemplate, pageRowsOverride);
+                systemTemplate.PageRows = pageRows;
+                systemTemplate.Config.RowCount = pageRows;
                 systemTemplate.IsPageRowsOverride = true;
             }
         }
+    }
+
+    private static int GetCalibratedSystemTemplatePageRows(
+        PrintTemplate systemTemplate,
+        PrintTemplate pageRowsOverride)
+    {
+        // Previous releases stored 31 as the stock WeChat personal-template row count.
+        // The vendor template's actual usable height fits 27 records; keep explicit user choices intact.
+        return systemTemplate.BankId == 2
+            && pageRowsOverride.PageRows == 31
+            && string.Equals(systemTemplate.Name, "\u5fae\u4fe1\u4e2a\u4eba\u7248", StringComparison.Ordinal)
+            ? 27
+            : pageRowsOverride.PageRows;
     }
 
     private static bool IsStaleVendorTemplateOverride(
@@ -648,6 +662,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
     private static int GetDisplayRowCount(Bank bank, PrintTemplateDefinition definition)
     {
+        if (bank.Id == 2
+            && bank.Type == BankTypes.Personal
+            && string.Equals(definition.Name, "\u5fae\u4fe1\u4e2a\u4eba\u7248", StringComparison.Ordinal))
+        {
+            return 27;
+        }
+
         return bank.Id == 11
             && bank.Type == BankTypes.Personal
             && string.Equals(definition.Name, "\u519C\u884C\u4E2A\u4EBA\u7EB8\u8D28\u7248", StringComparison.Ordinal)
