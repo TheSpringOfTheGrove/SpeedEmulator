@@ -2116,7 +2116,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private static void ConfigureQuestPdfFonts(Assembly questPdfAssembly, string vendorDir)
         {
-            var fontsDir = Path.Combine(vendorDir, "fonts");
+            var bundledFontsDir = Path.Combine(vendorDir, "static", "fonts");
+            var legacyFontsDir = Path.Combine(vendorDir, "fonts");
+            var fontsDir = Directory.Exists(bundledFontsDir) ? bundledFontsDir : legacyFontsDir;
             var fontPath = Path.Combine(fontsDir, "wryh2.ttf");
             if (!Directory.Exists(fontsDir))
             {
@@ -3025,7 +3027,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private static void ConfigureQuestPdfFonts(Assembly questPdfAssembly, string vendorDir)
         {
-            var fontsDir = Path.Combine(vendorDir, "fonts");
+            var bundledFontsDir = Path.Combine(vendorDir, "static", "fonts");
+            var legacyFontsDir = Path.Combine(vendorDir, "fonts");
+            var fontsDir = Directory.Exists(bundledFontsDir) ? bundledFontsDir : legacyFontsDir;
             var fontPath = Path.Combine(fontsDir, "wryh2.ttf");
             if (!Directory.Exists(fontsDir))
             {
@@ -3072,7 +3076,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 if (registerMethod is not null)
                 {
                     using var stream = File.OpenRead(fontPath);
-                    registerMethod.Invoke(null, ["寰俊", stream]);
+                    registerMethod.Invoke(null, ["微信", stream]);
                 }
             }
             catch
