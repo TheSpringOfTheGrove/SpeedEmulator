@@ -15,6 +15,7 @@ public partial class PrintPreviewWindow : Window
     private readonly PrintPreviewViewModel viewModel;
     private bool previewInitialized;
     private Task? previewInitializationTask;
+    private PdfGenerationProgressWindow? activeProgressWindow;
 
     public PrintPreviewWindow(PrintPreviewViewModel viewModel)
     {
@@ -32,6 +33,7 @@ public partial class PrintPreviewWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        CloseProgressWindow(activeProgressWindow);
         viewModel.RequestClose -= ViewModel_RequestClose;
         viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         base.OnClosed(e);
@@ -192,10 +194,12 @@ public partial class PrintPreviewWindow : Window
             return;
         }
 
+        CloseProgressWindow(activeProgressWindow);
         var progressWindow = new PdfGenerationProgressWindow
         {
             Owner = this
         };
+        activeProgressWindow = progressWindow;
         var previousCursor = Mouse.OverrideCursor;
 
         try
@@ -211,10 +215,26 @@ public partial class PrintPreviewWindow : Window
         {
             Mouse.OverrideCursor = previousCursor;
             TemplateGrid.IsEnabled = true;
-            if (progressWindow.IsVisible)
-            {
-                progressWindow.CloseAfterComplete();
-            }
+            CloseProgressWindow(progressWindow);
+        }
+    }
+
+    private void CloseProgressWindow(PdfGenerationProgressWindow? progressWindow)
+    {
+        if (progressWindow is null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(activeProgressWindow, progressWindow))
+        {
+            activeProgressWindow = null;
+        }
+
+        if (!progressWindow.Dispatcher.HasShutdownStarted
+            && !progressWindow.Dispatcher.HasShutdownFinished)
+        {
+            progressWindow.CloseAfterComplete();
         }
     }
 

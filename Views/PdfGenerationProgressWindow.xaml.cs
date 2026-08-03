@@ -1,12 +1,9 @@
-using System.ComponentModel;
 using System.Windows;
 
 namespace SpeedEmulator.Views;
 
 public partial class PdfGenerationProgressWindow : Window
 {
-    private bool allowClose;
-
     public PdfGenerationProgressWindow()
     {
         InitializeComponent();
@@ -14,17 +11,15 @@ public partial class PdfGenerationProgressWindow : Window
 
     public void CloseAfterComplete()
     {
-        allowClose = true;
-        Close();
-    }
-
-    protected override void OnClosing(CancelEventArgs e)
-    {
-        if (!allowClose)
+        if (!Dispatcher.CheckAccess())
         {
-            e.Cancel = true;
+            Dispatcher.BeginInvoke(CloseAfterComplete);
+            return;
         }
 
-        base.OnClosing(e);
+        if (IsLoaded)
+        {
+            Close();
+        }
     }
 }

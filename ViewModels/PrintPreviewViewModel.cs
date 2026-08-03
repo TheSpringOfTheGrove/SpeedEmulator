@@ -231,7 +231,8 @@ public sealed class PrintPreviewViewModel : ObservableObject
             StatusMessage = $"\u6b63\u5728\u751f\u6210 PDF \u9884\u89c8\uff1a{template.Name}";
             PreviewPath = string.Empty;
             await EnsureQuestPdfLayoutAsync(template);
-            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(template));
+            var context = CreateContext(template);
+            PreviewPath = await Task.Run(() => printPdfService.GeneratePreviewAsync(context));
             OnPropertyChanged(nameof(PreviewPath));
             StatusMessage = $"预览已生成：{PreviewPath}";
         }

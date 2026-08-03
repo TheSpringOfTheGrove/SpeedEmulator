@@ -1404,6 +1404,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
+                ApplyBankOfChinaVendorSortDirection(context, vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, effectivePageRows);
             }
@@ -1417,6 +1418,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
+                    ApplyBankOfChinaVendorSortDirection(context, config);
                     var pageRows = context.Template.PageRows > 0
                         ? context.Template.PageRows
                         : (int)ReadLong(config, "RowCount", 0);
@@ -1648,10 +1650,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "LogNum"),
                     CreateSystemGeneratedPrintSerialNumber(context, index));
                 var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
+                if (IsAgriculturalBank(context.Bank))
+                {
+                    Set(target, "LogNum", logNumber);
+                }
                 var oppositeAccount = FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"));
                 Set(
                     target,
@@ -1680,18 +1687,24 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             object records,
             string path)
         {
+            if (TryExportIcbcPersonalElectronicWithVendorBatches(
+                    context,
+                    resolvedTemplate,
+                    bankUser,
+                    records,
+                    path))
+            {
+                NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+                NormalizeImportedDocumentSerialNumbersInPdf(context, path);
+                ApplyVendorDigitalSignature(context, path);
+                return true;
+            }
+
             Exception? lastLayoutException = null;
             foreach (var pageRows in GetVendorQuestPdfPageRowAttempts(context, resolvedTemplate))
             {
                 try
                 {
-                    if (ShouldUseIcbcFallbackStampCode(context)
-                        && EstimateRenderedPageCount(context, resolvedTemplate, records, pageRows) > 1)
-                    {
-                        ExportIcbcPerPageFallbackStampCodes(context, resolvedTemplate, records, path, pageRows);
-                        return true;
-                    }
-
                     var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
                     if (ShouldUseVendorCompletePdfPipeline(context)
                         && TryGenerateWithVendorCompletePdfPipeline(bankUser, records, template, path))
@@ -1726,6 +1739,118 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             return false;
+        }
+
+        private bool TryExportIcbcPersonalElectronicWithVendorBatches(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate,
+            object bankUser,
+            object records,
+            string outputPath)
+        {
+            if (records is not IList allRecords)
+            {
+                return false;
+            }
+
+            var pageRows = resolvedTemplate.PageRows > 0
+                ? resolvedTemplate.PageRows
+                : context.Template.PageRows;
+            if (!IsIcbcPersonalStatementTemplate(context)
+                || !(context.Template.Name ?? string.Empty).Contains("\u7535\u5b50\u7248", StringComparison.Ordinal)
+                || pageRows <= 0
+                || allRecords.Count <= pageRows)
+            {
+                return false;
+            }
+
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                outputDirectory = Path.GetTempPath();
+            }
+
+            var tempDirectory = Path.Combine(outputDirectory, ".icbc-vendor-render-pages-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            var pagePaths = new List<string>();
+            try
+            {
+                for (var start = 0; start < allRecords.Count; start += pageRows)
+                {
+                    var pageRecords = (IList)(Activator.CreateInstance(flowListType)
+                        ?? throw new InvalidOperationException("Cannot create vendor flow list."));
+                    var end = Math.Min(start + pageRows, allRecords.Count);
+                    for (var index = start; index < end; index++)
+                    {
+                        pageRecords.Add(allRecords[index]);
+                    }
+
+                    var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
+                    var document = renderFactory.Invoke(null, [bankUser, pageRecords, template]);
+                    if (document is null)
+                    {
+                        throw new InvalidOperationException("Vendor PDF renderer did not create an ICBC document.");
+                    }
+
+                    NormalizeVendorDynamicImageDocument(context, document);
+                    var pagePath = Path.Combine(tempDirectory, $"page-{pagePaths.Count + 1:D4}.pdf");
+                    generatePdfMethod.Invoke(null, [document, pagePath]);
+                    if (!File.Exists(pagePath) || new FileInfo(pagePath).Length == 0)
+                    {
+                        throw new InvalidOperationException("Vendor PDF renderer did not create an ICBC page.");
+                    }
+
+                    pagePaths.Add(pagePath);
+                }
+
+                MergeVendorPdfPages(pagePaths, outputPath);
+                return true;
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+                catch
+                {
+                    // A failed temporary cleanup must not hide the rendered document.
+                }
+            }
+        }
+
+        private static void MergeVendorPdfPages(IReadOnlyList<string> pagePaths, string outputPath)
+        {
+            if (pagePaths.Count == 0)
+            {
+                throw new InvalidOperationException("No ICBC PDF pages were generated.");
+            }
+
+            var tempOutputPath = outputPath + ".merge-" + Guid.NewGuid().ToString("N") + ".pdf";
+            try
+            {
+                using var outputDocument = new PdfDocument();
+                foreach (var pagePath in pagePaths)
+                {
+                    using var inputDocument = PdfReader.Open(pagePath, PdfDocumentOpenMode.Import);
+                    for (var pageIndex = 0; pageIndex < inputDocument.PageCount; pageIndex++)
+                    {
+                        outputDocument.AddPage(inputDocument.Pages[pageIndex]);
+                    }
+                }
+
+                if (outputDocument.PageCount == 0)
+                {
+                    throw new InvalidOperationException("The ICBC PDF pages did not contain any pages.");
+                }
+
+                outputDocument.Save(tempOutputPath);
+                File.Move(tempOutputPath, outputPath, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteFile(tempOutputPath);
+            }
         }
 
         private bool TryGenerateWithVendorCompletePdfPipeline(
@@ -1860,137 +1985,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             return IsEverbrightCorporatePrintContext(context)
                 && context.Template.Name.Contains("光大对公电子版", StringComparison.Ordinal);
-        }
-
-        private void ExportIcbcPerPageFallbackStampCodes(
-            PrintRenderContext context,
-            ResolvedTemplate resolvedTemplate,
-            object records,
-            string path,
-            int? pageRowsOverride)
-        {
-            var tempRoot = Path.Combine(
-                Path.GetDirectoryName(path) ?? Path.GetTempPath(),
-                $".icbc-stamp-pages-{Guid.NewGuid():N}");
-            var tempFiles = new List<string>();
-            var selectedPages = new List<(string FilePath, int PageIndex)>();
-            var usedCodes = new HashSet<string>(StringComparer.Ordinal);
-            Directory.CreateDirectory(tempRoot);
-
-            try
-            {
-                var pageCount = EstimateRenderedPageCount(context, resolvedTemplate, records, pageRowsOverride);
-                for (var pageIndex = 0; pageIndex < pageCount; pageIndex++)
-                {
-                    var tempPath = Path.Combine(tempRoot, $"page-source-{pageIndex + 1}.pdf");
-                    tempFiles.Add(tempPath);
-
-                    var pageBankUser = CreateVendorBankUser(context);
-                    var pageStampCode = CreateIcbcFallbackStampCode(usedCodes);
-                    if (IsPrintBridgeDebugEnabledGlobal())
-                    {
-                        Console.WriteLine($"[PrintBridge] ICBC fallback stamp code page {pageIndex + 1}: {pageStampCode}");
-                    }
-
-                    SetIcbcStampCodeAliases(pageBankUser, pageStampCode);
-
-                    var template = CreateVendorTemplate(context, resolvedTemplate, pageRowsOverride);
-                    var document = renderFactory.Invoke(null, [pageBankUser, records, template]);
-                    if (document is null)
-                    {
-                        throw new InvalidOperationException("Vendor QuestPDF document was not created.");
-                    }
-
-                    NormalizeVendorDynamicImageDocument(context, document);
-                    generatePdfMethod.Invoke(null, [document, tempPath]);
-                    NormalizeEverbrightPersonalElectronicFooterPdf(context, tempPath);
-                    NormalizeImportedDocumentSerialNumbersInPdf(context, tempPath);
-
-                    var actualPageCount = GetPdfPageCount(tempPath);
-                    if (pageIndex == 0)
-                    {
-                        pageCount = actualPageCount;
-                    }
-
-                    if (pageIndex < actualPageCount)
-                    {
-                        selectedPages.Add((tempPath, pageIndex));
-                    }
-                }
-
-                MergeSelectedPdfPages(selectedPages, path);
-            }
-            finally
-            {
-                foreach (var tempFile in tempFiles)
-                {
-                    TryDeleteFile(tempFile);
-                }
-
-                try
-                {
-                    if (Directory.Exists(tempRoot))
-                    {
-                        Directory.Delete(tempRoot, recursive: true);
-                    }
-                }
-                catch
-                {
-                    // Temporary page render artifacts are best-effort cleanup.
-                }
-            }
-        }
-
-        private static int EstimateRenderedPageCount(
-            PrintRenderContext context,
-            ResolvedTemplate resolvedTemplate,
-            object records,
-            int? pageRowsOverride)
-        {
-            var pageRows = pageRowsOverride
-                ?? (resolvedTemplate.PageRows > 0 ? resolvedTemplate.PageRows : context.Template.PageRows);
-            if (pageRows <= 0)
-            {
-                return 1;
-            }
-
-            var recordCount = records is ICollection collection
-                ? collection.Count
-                : records is IEnumerable enumerable ? enumerable.Cast<object>().Count() : 0;
-            return Math.Max(1, (recordCount + pageRows - 1) / pageRows);
-        }
-
-        private static int GetPdfPageCount(string path)
-        {
-            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Import);
-            return document.PageCount;
-        }
-
-        private static void MergeSelectedPdfPages(IReadOnlyList<(string FilePath, int PageIndex)> pages, string path)
-        {
-            if (pages.Count == 0)
-            {
-                throw new InvalidOperationException("No PDF pages were generated for ICBC stamp-code merge.");
-            }
-
-            using var outputDocument = new PdfDocument();
-            foreach (var page in pages)
-            {
-                using var inputDocument = PdfReader.Open(page.FilePath, PdfDocumentOpenMode.Import);
-                if (page.PageIndex < 0 || page.PageIndex >= inputDocument.PageCount)
-                {
-                    continue;
-                }
-
-                outputDocument.AddPage(inputDocument.Pages[page.PageIndex]);
-            }
-
-            if (outputDocument.PageCount == 0)
-            {
-                throw new InvalidOperationException("No PDF pages were selected for ICBC stamp-code merge.");
-            }
-
-            outputDocument.Save(path);
         }
 
         private static IEnumerable<int?> GetVendorQuestPdfPageRowAttempts(
@@ -2478,8 +2472,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
-            var template = resolvedTemplate.Template ?? CreateTemplate(context, resolvedTemplate);
             PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
+            if (TryExportIcbcPersonalElectronicInBatches(context, resolvedTemplate, bankUser, records, path))
+            {
+                NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
+                NormalizeImportedDocumentSerialNumbersInPdf(context, path);
+                return File.Exists(path) && new FileInfo(path).Length > 0;
+            }
+
+            var template = resolvedTemplate.Template ?? CreateTemplate(context, resolvedTemplate);
             var document = renderFactory.Invoke(null, [bankUser, records, template]);
             if (document is null)
             {
@@ -2491,6 +2492,130 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
             NormalizeImportedDocumentSerialNumbersInPdf(context, path);
             return File.Exists(path);
+        }
+
+        private bool TryExportIcbcPersonalElectronicInBatches(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate,
+            object bankUser,
+            IList allRecords,
+            string outputPath)
+        {
+            var configuredPageRows = ReadLong(resolvedTemplate.Template ?? new object(), "PageSize", 0);
+            var pageRows = configuredPageRows > 0 ? configuredPageRows : context.Template.PageRows;
+            if (!ShouldRenderIcbcPersonalElectronicInBatches(context, allRecords.Count, pageRows))
+            {
+                return false;
+            }
+
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                outputDirectory = Path.GetTempPath();
+            }
+
+            var tempDirectory = Path.Combine(outputDirectory, ".icbc-render-pages-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            var pagePaths = new List<string>();
+            try
+            {
+                for (var start = 0; start < allRecords.Count; start += (int)pageRows)
+                {
+                    var pageRecords = (IList)(Activator.CreateInstance(flowListType)
+                        ?? throw new InvalidOperationException("Cannot create vendor flow list."));
+                    var end = Math.Min(start + (int)pageRows, allRecords.Count);
+                    for (var index = start; index < end; index++)
+                    {
+                        pageRecords.Add(allRecords[index]);
+                    }
+
+                    var template = CreateTemplate(context, resolvedTemplate);
+                    var document = renderFactory.Invoke(null, [bankUser, pageRecords, template]);
+                    if (document is null)
+                    {
+                        throw new InvalidOperationException("Vendor PDF renderer did not create an ICBC document.");
+                    }
+
+                    NormalizeVendorDynamicImageDocument(context, document);
+                    var pagePath = Path.Combine(tempDirectory, $"page-{pagePaths.Count + 1:D4}.pdf");
+                    generatePdfMethod.Invoke(null, [document, pagePath]);
+                    if (!File.Exists(pagePath) || new FileInfo(pagePath).Length == 0)
+                    {
+                        throw new InvalidOperationException("Vendor PDF renderer did not create an ICBC page.");
+                    }
+
+                    pagePaths.Add(pagePath);
+                }
+
+                MergePdfPages(pagePaths, outputPath);
+                return true;
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+                catch
+                {
+                    // Temporary page artifacts do not affect the generated preview.
+                }
+            }
+        }
+
+        private static bool ShouldRenderIcbcPersonalElectronicInBatches(
+            PrintRenderContext context,
+            int recordCount,
+            long pageRows)
+        {
+            return IsIcbcPersonalStatementTemplate(context)
+                && (context.Template.Name ?? string.Empty).Contains("\u7535\u5B50\u7248", StringComparison.Ordinal)
+                && pageRows > 0
+                && recordCount > pageRows;
+        }
+
+        private static void MergePdfPages(IReadOnlyList<string> pagePaths, string outputPath)
+        {
+            if (pagePaths.Count == 0)
+            {
+                throw new InvalidOperationException("No ICBC PDF pages were generated.");
+            }
+
+            var tempOutputPath = outputPath + ".merge-" + Guid.NewGuid().ToString("N") + ".pdf";
+            try
+            {
+                using var outputDocument = new PdfDocument();
+                foreach (var pagePath in pagePaths)
+                {
+                    using var inputDocument = PdfReader.Open(pagePath, PdfDocumentOpenMode.Import);
+                    for (var pageIndex = 0; pageIndex < inputDocument.PageCount; pageIndex++)
+                    {
+                        outputDocument.AddPage(inputDocument.Pages[pageIndex]);
+                    }
+                }
+
+                if (outputDocument.PageCount == 0)
+                {
+                    throw new InvalidOperationException("The ICBC PDF pages did not contain any pages.");
+                }
+
+                outputDocument.Save(tempOutputPath);
+                File.Move(tempOutputPath, outputPath, overwrite: true);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempOutputPath))
+                    {
+                        File.Delete(tempOutputPath);
+                    }
+                }
+                catch
+                {
+                    // A failed temporary cleanup must not hide the export result.
+                }
+            }
         }
 
         private ResolvedTemplate? ResolveTemplate(PrintRenderContext context)
@@ -2513,6 +2638,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
+                ApplyBankOfChinaVendorSortDirection(context, vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
             }
@@ -2526,6 +2652,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
+                    ApplyBankOfChinaVendorSortDirection(context, config);
                     return new ResolvedTemplate(name, config, null);
                 }
             }
@@ -2671,10 +2798,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "LogNum"),
                     CreateSystemGeneratedPrintSerialNumber(context, index));
                 var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
+                if (IsAgriculturalBank(context.Bank))
+                {
+                    Set(target, "LogNum", logNumber);
+                }
                 Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
@@ -3588,10 +3720,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "LogNum"),
                     CreateSystemGeneratedPrintSerialNumber(context, index));
                 var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
                 Set(target, "SequenceNum", serialNumber);
                 Set(target, "SerialNum", serialNumber);
+                if (IsAgriculturalBank(context.Bank))
+                {
+                    Set(target, "LogNum", logNumber);
+                }
                 Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
@@ -3798,17 +3935,44 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IReadOnlyList<FlowRecord> GetVendorPrintRecords(PrintRenderContext context)
     {
+        if (IsBankOfChina(context.Bank))
+        {
+            return context.Records
+                .Select((record, index) => new { record, index })
+                .OrderByDescending(item => item.record.AccountTime ?? DateTime.MinValue)
+                .ThenBy(item => item.index)
+                .Select(item => item.record)
+                .ToArray();
+        }
+
         return context.Records;
     }
 
     private static string PrepareStimulsoftPdfData(PrintRenderContext context, string pdfData)
     {
-        if (string.IsNullOrWhiteSpace(pdfData) || !IsHuaxiaPersonalElectronicPrintContext(context))
+        if (string.IsNullOrWhiteSpace(pdfData))
         {
             return pdfData;
         }
 
-        return NormalizeHuaxiaPersonalElectronicStimulsoftTemplate(pdfData);
+        if (IsBankOfChina(context.Bank))
+        {
+            pdfData = NormalizeBankOfChinaStimulsoftTemplate(pdfData);
+        }
+
+        return IsHuaxiaPersonalElectronicPrintContext(context)
+            ? NormalizeHuaxiaPersonalElectronicStimulsoftTemplate(pdfData)
+            : pdfData;
+    }
+
+    private static string NormalizeBankOfChinaStimulsoftTemplate(string pdfData)
+    {
+        const string accountTimeSortPattern = @"(<Sort isList=""true"" count=""2"">\s*<value>)ASC(</value>\s*<value>AccountTime</value>\s*</Sort>)";
+        return Regex.Replace(
+            pdfData,
+            accountTimeSortPattern,
+            "$1DESC$2",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     }
 
     private static string NormalizeHuaxiaPersonalElectronicStimulsoftTemplate(string pdfData)
@@ -5391,6 +5555,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         return bank.Name.Contains("\u4E2D\u884C", StringComparison.Ordinal)
             || bank.Name.Contains("\u4E2D\u56FD\u94F6\u884C", StringComparison.Ordinal);
+    }
+
+    private static void ApplyBankOfChinaVendorSortDirection(PrintRenderContext context, object? vendorConfig)
+    {
+        if (vendorConfig is not null && IsBankOfChina(context.Bank))
+        {
+            // Bridge records are already sorted newest-first. The vendor renderer
+            // reverses its input when Desc is true, so keep it false here.
+            Set(vendorConfig, "Desc", false);
+        }
     }
 
     private static void ApplySummaryTextAliases(object target, string value)
@@ -8436,6 +8610,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static string NormalizePrintNumber(PrintRenderContext context, string value)
     {
+        if (IsAgriculturalBank(context.Bank) && string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
         return IsBankOfChina(context.Bank)
             || IsSpdbCorporatePrintContext(context)
             || IsChinaMerchantsCorporatePrintContext(context)
@@ -8480,6 +8659,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, "SequenceNum"),
             source.LogNum,
             GetValue(values, "LogNum"));
+
+        if (IsAgriculturalBank(context.Bank) && string.IsNullOrWhiteSpace(serialNumber))
+        {
+            return string.Empty;
+        }
 
         if (source.IsDocumentImported && !string.IsNullOrWhiteSpace(serialNumber))
         {

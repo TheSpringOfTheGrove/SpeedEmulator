@@ -4572,16 +4572,24 @@ public sealed partial class PdfImportService : IPdfImportService
             return;
         }
 
-        var matchedChannel = IcbcPersonalChannels.FirstOrDefault(channel =>
-            tail.EndsWith(channel, StringComparison.Ordinal));
-        if (string.IsNullOrWhiteSpace(matchedChannel))
+        var matchedChannel = IcbcPersonalChannels
+            .Select(channel => new
+            {
+                Channel = channel,
+                Index = tail.LastIndexOf(channel, StringComparison.Ordinal)
+            })
+            .Where(match => match.Index >= 0)
+            .OrderByDescending(match => match.Index)
+            .ThenByDescending(match => match.Channel.Length)
+            .FirstOrDefault();
+        if (matchedChannel is null)
         {
             tradeChannel = tail;
             return;
         }
 
-        tradeChannel = matchedChannel;
-        var counterparty = tail[..^matchedChannel.Length].Trim();
+        tradeChannel = matchedChannel.Channel;
+        var counterparty = tail[..matchedChannel.Index].Trim();
         var accountMatch = Regex.Match(counterparty, @"(?<account>\d{4}\*{4}\d{4}|\d{8,})$");
         if (!accountMatch.Success)
         {
@@ -6888,6 +6896,7 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsIcbcIgnoredLine(string text)
     {
         return IsCommonIgnoredLine(text)
+            || IsIcbcPageFooterLine(text)
             || text.Contains("中国工商银行借记账户历史明细", StringComparison.Ordinal)
             || text.Contains("请扫描二维码", StringComparison.Ordinal)
             || text.Contains("识别明细真伪", StringComparison.Ordinal)
@@ -6899,6 +6908,14 @@ public sealed partial class PdfImportService : IPdfImportService
             || text.Contains("下单时间", StringComparison.Ordinal)
             || Regex.IsMatch(text, @"^中国工商银行\s+\d+\s+\d{4}-\d{2}-\d{2}")
             || (text.Contains("共", StringComparison.Ordinal) && text.Contains("页", StringComparison.Ordinal));
+    }
+
+    private static bool IsIcbcPageFooterLine(string text)
+    {
+        var compact = Regex.Replace(CleanPdfValue(text), @"\s+", string.Empty);
+        return Regex.IsMatch(
+            compact,
+            @"^[\p{IsCJKUnifiedIdeographs}A-Za-z0-9()\uFF08\uFF09\-]{2,40}\u652F\u884C$");
     }
 
     private static bool IsCcbIgnoredLine(string text)
