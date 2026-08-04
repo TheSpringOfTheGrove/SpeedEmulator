@@ -540,6 +540,7 @@ public sealed partial class PdfImportService : IPdfImportService
 
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
         EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
+        FlowRecordChronologicalOrder.SortInPlace(result.FlowRecords);
         ReindexFlowRecords(result.FlowRecords);
         if (target == PdfImportTarget.BankUsers && result.Users.Count == 0 && !result.HasBlockingErrors)
         {
@@ -9187,6 +9188,7 @@ public sealed partial class PdfImportService : IPdfImportService
 
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
         EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
+        FlowRecordChronologicalOrder.SortInPlace(result.FlowRecords);
         ReindexFlowRecords(result.FlowRecords);
         if (result.FlowRecords.Count == 0 && !result.HasBlockingErrors)
         {

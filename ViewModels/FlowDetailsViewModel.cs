@@ -943,6 +943,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 lastImported = record;
             }
 
+            FlowRecordChronologicalOrder.SortInPlace(allRecords);
             ReindexAllRecords();
             await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
             if (bankUserRepository is not null)

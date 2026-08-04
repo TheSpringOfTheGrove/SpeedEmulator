@@ -918,6 +918,7 @@ public sealed class BankUsersViewModel : ObservableObject
                 nextRecords.Add(record);
             }
 
+            FlowRecordChronologicalOrder.SortInPlace(nextRecords);
             ReindexFlowRecords(nextRecords);
             await flowRecordRepository.SaveAllAsync(Bank.Id, savedUser.Id, nextRecords);
             ReplaceUserInList(sourceUser, originalUserId, savedUser);

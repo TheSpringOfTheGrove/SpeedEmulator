@@ -1637,7 +1637,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 ApplyMatchingProperties(target, values);
 
                 var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
-                Set(target, "Index", source.Index > 0 ? source.Index : index + 1);
+                Set(target, "Index", ResolveVendorPrintRecordIndex(context, source, index));
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
@@ -2787,7 +2787,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 ApplyMatchingProperties(target, values);
 
                 var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
-                Set(target, "Index", source.Index > 0 ? source.Index : index + 1);
+                Set(target, "Index", ResolveVendorPrintRecordIndex(context, source, index));
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
@@ -3711,7 +3711,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 ApplyMatchingProperties(target, values);
 
                 var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, "TradeMoney")) ?? 0d;
-                Set(target, "Index", source.Index > 0 ? source.Index : index + 1);
+                Set(target, "Index", ResolveVendorPrintRecordIndex(context, source, index));
                 Set(target, "Id", source.Id);
                 Set(target, "BankId", GetVendorBankId(context));
                 Set(target, "BankUserId", context.BankUser.Id);
@@ -3947,7 +3947,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 .ToArray();
         }
 
-        if (IsBankOfChina(context.Bank) || IsWechatBank(context.Bank))
+        if (IsPostalBank(context.Bank))
+        {
+            // The postal complete renderer reverses the input list internally.
+            // Feed it oldest-first so the rendered statement is newest-first.
+            return context.Records
+                .Select((record, index) => new { record, index })
+                .OrderBy(item => item.record.AccountTime ?? DateTime.MinValue)
+                .ThenBy(item => item.index)
+                .Select(item => item.record)
+                .ToArray();
+        }
+
+        if (RequiresNewestFirstPrintOrder(context.Bank))
         {
             return context.Records
                 .Select((record, index) => new { record, index })
@@ -3958,6 +3970,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         return context.Records;
+    }
+
+    private static int ResolveVendorPrintRecordIndex(PrintRenderContext context, FlowRecord source, int printIndex)
+    {
+        // Vendor templates sort by Index after receiving the collection. For
+        // newest-first statements, keep that sort key aligned with print order
+        // without changing the persisted, chronological Index.
+        return RequiresNewestFirstPrintOrder(context.Bank)
+            ? printIndex + 1
+            : source.Index > 0 ? source.Index : printIndex + 1;
+    }
+
+    private static bool RequiresNewestFirstPrintOrder(Bank bank)
+    {
+        return IsBankOfChina(bank) || IsWechatBank(bank) || IsAlipayBank(bank);
     }
 
     private static PrintRenderContext CreateVendorPrintContext(PrintRenderContext context)
@@ -4000,9 +4027,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return pdfData;
         }
 
-        if (IsBankOfChina(context.Bank))
+        if (IsBankOfChina(context.Bank) || IsPostalBank(context.Bank))
         {
-            pdfData = NormalizeBankOfChinaStimulsoftTemplate(pdfData);
+            pdfData = NormalizeNewestFirstStimulsoftTemplate(pdfData);
         }
 
         return IsHuaxiaPersonalElectronicPrintContext(context)
@@ -4010,7 +4037,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             : pdfData;
     }
 
-    private static string NormalizeBankOfChinaStimulsoftTemplate(string pdfData)
+    private static string NormalizeNewestFirstStimulsoftTemplate(string pdfData)
     {
         const string accountTimeSortPattern = @"(<Sort isList=""true"" count=""2"">\s*<value>)ASC(</value>\s*<value>AccountTime</value>\s*</Sort>)";
         return Regex.Replace(
@@ -5610,11 +5637,23 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static void ApplyVendorSortDirection(PrintRenderContext context, object? vendorConfig)
     {
-        if (vendorConfig is not null
-            && (IsBankOfChina(context.Bank) || IsWechatBank(context.Bank)))
+        if (vendorConfig is null)
         {
-            // The bridge sends these statements newest-first. The vendor renderer
-            // reverses its input when Desc is true, so keep it false here.
+            return;
+        }
+
+        if (IsPostalBank(context.Bank))
+        {
+            // Postal's complete signed-PDF pipeline reverses its input data.
+            // Its Desc flag is not the output ordering control.
+            Set(vendorConfig, "Desc", false);
+            return;
+        }
+
+        if (RequiresNewestFirstPrintOrder(context.Bank))
+        {
+            // The bridge already supplies these templates newest-first. Keep the
+            // renderer from reversing that prepared order a second time.
             Set(vendorConfig, "Desc", false);
         }
     }
