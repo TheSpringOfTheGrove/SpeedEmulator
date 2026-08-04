@@ -376,7 +376,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         PrintRenderContext context,
         string path,
         IEnumerable? transformedRecords,
-        string? renderBranch = null)
+        string? renderBranch = null,
+        object? transformedBankUser = null)
     {
         if (!ShouldWriteVerbosePrintDiagnostics(context))
         {
@@ -410,6 +411,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     context.BankUser.AccountName,
                     context.BankUser.AccountNo
                 },
+                transformedBankUser = GetObjectRecordSnapshots(
+                    transformedBankUser is null ? null : new[] { transformedBankUser },
+                    1).FirstOrDefault(),
                 template = new
                 {
                     context.Template.Id,
@@ -1176,6 +1180,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                             var vendorBankUser = CreateVendorBankUser(context);
                             var vendorRecords = CreateVendorFlowRecords(context);
                             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, vendorBankUser, vendorRecords);
+                            TryWritePrintRenderProbe(context, path, vendorRecords, "vendor-stimulsoft-direct", vendorBankUser);
                             var vendorTemplate = resolvedTemplate.Template
                                 ?? CreateVendorTemplate(context, resolvedTemplate, resolvedTemplate.PageRows);
                             var sourcePdfData = PrepareStimulsoftPdfData(
@@ -1204,7 +1209,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var bankUser = CreateVendorBankUser(vendorContext);
                 var records = CreateVendorFlowRecords(vendorContext);
                 ApplyTemplateSpecificBankUserFieldsFromVendorRecords(vendorContext, bankUser, records);
-                TryWritePrintRenderProbe(context, path, records, "vendor-records-created");
+                TryWritePrintRenderProbe(context, path, records, "vendor-records-created", bankUser);
                 try
                 {
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
@@ -1405,7 +1410,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
-                ApplyVendorSortDirection(context, vendorConfig);
+                DisableVendorSecondarySort(vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate, vendorPdfData, effectivePageRows);
             }
@@ -1419,7 +1424,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
-                    ApplyVendorSortDirection(context, config);
+                    DisableVendorSecondarySort(config);
                     var pageRows = context.Template.PageRows > 0
                         ? context.Template.PageRows
                         : (int)ReadLong(config, "RowCount", 0);
@@ -1664,7 +1669,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(
                     target,
                     "OppositeAccount",
-                    IsAgriculturalBankPersonalPaperTemplate(context)
+                    source.IsDocumentImported || IsAgriculturalBankPersonalPaperTemplate(context)
                         ? NormalizeSingleLinePrintText(oppositeAccount)
                         : NormalizePrintNumber(context, oppositeAccount));
                 Set(target, "AccountTime", source.AccountTime);
@@ -1913,12 +1918,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var tempPath = path + ".signed-" + Guid.NewGuid().ToString("N") + ".pdf";
             try
             {
-                using var input = File.OpenRead(path);
-                object?[] arguments = [input, null, rect, stampPath, "电子签章"];
-                vendorSignedPdfMethod.Invoke(null, arguments);
-                if (arguments[1] is not Stream signedStream)
+                Stream signedStream;
+                using (var input = File.OpenRead(path))
                 {
-                    throw new InvalidOperationException("Vendor signature pipeline did not return a PDF stream.");
+                    object?[] arguments = [input, null, rect, stampPath, "电子签章"];
+                    vendorSignedPdfMethod.Invoke(null, arguments);
+                    signedStream = arguments[1] as Stream
+                        ?? throw new InvalidOperationException("Vendor signature pipeline did not return a PDF stream.");
                 }
 
                 using (signedStream)
@@ -1963,7 +1969,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private static bool ShouldUseVendorCompletePdfPipeline(PrintRenderContext context)
         {
             var templateName = context.Template.Name;
-            if (templateName.Contains("微信个人版", StringComparison.Ordinal))
+            if (templateName.Contains("微信个人版", StringComparison.Ordinal)
+                || IsCiticPersonalElectronic3PrintContext(context))
             {
                 return true;
             }
@@ -2475,6 +2482,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
+            TryWritePrintRenderProbe(context, path, records, "default-questpdf", bankUser);
             PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
             if (TryExportIcbcPersonalElectronicInBatches(context, resolvedTemplate, bankUser, records, path))
             {
@@ -2641,7 +2649,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
-                ApplyVendorSortDirection(context, vendorConfig);
+                DisableVendorSecondarySort(vendorConfig);
                 Set(vendorTemplate, "PdfConfig", vendorConfig);
                 return new ResolvedTemplate(vendorName, vendorConfig, vendorTemplate);
             }
@@ -2655,7 +2663,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         ApplyLocalPdfConfigToVendorConfig(config, context.Template.Config, context.Template.PageRows);
                     }
-                    ApplyVendorSortDirection(context, config);
+                    DisableVendorSecondarySort(config);
                     return new ResolvedTemplate(name, config, null);
                 }
             }
@@ -2810,7 +2818,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     Set(target, "LogNum", logNumber);
                 }
-                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", source.IsDocumentImported
+                    ? NormalizeSingleLinePrintText(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount")))
+                    : NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -3577,6 +3587,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
+            TryWritePrintRenderProbe(context, path, records, "default-stimulsoft", bankUser);
             var pdfData = PrepareStimulsoftPdfData(context, context.Template.PdfData);
             if (typeof(Stream).IsAssignableFrom(exportMethod.GetParameters()[2].ParameterType))
             {
@@ -3734,7 +3745,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     Set(target, "LogNum", logNumber);
                 }
-                Set(target, "OppositeAccount", NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", source.IsDocumentImported
+                    ? NormalizeSingleLinePrintText(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount")))
+                    : NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -3940,51 +3953,32 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IReadOnlyList<FlowRecord> GetVendorPrintRecords(PrintRenderContext context)
     {
+        IEnumerable<FlowRecord> records = context.Records;
         if (IsConstructionBank(context.Bank))
         {
-            return context.Records
-                .Select(CreateConstructionBankPrintRecord)
-                .ToArray();
+            records = records.Select(CreateConstructionBankPrintRecord);
         }
 
-        if (IsPostalBank(context.Bank))
-        {
-            // The postal complete renderer reverses the input list internally.
-            // Feed it oldest-first so the rendered statement is newest-first.
-            return context.Records
-                .Select((record, index) => new { record, index })
-                .OrderBy(item => item.record.AccountTime ?? DateTime.MinValue)
-                .ThenBy(item => item.index)
-                .Select(item => item.record)
+        // The vendor runtime does not consistently honour PDFConfig.Desc across
+        // all template engines. Sort the bridge data as well, so every template
+        // observes the same setting as the template-settings dialog.
+        return context.Template.Config.Descending
+            ? records
+                .OrderByDescending(record => record.AccountTime ?? DateTime.MinValue)
+                .ThenByDescending(record => record.Index)
+                .ToArray()
+            : records
+                .OrderBy(record => record.AccountTime ?? DateTime.MinValue)
+                .ThenBy(record => record.Index)
                 .ToArray();
-        }
-
-        if (RequiresNewestFirstPrintOrder(context.Bank))
-        {
-            return context.Records
-                .Select((record, index) => new { record, index })
-                .OrderByDescending(item => item.record.AccountTime ?? DateTime.MinValue)
-                .ThenBy(item => item.index)
-                .Select(item => item.record)
-                .ToArray();
-        }
-
-        return context.Records;
     }
 
     private static int ResolveVendorPrintRecordIndex(PrintRenderContext context, FlowRecord source, int printIndex)
     {
-        // Vendor templates sort by Index after receiving the collection. For
-        // newest-first statements, keep that sort key aligned with print order
-        // without changing the persisted, chronological Index.
-        return RequiresNewestFirstPrintOrder(context.Bank)
-            ? printIndex + 1
-            : source.Index > 0 ? source.Index : printIndex + 1;
-    }
-
-    private static bool RequiresNewestFirstPrintOrder(Bank bank)
-    {
-        return IsBankOfChina(bank) || IsWechatBank(bank) || IsAlipayBank(bank);
+        // Several vendor templates sort their received list by Index before
+        // rendering. The bridge has already applied Config.Descending, so Index
+        // must describe that prepared order instead of the persisted order.
+        return printIndex + 1;
     }
 
     private static PrintRenderContext CreateVendorPrintContext(PrintRenderContext context)
@@ -4027,34 +4021,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return pdfData;
         }
 
-        if (IsBankOfChina(context.Bank) || IsPostalBank(context.Bank))
-        {
-            pdfData = NormalizeNewestFirstStimulsoftTemplate(pdfData);
-        }
-
-        return IsHuaxiaPersonalElectronicPrintContext(context)
-            ? NormalizeHuaxiaPersonalElectronicStimulsoftTemplate(pdfData)
-            : pdfData;
+        return NormalizeStimulsoftTemplateSortDirection(pdfData, context.Template.Config.Descending);
     }
 
-    private static string NormalizeNewestFirstStimulsoftTemplate(string pdfData)
+    private static string NormalizeStimulsoftTemplateSortDirection(string pdfData, bool descending)
     {
-        const string accountTimeSortPattern = @"(<Sort isList=""true"" count=""2"">\s*<value>)ASC(</value>\s*<value>AccountTime</value>\s*</Sort>)";
+        const string accountTimeSortPattern = @"(<Sort isList=""true"" count=""2"">\s*<value>)(?:ASC|DESC)(</value>\s*<value>AccountTime</value>\s*</Sort>)";
         return Regex.Replace(
             pdfData,
             accountTimeSortPattern,
-            "$1DESC$2",
+            descending ? "$1DESC$2" : "$1ASC$2",
             RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    }
-
-    private static string NormalizeHuaxiaPersonalElectronicStimulsoftTemplate(string pdfData)
-    {
-        const string accountTimeSortPattern = @"(<Sort isList=""true"" count=""2"">\s*<value>)DESC(</value>\s*<value>AccountTime</value>\s*</Sort>)";
-        return Regex.Replace(
-            pdfData,
-            accountTimeSortPattern,
-            "$1ASC$2",
-            RegexOptions.CultureInvariant);
     }
 
     private static void ApplyMatchingProperties(object target, IReadOnlyDictionary<string, object?> values)
@@ -4120,6 +4097,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (context.Template.Name.Contains("微信个人版", StringComparison.Ordinal))
         {
             fileName = "微信.png";
+        }
+        else if (IsCiticPersonalElectronic3PrintContext(context))
+        {
+            fileName = "中信电子章.png";
         }
         else if ((context.Template.Name.Contains("邮政", StringComparison.Ordinal)
                 || context.Bank.Name.Contains("邮政", StringComparison.Ordinal)
@@ -4302,6 +4283,32 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (IsPostalBank(context.Bank))
         {
             ApplyPostalBankUserFields(context, target, values);
+        }
+
+        if (IsPingAnPrintContext(context))
+        {
+            ApplyPingAnBankUserFields(context, target, values);
+        }
+
+        if (IsEverbrightPersonalElectronicPrintContext(context))
+        {
+            ApplyEverbrightPersonalElectronicBankUserFields(context, target, values);
+        }
+
+        if (IsSpdbPersonalElectronicPrintContext(context))
+        {
+            ApplySpdbPersonalElectronicBankUserFields(context, target, values);
+        }
+
+        if (IsCiticPersonalElectronicPrintContext(context))
+        {
+            var englishName = NormalizeSingleLinePrintText(FirstNotBlank(
+                GetBankUserColumnValue(context, values, "\u5BA2\u6237\u82F1\u6587\u540D"),
+                GetValue(values, "UsernameEn")));
+            if (!string.IsNullOrWhiteSpace(englishName))
+            {
+                Set(target, "UsernameEn", englishName);
+            }
         }
 
         if (IsWechatPersonalStatementPrintContext(context))
@@ -4709,6 +4716,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Currency", currency);
         }
 
+        ApplyBankUserFilterPrintFields(context, target, values);
+
         var verificationCode = FirstNotBlank(
             GetBankUserColumnValue(context, values, "\u9A8C\u8BC1\u7801", "\u6821\u9A8C\u7801", "\u9A8C\u8BC1\u5217\u8868"),
             GetValue(values, "VerificationCode"));
@@ -4727,6 +4736,128 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             if (!string.IsNullOrWhiteSpace(stampCode))
             {
                 Set(target, "VerificationCode", stampCode);
+            }
+        }
+    }
+
+    private static void ApplyPingAnBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var acceptBranch = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u53D7\u7406\u884C", "\u53D7\u7406\u7F51\u70B9", "\u64CD\u4F5C\u7F51\u70B9"),
+            GetValue(values, "AcceptBranch"),
+            GetValue(values, "PrintBranch")));
+        if (!string.IsNullOrWhiteSpace(acceptBranch))
+        {
+            Set(target, "AcceptBranch", acceptBranch);
+        }
+    }
+
+    private static void ApplyEverbrightPersonalElectronicBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var cashCheck = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u949E\u6C47\u6807\u5FD7", "\u949E\u6C47"),
+            GetValue(values, "CashCheck")));
+        if (!string.IsNullOrWhiteSpace(cashCheck))
+        {
+            Set(target, "CashCheck", cashCheck);
+        }
+    }
+
+    private static void ApplySpdbPersonalElectronicBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var englishName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u59D3\u540D\u62FC\u97F3", "\u59D3\u540D\u82F1\u6587", "\u5BA2\u6237\u82F1\u6587\u540D"),
+            GetValue(values, "UsernameEn")));
+        if (!string.IsNullOrWhiteSpace(englishName))
+        {
+            Set(target, "UsernameEn", englishName);
+            Set(target, "NameEn", englishName);
+            // The vendor SPDB personal electronic template binds its "Name"
+            // header to CardLevel instead of UsernameEn.
+            Set(target, "CardLevel", englishName);
+        }
+
+        var cashExchange = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u949E\u6C47\u6807\u5FD7", "\u949E\u6C47"),
+            GetValue(values, "CashCheck"),
+            GetValue(values, "CashExchange")));
+        if (!string.IsNullOrWhiteSpace(cashExchange))
+        {
+            Set(target, "CashCheck", cashExchange);
+            Set(target, "CashExchange", cashExchange);
+        }
+
+    }
+
+    private static void ApplyBankUserFilterPrintFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var incomeExpenseFilter = GetBankUserColumnValue(context, values, "按收支筛选", "收支筛选");
+        SetBankUserPrintFieldAliases(
+            context,
+            target,
+            incomeExpenseFilter,
+            new[] { "按收支筛选", "收支筛选" },
+            // caiwu_core.entity.BankUser uses this concrete property in the BOC templates.
+            "FilterByIncome",
+            "IncomeExpenseFilter",
+            "IncomeFilter",
+            "InOutFilter");
+
+        var currencyFilter = GetBankUserColumnValue(context, values, "按货币筛选", "按币种筛选", "币种筛选");
+        SetBankUserPrintFieldAliases(
+            context,
+            target,
+            currencyFilter,
+            new[] { "按货币筛选", "按币种筛选", "币种筛选" },
+            // caiwu_core.entity.BankUser uses this concrete property in the BOC templates.
+            "FilterByCurrency",
+            "FindType",
+            "CurrencyFilter",
+            "CurrencyTypeFilter");
+    }
+
+    private static void SetBankUserPrintFieldAliases(
+        PrintRenderContext context,
+        object target,
+        string value,
+        IReadOnlyCollection<string> columnNames,
+        params string[] aliases)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        foreach (var fieldName in columnNames.Concat(aliases))
+        {
+            SetPrintFieldAlias(target, fieldName, value);
+        }
+
+        foreach (var column in context.Bank.Columns.Where(column =>
+                     columnNames.Any(name =>
+                         string.Equals(column.Name, name, StringComparison.Ordinal)
+                         || string.Equals(column.Field, name, StringComparison.Ordinal))))
+        {
+            if (!string.IsNullOrWhiteSpace(column.Name))
+            {
+                SetPrintFieldAlias(target, column.Name!, value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(column.Field))
+            {
+                SetPrintFieldAlias(target, column.Field!, value);
             }
         }
     }
@@ -5272,6 +5403,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static void ApplyPrintFieldFallbacks(Bank bank, FlowRecord source, Dictionary<string, object?> values)
     {
+        if (IsBankOfChina(bank))
+        {
+            // The Bank of China runtime templates bind the branch-name column to
+            // NetNum or BranchNum, while PDF imports retain the source column in
+            // TradePlace. Keep the aliases in sync without borrowing counterparty data.
+            var branchName = FirstNotBlank(
+                source.TradePlace,
+                GetValue(values, nameof(FlowRecord.TradePlace)),
+                GetFlowExtraFieldValue(bank, source, values, "\u7F51\u70B9\u540D\u79F0", "\u4EA4\u6613\u7F51\u70B9", "\u4EA4\u6613\u5730\u70B9", "\u4EA4\u6613\u573A\u6240"));
+            SetValueIfBlank(values, nameof(FlowRecord.TradePlace), branchName);
+            SetValueIfBlank(values, nameof(FlowRecord.NetNum), branchName);
+            SetValueIfBlank(values, nameof(FlowRecord.BranchNum), branchName);
+            return;
+        }
+
         if (!bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
             && !bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
         {
@@ -5635,27 +5781,18 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             || bank.Name.Contains("\u4E2D\u56FD\u94F6\u884C", StringComparison.Ordinal);
     }
 
-    private static void ApplyVendorSortDirection(PrintRenderContext context, object? vendorConfig)
+    private static void DisableVendorSecondarySort(object? vendorConfig)
     {
         if (vendorConfig is null)
         {
             return;
         }
 
-        if (IsPostalBank(context.Bank))
-        {
-            // Postal's complete signed-PDF pipeline reverses its input data.
-            // Its Desc flag is not the output ordering control.
-            Set(vendorConfig, "Desc", false);
-            return;
-        }
-
-        if (RequiresNewestFirstPrintOrder(context.Bank))
-        {
-            // The bridge already supplies these templates newest-first. Keep the
-            // renderer from reversing that prepared order a second time.
-            Set(vendorConfig, "Desc", false);
-        }
+        // GetVendorPrintRecords is the single source of ordering for all
+        // runtime templates. Some vendor renderers interpret Desc as a list
+        // reversal rather than a chronological sort, which would invert the
+        // prepared order a second time.
+        Set(vendorConfig, "Desc", false);
     }
 
     private static void ApplySummaryTextAliases(object target, string value)
@@ -5902,7 +6039,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyPostalFlowPrintFields(context, source, values, target);
         }
 
-        if (IsCiticPersonalElectronic2PrintContext(context))
+        if (IsCiticPersonalElectronicPrintContext(context))
         {
             ApplyCiticPersonalElectronic2FlowFields(context, source, values, target);
         }
@@ -6005,7 +6142,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             && templateName.Contains("\u7535\u5B50\u7248", StringComparison.Ordinal);
     }
 
-    private static bool IsCiticPersonalElectronic2PrintContext(PrintRenderContext context)
+    private static bool IsCiticPersonalElectronicPrintContext(PrintRenderContext context)
     {
         var templateName = context.Template.Name ?? string.Empty;
         return (IsCiticBank(context.Bank)
@@ -6014,7 +6151,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 || context.Template.VendorBankId == 49
                 || templateName.Contains("\u4E2D\u4FE1", StringComparison.Ordinal))
             && templateName.Contains("\u4E2A\u4EBA", StringComparison.Ordinal)
-            && templateName.Contains("\u7535\u5B50\u72482", StringComparison.Ordinal);
+            && templateName.Contains("\u7535\u5B50\u7248", StringComparison.Ordinal);
+    }
+
+    private static bool IsCiticPersonalElectronic3PrintContext(PrintRenderContext context)
+    {
+        return IsCiticPersonalElectronicPrintContext(context)
+            && context.Template.Name.Contains("\u7535\u5B50\u72483", StringComparison.Ordinal);
     }
 
     private static bool IsCiticCorporatePrintContext(PrintRenderContext context)
@@ -8664,6 +8807,25 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         foreach (var columnName in columnNames)
         {
+            var normalizedColumnName = NormalizeFieldName(columnName);
+            if (values.TryGetValue(normalizedColumnName, out var directValue))
+            {
+                var directText = Convert.ToString(directValue, CultureInfo.CurrentCulture);
+                if (!string.IsNullOrWhiteSpace(directText))
+                {
+                    return directText;
+                }
+            }
+
+            if (context.BankUser.ExtraFields.TryGetValue(columnName, out var directExtraValue)
+                || context.BankUser.ExtraFields.TryGetValue(normalizedColumnName, out directExtraValue))
+            {
+                if (!string.IsNullOrWhiteSpace(directExtraValue))
+                {
+                    return directExtraValue;
+                }
+            }
+
             var column = context.Bank.Columns.FirstOrDefault(item => string.Equals(item.Name, columnName, StringComparison.Ordinal));
             if (column is null || string.IsNullOrWhiteSpace(column.Field))
             {
@@ -8796,9 +8958,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return string.Empty;
         }
 
-        if (source.IsDocumentImported && !string.IsNullOrWhiteSpace(serialNumber))
+        if (source.IsDocumentImported)
         {
-            return NormalizeDocumentImportSerialNumber(serialNumber);
+            return string.IsNullOrWhiteSpace(serialNumber)
+                ? string.Empty
+                : NormalizeDocumentImportSerialNumber(serialNumber);
         }
 
         return NormalizePrintNumber(context, FirstNotBlank(serialNumber, generatedFallback));
