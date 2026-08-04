@@ -1200,9 +1200,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
                 }
 
-                var bankUser = CreateVendorBankUser(context);
-                var records = CreateVendorFlowRecords(context);
-                ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
+                var vendorContext = CreateVendorPrintContext(context);
+                var bankUser = CreateVendorBankUser(vendorContext);
+                var records = CreateVendorFlowRecords(vendorContext);
+                ApplyTemplateSpecificBankUserFieldsFromVendorRecords(vendorContext, bankUser, records);
                 TryWritePrintRenderProbe(context, path, records, "vendor-records-created");
                 try
                 {
@@ -1214,7 +1215,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     {
                         try
                         {
-                            if (DefaultQuestPdfExporter.ExportOrThrow(vendorDir, context, path))
+                            if (DefaultQuestPdfExporter.ExportOrThrow(vendorDir, vendorContext, path))
                             {
                                 NormalizeImportedDocumentSerialNumbersInPdf(context, path);
                                 return true;
@@ -1234,7 +1235,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         }
                     }
 
-                    return TryExportWithVendorQuestPdf(context, resolvedTemplate, bankUser, records, path);
+                    return TryExportWithVendorQuestPdf(vendorContext, resolvedTemplate, bankUser, records, path);
                 }
                 catch (Exception ex)
                 {
@@ -3939,6 +3940,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IReadOnlyList<FlowRecord> GetVendorPrintRecords(PrintRenderContext context)
     {
+        if (IsConstructionBank(context.Bank))
+        {
+            return context.Records
+                .Select(CreateConstructionBankPrintRecord)
+                .ToArray();
+        }
+
         if (IsBankOfChina(context.Bank) || IsWechatBank(context.Bank))
         {
             return context.Records
@@ -3950,6 +3958,39 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         return context.Records;
+    }
+
+    private static PrintRenderContext CreateVendorPrintContext(PrintRenderContext context)
+    {
+        if (!IsConstructionBank(context.Bank) || !context.Records.Any(record => record.IsDocumentImported))
+        {
+            return context;
+        }
+
+        return new PrintRenderContext
+        {
+            Bank = context.Bank,
+            BankUser = context.BankUser,
+            Records = GetVendorPrintRecords(context),
+            Template = context.Template
+        };
+    }
+
+    private static FlowRecord CreateConstructionBankPrintRecord(FlowRecord source)
+    {
+        if (!source.IsDocumentImported)
+        {
+            return source;
+        }
+
+        // The vendor CCB batch renderer treats the PDF's 1-based row number as
+        // a date-format token. Keep the original record intact and let the
+        // template use its own rendered row index instead.
+        var printRecord = source.Clone();
+        printRecord.SequenceNum = string.Empty;
+        printRecord.SerialNum = string.Empty;
+        printRecord.ExtraFields.Remove("序号");
+        return printRecord;
     }
 
     private static string PrepareStimulsoftPdfData(PrintRenderContext context, string pdfData)
@@ -5463,6 +5504,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         return bank.Name.Contains("\u5DE5\u884C", StringComparison.Ordinal)
             || bank.Name.Contains("\u5DE5\u5546", StringComparison.Ordinal);
+    }
+
+    private static bool IsConstructionBank(Bank bank)
+    {
+        return bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
+            || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal);
     }
 
     private static bool IsIcbcPrintContext(PrintRenderContext context)
@@ -7971,7 +8018,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static void NormalizeImportedDocumentSerialNumbersInPdf(PrintRenderContext context, string path)
     {
-        if (!File.Exists(path))
+        // CCB PDF imports use short source row numbers (1, 2, 3...). The
+        // generic serial cleanup would mistake the trailing day in yyyyMMdd
+        // for one of those row numbers and crop the rendered date to "25".
+        if (IsConstructionBank(context.Bank) || !File.Exists(path))
         {
             return;
         }
@@ -8682,6 +8732,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         string generatedFallback)
     {
+        if (source.IsDocumentImported && IsConstructionBank(context.Bank))
+        {
+            // Passing the PDF row number (1, 2, 3...) to the vendor CCB renderer
+            // makes its paged layout reduce AccountTime to a day-only token.
+            return CreateSystemGeneratedPrintSerialNumber(context, Math.Max(0, source.Index - 1));
+        }
+
         if (!source.IsDocumentImported && IsEverbrightCorporatePrintContext(context))
         {
             return SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(context.BankUser.AccountNo);
