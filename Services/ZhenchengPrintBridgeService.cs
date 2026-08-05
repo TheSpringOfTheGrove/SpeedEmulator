@@ -4828,6 +4828,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         object target,
         IReadOnlyDictionary<string, object?> values)
     {
+        var printOperator = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u6D3B\u671F\u4E00\u672C\u901A"),
+            GetValue(values, "UserField_4E9C8544738C")));
+        if (!string.IsNullOrWhiteSpace(printOperator))
+        {
+            // Minsheng stores the value shown as "\u6253\u5370\u67DC\u5458" in the
+            // local user column named "\u6D3B\u671F\u4E00\u672C\u901A". Vendor templates
+            // bind that output to BankUser.PassbookNum.
+            Set(target, "PassbookNum", printOperator);
+        }
+
         var cashExchange = NormalizeSingleLinePrintText(FirstNotBlank(
             GetBankUserColumnValue(context, values, "\u949E\u6C47\u6807\u5FD7", "\u949E\u6C47"),
             GetValue(values, "CashCheck"),

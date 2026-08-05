@@ -115,6 +115,17 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Summary", 466, 512)
     ];
 
+    private static readonly PdfPositionedColumnSpec[] CiticPersonalColumns =
+    [
+        new("Date", 0, 75),
+        new("Credit", 75, 143),
+        new("Debit", 143, 211),
+        new("Balance", 211, 281),
+        new("Summary", 281, 370),
+        new("OppositeAccount", 370, 482),
+        new("OppositeName", 482, 595)
+    ];
+
     private static readonly PdfPositionedColumnSpec[] BocPersonalElectronicColumns =
     [
         new("Date", 36, 100),
@@ -386,6 +397,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "微信" => true,
             "平安" => true,
             "浦发" => true,
+            "中信" => true,
             "华夏" => true,
             "支付宝" => true,
             "邮政" => true,
@@ -1305,15 +1317,36 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
-        foreach (var line in lines)
+        if (document.Words.Count > 0)
         {
-            if (TryParseCiticRecord(line, bank, user, out var record))
+            foreach (var row in BuildPositionedRows(
+                         document.Words,
+                         CiticPersonalColumns,
+                         IsCiticPersonalHeaderWord,
+                         IsCiticPersonalFooterWord,
+                         @"^\d{8}$",
+                         75,
+                         0))
             {
-                result.FlowRecords.Add(record);
+                if (TryParseCiticPositionedRecord(row, bank, user, out var record))
+                {
+                    result.FlowRecords.Add(record);
+                }
             }
         }
+        else
+        {
+            foreach (var line in lines)
+            {
+                if (TryParseCiticRecord(line, bank, user, out var record))
+                {
+                    result.FlowRecords.Add(record);
+                }
+            }
 
-        InferCiticMoneyDirections(result.FlowRecords);
+            InferCiticMoneyDirections(result.FlowRecords);
+        }
+
         return parsedUser;
     }
 
@@ -5550,6 +5583,67 @@ public sealed partial class PdfImportService : IPdfImportService
         return true;
     }
 
+    private static bool TryParseCiticPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateCell = GetPositionedCell(row, "Date");
+        var dateMatch = Regex.Match(dateCell, @"\d{8}");
+        var date = dateMatch.Success ? dateMatch.Value : string.Empty;
+        var creditText = GetPositionedCell(row, "Credit");
+        var debitText = GetPositionedCell(row, "Debit");
+        var balanceText = GetPositionedCell(row, "Balance");
+        var credit = ParseCiticPositionedMoney(creditText);
+        var debit = ParseCiticPositionedMoney(debitText);
+        var balance = ParseCiticPositionedMoney(balanceText);
+        if (!Regex.IsMatch(date, @"^\d{8}$")
+            || balance is null
+            || (credit is null && debit is null))
+        {
+            return false;
+        }
+
+        var summary = GetPositionedCell(row, "Summary");
+        var atmIndex = summary.IndexOf("ATM", StringComparison.OrdinalIgnoreCase);
+        if (atmIndex >= 0)
+        {
+            summary = $"ATM {summary.Remove(atmIndex, 3).Trim()}";
+        }
+
+        var amount = credit.HasValue ? Math.Abs(credit.Value) : -Math.Abs(debit!.Value);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.Currency = FirstNotBlank(user.Currency, "RMB");
+        record.TradeMoney = amount;
+        record.Balance = balance;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.OppositeAccount = GetPositionedCell(row, "OppositeAccount");
+        record.OppositeUsername = GetPositionedCell(row, "OppositeName");
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "账号", record.Account);
+        SetFlowRaw(record, "交易日期", date);
+        SetFlowRaw(record, "收入金额", creditText);
+        SetFlowRaw(record, "支出金额", debitText);
+        SetFlowRaw(record, "账户余额", balanceText);
+        SetFlowRaw(record, "交易摘要", record.ProductBrief);
+        SetFlowRaw(record, "对方账号", record.OppositeAccount);
+        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        return true;
+    }
+
+    private static double? ParseCiticPositionedMoney(string value)
+    {
+        var match = Regex.Match(CleanPdfValue(value), @"[+-]?\d[\d,]*\.\d{2}");
+        return match.Success ? ParseDoubleOrNull(match.Value) : null;
+    }
+
     private static bool TryParseCiticRecord(
         PdfTextLine line,
         Bank bank,
@@ -6442,6 +6536,22 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsSpdbCorporateHeaderWord(PdfTextWord word)
     {
         return word.Text is "交易日期" or "Transaction" or "交易流水号" or "Teller's" or "借方" or "Debit" or "贷方" or "Credit" or "账户余额" or "Balance" or "对手机构" or "对手名称" or "摘要代码" or "备注";
+    }
+
+    private static bool IsCiticPersonalHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易日期" or "收入金额" or "支出金额" or "账户余额" or "交易摘要" or "对方账号" or "对方户名"
+            or "Transaction" or "receivable" or "paid" or "balance" or "Description" or "Recipient";
+    }
+
+    private static bool IsCiticPersonalFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value is "The" or "Please" or "Certificate" or "Verification" or "Statement"
+            || value.StartsWith("声明", StringComparison.Ordinal)
+            || value.StartsWith("证明用途", StringComparison.Ordinal)
+            || value.StartsWith("验证码", StringComparison.Ordinal)
+            || value.StartsWith("第", StringComparison.Ordinal);
     }
 
     private static bool IsSpdbCorporateFooterWord(string text)
