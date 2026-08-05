@@ -15,7 +15,10 @@ using PdfSharpCore.Pdf.Content;
 using PdfSharpCore.Pdf.Content.Objects;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
+using PdfSharpCore.Drawing;
+using PdfDocument = PdfSharpCore.Pdf.PdfDocument;
 using SpeedEmulator.Models;
+using UglyToad.PdfPig;
 
 namespace SpeedEmulator.Services;
 
@@ -255,6 +258,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (currentBridge.TryExport(context, path))
         {
+            NormalizeCgbPersonalElectronicBlankPages(context, path);
+            NormalizeMinshengPersonalVoucherColumns(context, path);
             return;
         }
 
@@ -4295,6 +4300,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyEverbrightPersonalElectronicBankUserFields(context, target, values);
         }
 
+        if (IsMinshengBank(context.Bank))
+        {
+            ApplyMinshengBankUserFields(context, target, values);
+        }
+
         if (IsSpdbPersonalElectronicPrintContext(context))
         {
             ApplySpdbPersonalElectronicBankUserFields(context, target, values);
@@ -4767,6 +4777,27 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             Set(target, "CashCheck", cashCheck);
         }
+    }
+
+    private static void ApplyMinshengBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var cashExchange = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u949E\u6C47\u6807\u5FD7", "\u949E\u6C47"),
+            GetValue(values, "CashCheck"),
+            GetValue(values, "CashExchange")));
+        if (string.IsNullOrWhiteSpace(cashExchange))
+        {
+            return;
+        }
+
+        // Minsheng's electronic templates use the vendor BankUser cash/exchange
+        // property. The generic bridge only populated currency, leaving this header
+        // blank even though the local BankUser column contained "\u949E".
+        Set(target, "CashCheck", cashExchange);
+        Set(target, "CashExchange", cashExchange);
     }
 
     private static void ApplySpdbPersonalElectronicBankUserFields(
@@ -5424,24 +5455,35 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
-        var tradePlace = FirstNotBlank(
+        var importedTradePlace = FirstNotBlank(
             GetValue(values, nameof(FlowRecord.TradePlace)),
             GetValue(values, nameof(FlowRecord.NetNum)),
-            GetFlowExtraFieldValue(bank, source, values, "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D\u79F0", "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D", "\u4EA4\u6613\u5730\u70B9", "\u4EA4\u6613\u573A\u6240", "\u7F51\u70B9\u540D\u79F0", "\u4EA4\u6613\u7F51\u70B9", "\u5730\u70B9"),
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
-            GetValue(values, nameof(FlowRecord.MerchantName)),
-            GetValue(values, nameof(FlowRecord.ProductBrief)),
-            GetValue(values, nameof(FlowRecord.OppositeBank)));
+            GetFlowExtraFieldValue(bank, source, values, "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D\u79F0", "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D", "\u4EA4\u6613\u5730\u70B9", "\u4EA4\u6613\u573A\u6240", "\u7F51\u70B9\u540D\u79F0", "\u4EA4\u6613\u7F51\u70B9", "\u5730\u70B9"));
+        // A CCB PDF has an explicit "交易地点/附言" column. For document imports an
+        // empty source cell must remain empty; borrowing the summary made interest rows
+        // render "利息存入" in both the summary and location columns.
+        var tradePlace = source.IsDocumentImported
+            ? importedTradePlace
+            : FirstNotBlank(
+                importedTradePlace,
+                GetValue(values, nameof(FlowRecord.TradeExplain)),
+                GetValue(values, nameof(FlowRecord.MerchantName)),
+                GetValue(values, nameof(FlowRecord.ProductBrief)),
+                GetValue(values, nameof(FlowRecord.OppositeBank)));
         SetValueIfBlank(values, nameof(FlowRecord.TradePlace), tradePlace);
         SetValueIfBlank(values, nameof(FlowRecord.NetNum), tradePlace);
 
-        var remark = FirstNotBlank(
+        var importedRemark = FirstNotBlank(
             GetValue(values, nameof(FlowRecord.Remark)),
-            GetFlowExtraFieldValue(bank, source, values, "\u9644\u8A00", "\u8F6C\u8D26\u9644\u8A00", "\u5907\u6CE8", "\u7559\u8A00", "\u56DE\u5355\u4E2A\u6027\u4FE1\u606F", "\u7528\u9014", "\u4EA4\u6613\u7528\u9014"),
-            GetValue(values, nameof(FlowRecord.Usage)),
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
-            GetValue(values, nameof(FlowRecord.ProductBrief)),
-            GetValue(values, nameof(FlowRecord.TradePlace)));
+            GetFlowExtraFieldValue(bank, source, values, "\u9644\u8A00", "\u8F6C\u8D26\u9644\u8A00", "\u5907\u6CE8", "\u7559\u8A00", "\u56DE\u5355\u4E2A\u6027\u4FE1\u606F", "\u7528\u9014", "\u4EA4\u6613\u7528\u9014"));
+        var remark = source.IsDocumentImported
+            ? importedRemark
+            : FirstNotBlank(
+                importedRemark,
+                GetValue(values, nameof(FlowRecord.Usage)),
+                GetValue(values, nameof(FlowRecord.TradeExplain)),
+                GetValue(values, nameof(FlowRecord.ProductBrief)),
+                GetValue(values, nameof(FlowRecord.TradePlace)));
         SetValueIfBlank(values, nameof(FlowRecord.Remark), remark);
     }
 
@@ -5487,12 +5529,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
             || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
         {
-            tradePlace = FirstNotBlank(tradePlace, netNum, tradeExplain, merchantName, productBrief, source.OppositeBank, GetValue(values, nameof(FlowRecord.OppositeBank)));
-            netNum = FirstNotBlank(netNum, tradePlace);
-            tradeExplain = FirstNotBlank(tradeExplain, tradePlace);
-            usage = FirstNotBlank(usage, tradePlace);
-            merchantName = FirstNotBlank(merchantName, tradePlace);
-            remark = FirstNotBlank(remark, tradePlace, usage, tradeExplain, productBrief);
+            if (source.IsDocumentImported)
+            {
+                // Preserve the source PDF's explicit empty location/remark cell.
+                // These aliases are only needed by generated records whose models may
+                // store the same UI value under different legacy property names.
+                netNum = FirstNotBlank(netNum, tradePlace);
+            }
+            else
+            {
+                tradePlace = FirstNotBlank(tradePlace, netNum, tradeExplain, merchantName, productBrief, source.OppositeBank, GetValue(values, nameof(FlowRecord.OppositeBank)));
+                netNum = FirstNotBlank(netNum, tradePlace);
+                tradeExplain = FirstNotBlank(tradeExplain, tradePlace);
+                usage = FirstNotBlank(usage, tradePlace);
+                merchantName = FirstNotBlank(merchantName, tradePlace);
+                remark = FirstNotBlank(remark, tradePlace, usage, tradeExplain, productBrief);
+            }
         }
 
         if (IsIcbcBank(bank))
@@ -5618,6 +5670,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, nameof(FlowRecord.TradeChannelEn), tradeChannelEn);
         Set(target, nameof(FlowRecord.Currency), currency);
         Set(target, nameof(FlowRecord.TradeCurrency), tradeCurrency);
+
+        if (IsMinshengBank(bank) && source.IsDocumentImported)
+        {
+            // The Minsheng runtime template replaces an empty voucher cell with the
+            // account number. A non-breaking blank preserves the PDF's genuinely empty
+            // cell without changing the persisted import data.
+            Set(target, nameof(FlowRecord.VoucherType),
+                string.IsNullOrWhiteSpace(source.VoucherType) ? "\u00A0" : source.VoucherType);
+            Set(target, nameof(FlowRecord.VoucherNum),
+                string.IsNullOrWhiteSpace(source.VoucherNum) ? "\u00A0" : source.VoucherNum);
+        }
 
         if (IsWechatBank(bank))
         {
@@ -5898,11 +5961,30 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, nameof(FlowRecord.TradeCode))));
 
         SetTargetValueIfBlank(target, nameof(FlowRecord.SerialNum), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.SequenceNum), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.LogNum), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.TradeCode), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.VoucherNum), serialNumber);
-        SetTargetValueIfBlank(target, nameof(FlowRecord.ReceiptNum), serialNumber);
+        if (!usePersonalStatementAliases)
+        {
+            SetTargetValueIfBlank(target, nameof(FlowRecord.SequenceNum), serialNumber);
+            SetTargetValueIfBlank(target, nameof(FlowRecord.LogNum), serialNumber);
+            SetTargetValueIfBlank(target, nameof(FlowRecord.TradeCode), serialNumber);
+            SetTargetValueIfBlank(target, nameof(FlowRecord.VoucherNum), serialNumber);
+            SetTargetValueIfBlank(target, nameof(FlowRecord.ReceiptNum), serialNumber);
+        }
+        else
+        {
+            // The personal statement reads its left transaction-order column from the
+            // legacy aliases, but falls back to SerialNum for a blank merchant-order cell.
+            // Keep the left column populated while preserving a genuinely empty right one.
+            Set(target, nameof(FlowRecord.SequenceNum), serialNumber);
+            Set(target, nameof(FlowRecord.LogNum), serialNumber);
+            Set(target, nameof(FlowRecord.TradeCode), serialNumber);
+            Set(target, nameof(FlowRecord.VoucherNum), serialNumber);
+            Set(target, nameof(FlowRecord.ReceiptNum), string.Empty);
+            Set(target, nameof(FlowRecord.MerchantName), source.MerchantName);
+            if (string.IsNullOrWhiteSpace(source.MerchantName))
+            {
+                Set(target, nameof(FlowRecord.SerialNum), string.Empty);
+            }
+        }
         // The vendor WeChat template binds "交易类型" to ProductType and
         // "交易方式" to ProductBrief. ProductName remains the transaction type
         // for the other WeChat layouts that use the generic product column.
@@ -8182,6 +8264,177 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 document.Save(tempPath);
                 document.Close();
+                File.Copy(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteLocalFile(tempPath);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static void NormalizeMinshengPersonalVoucherColumns(PrintRenderContext context, string path)
+    {
+        if (!string.Equals(context.Bank.Name, "\u6c11\u751f", StringComparison.Ordinal)
+            || !string.Equals(context.Template.Name, "\u6c11\u751f\u4e2a\u4eba\u7535\u5b50\u72483", StringComparison.Ordinal)
+            || !context.Records.Any(record => record.IsDocumentImported)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            const double voucherNumberLeft = 54d;
+            var records = GetVendorPrintRecords(context);
+            List<List<double>> rowTopsByPage = [];
+            using (var textDocument = UglyToad.PdfPig.PdfDocument.Open(path))
+            {
+                foreach (var page in textDocument.GetPages())
+                {
+                    rowTopsByPage.Add(page.GetWords()
+                        // Every transaction has a date even when the vendor omits its
+                        // voucher/account text. Use that stable column as the row anchor
+                        // so blank interest rows cannot shift all following vouchers.
+                        .Where(word => Regex.IsMatch(word.Text, @"^\d{4}/\d{2}/\d{2}$")
+                            && word.BoundingBox.Left >= 96d
+                            && word.BoundingBox.Left < 160d
+                            && page.Height - word.BoundingBox.Top > 105d)
+                        .Select(word => page.Height - word.BoundingBox.Top - 2d)
+                        .OrderBy(top => top)
+                        .ToList());
+                }
+            }
+
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            var changed = false;
+            var firstRecordIndex = 0;
+            for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
+            {
+                if (firstRecordIndex >= records.Count)
+                {
+                    break;
+                }
+
+                var rowTops = pageIndex < rowTopsByPage.Count ? rowTopsByPage[pageIndex] : [];
+                var pageRecordCount = Math.Min(rowTops.Count, records.Count - firstRecordIndex);
+                if (pageRecordCount == 0)
+                {
+                    continue;
+                }
+
+                using var graphics = XGraphics.FromPdfPage(document.Pages[pageIndex], XGraphicsPdfPageOptions.Append);
+                var voucherFont = new XFont("SimSun", 5.5d, XFontStyle.Regular);
+                for (var rowIndex = 0; rowIndex < pageRecordCount; rowIndex++)
+                {
+                    var recordIndex = firstRecordIndex + rowIndex;
+                    var record = records[recordIndex];
+                    if (!record.IsDocumentImported)
+                    {
+                        continue;
+                    }
+
+                    // The vendor template always prints BankUser.Account in this column.
+                    // Replace only the cell interior with the per-row PDF value, preserving
+                    // all table boundaries and neighbouring transaction fields.
+                    var top = rowTops[rowIndex];
+                    graphics.DrawRectangle(XBrushes.White, voucherNumberLeft, top, 40d, 18d);
+                    var voucherNumber = NormalizeSingleLinePrintText(record.VoucherNum);
+                    if (!string.IsNullOrWhiteSpace(voucherNumber))
+                    {
+                        var firstLineLength = Math.Min(10, voucherNumber.Length);
+                        graphics.DrawString(
+                            voucherNumber[..firstLineLength],
+                            voucherFont,
+                            XBrushes.Black,
+                            new XPoint(56d, top + 7d));
+                        if (firstLineLength < voucherNumber.Length)
+                        {
+                            graphics.DrawString(
+                                voucherNumber[firstLineLength..],
+                                voucherFont,
+                                XBrushes.Black,
+                                new XPoint(56d, top + 15d));
+                        }
+                    }
+                    changed = true;
+                }
+                firstRecordIndex += pageRecordCount;
+            }
+
+            if (changed)
+            {
+                document.Save(path);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static void NormalizeCgbPersonalElectronicBlankPages(PrintRenderContext context, string path)
+    {
+        if (!string.Equals(context.Bank.Name, "广发", StringComparison.Ordinal)
+            || !string.Equals(context.Template.Name, "广发个人电子版3", StringComparison.Ordinal)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            List<int> blankPageIndexes = [];
+            using (var source = UglyToad.PdfPig.PdfDocument.Open(path))
+            {
+                foreach (var page in source.GetPages())
+                {
+                    var text = UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor.ContentOrderTextExtractor.GetText(page);
+                    var compact = Regex.Replace(text ?? string.Empty, @"\s+", string.Empty);
+                    var dateCount = Regex.Matches(compact, @"\d{4}-\d{2}-\d{2}").Count;
+                    if (compact.Length < 400 && dateCount <= 2)
+                    {
+                        blankPageIndexes.Add(page.Number - 1);
+                    }
+                }
+            }
+
+            if (blankPageIndexes.Count == 0)
+            {
+                return;
+            }
+
+            var blankPages = blankPageIndexes.ToHashSet();
+            var tempPath = path + ".cgb-pages.tmp";
+            try
+            {
+                using var input = PdfReader.Open(path, PdfDocumentOpenMode.Import);
+                using var output = new PdfDocument();
+                for (var pageIndex = 0; pageIndex < input.PageCount; pageIndex++)
+                {
+                    if (!blankPages.Contains(pageIndex))
+                    {
+                        var page = input.Pages[pageIndex];
+                        output.AddPage(page);
+                    }
+                }
+
+                if (output.PageCount == 0 || output.PageCount == input.PageCount)
+                {
+                    return;
+                }
+
+                output.Save(tempPath);
                 File.Copy(tempPath, path, overwrite: true);
             }
             finally

@@ -325,7 +325,12 @@ internal static class PdfImportTabularMapper
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
         NormalizeImportedTextFields(record, ImportedFlowTextProperties);
-        NormalizeImportedTransactionType(record);
+        // Alipay's 商品说明 can legitimately be a numeric value such as "002".
+        // Treating it as a generic numeric transaction type replaces it with 收/支.
+        if (!bank.Name.Contains("支付宝", StringComparison.Ordinal))
+        {
+            NormalizeImportedTransactionType(record);
+        }
         var direction = ResolveFlowMoneyDirection(record.IncomeAttribute);
 
         if (!record.TradeMoney.HasValue)

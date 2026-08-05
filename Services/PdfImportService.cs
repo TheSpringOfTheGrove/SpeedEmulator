@@ -70,7 +70,11 @@ public sealed partial class PdfImportService : IPdfImportService
         "其他",
         "柜面",
         "ATM",
-        "POS"
+        "POS交易",
+        "POS",
+        "\u4e2d\u95f4\u4e1a\u52a1\u540e\u53f0\u65b9\u5f0f",
+        "\u4fe1\u8d37\u53f0\u5e10\u63a5\u53e3",
+        "\u81ea\u52a9\u7ec8\u7aef"
     ];
 
     private static readonly HuaxiaColumnSpec[] HuaxiaPersonalElectronicColumns =
@@ -533,6 +537,10 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             record.IsDocumentImported = true;
             PdfImportTabularMapper.NormalizeImportedFlowRecord(record, bank, bankUser);
+            if (bank.Name == "工行")
+            {
+                NormalizeIcbcImportedCounterpartyFields(record);
+            }
             if (bank.Name == "招行对公")
             {
                 StripCmbCorporatePageArtifacts(record);
@@ -1804,6 +1812,7 @@ public sealed partial class PdfImportService : IPdfImportService
         // lines. Parse the first-page header as one normalized string so a table row can
         // never be mistaken for user information.
         var parsedUser = TryApplyWechatUserHeader(bank, user, lines);
+        TryApplyWechatStatementRange(bank, user, lines);
         if (!parsedUser)
         {
             AddWechatUserHeaderWarning(result, lines);
@@ -1845,6 +1854,34 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         return parsedUser;
+    }
+
+    private static bool TryApplyWechatStatementRange(
+        Bank bank,
+        BankUser user,
+        IReadOnlyList<PdfTextLine> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return false;
+        }
+
+        var firstPage = lines.Min(item => item.PageNumber);
+        var headerText = CleanPdfValue(string.Join(' ', lines
+            .Where(item => item.PageNumber == firstPage)
+            .Take(180)
+            .Select(item => item.Text)));
+        var match = Regex.Match(
+            headerText,
+            @"\u4EA4\u6613\u660E\u7EC6\u5BF9\u5E94\u65F6\u95F4\u6BB5\s*(?<start>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\u81F3\s*(?<end>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        SetUserNamed(user, bank, "\u8D77\u59CB\u65E5\u671F", match.Groups["start"].Value);
+        SetUserNamed(user, bank, "\u7EC8\u6B62\u65E5\u671F", match.Groups["end"].Value);
+        return true;
     }
 
     private static bool TryApplyWechatUserHeader(
@@ -1965,7 +2002,9 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         var parsedRecords = new List<FlowRecord>();
-        foreach (var group in GroupAlipayRecords(lines))
+        var groups = GroupAlipayRecords(lines).ToList();
+        var parseWarningStart = result.Issues.Count;
+        foreach (var group in groups)
         {
             if (TryParseAlipayRecord(group, bank, user, out var record))
             {
@@ -1977,7 +2016,16 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
-        ApplyAlipayPositionedOrderFields(parsedRecords, ParseAlipayPositionedRecords(bank, user, document));
+        var positionedRecords = ParseAlipayPositionedRecords(bank, user, document).ToList();
+        parsedRecords.AddRange(ApplyAlipayPositionedOrderFields(parsedRecords, positionedRecords));
+        if (positionedRecords.Count >= groups.Count && result.Issues.Count > parseWarningStart)
+        {
+            result.Issues.RemoveRange(parseWarningStart, result.Issues.Count - parseWarningStart);
+        }
+
+        parsedRecords = parsedRecords
+            .OrderBy(record => record.AccountTime ?? DateTime.MaxValue)
+            .ToList();
         result.FlowRecords.AddRange(parsedRecords);
         return parsedUser;
     }
@@ -1996,14 +2044,12 @@ public sealed partial class PdfImportService : IPdfImportService
         }
     }
 
-    private static void ApplyAlipayPositionedOrderFields(
+    private static IReadOnlyList<FlowRecord> ApplyAlipayPositionedOrderFields(
         IReadOnlyList<FlowRecord> parsedRecords,
         IEnumerable<FlowRecord> positionedRecords)
     {
         var positionedByKey = new Dictionary<(long TimeTicks, double? Amount), Queue<FlowRecord>>();
-        foreach (var positionedRecord in positionedRecords.Where(record =>
-                     record.AccountTime.HasValue
-                     && (!string.IsNullOrWhiteSpace(record.SerialNum) || !string.IsNullOrWhiteSpace(record.MerchantName))))
+        foreach (var positionedRecord in positionedRecords.Where(record => record.AccountTime.HasValue))
         {
             var key = (positionedRecord.AccountTime!.Value.Ticks, positionedRecord.TradeMoney);
             if (!positionedByKey.TryGetValue(key, out var queue))
@@ -2024,6 +2070,24 @@ public sealed partial class PdfImportService : IPdfImportService
             }
 
             var positionedRecord = queue.Dequeue();
+            // Wrapped Alipay cells cannot be separated reliably by flattened text. Once
+            // timestamp and signed amount match, the fixed table columns are authoritative.
+            parsedRecord.OppositeUsername = positionedRecord.OppositeUsername;
+            parsedRecord.ProductBrief = positionedRecord.ProductBrief;
+            parsedRecord.ProductName = positionedRecord.ProductName;
+            parsedRecord.TradeChannel = positionedRecord.TradeChannel;
+            parsedRecord.CashCheck = positionedRecord.CashCheck;
+            parsedRecord.IncomeAttribute = positionedRecord.IncomeAttribute;
+            parsedRecord.IncomeFlag = positionedRecord.IncomeFlag;
+            parsedRecord.Usage = positionedRecord.Usage;
+            parsedRecord.CreditAmount = positionedRecord.CreditAmount;
+            parsedRecord.DebitAmount = positionedRecord.DebitAmount;
+
+            foreach (var (fieldName, value) in positionedRecord.ExtraFields)
+            {
+                parsedRecord[fieldName] = value;
+            }
+
             if (!string.IsNullOrWhiteSpace(positionedRecord.SerialNum))
             {
                 parsedRecord.SerialNum = positionedRecord.SerialNum;
@@ -2037,6 +2101,8 @@ public sealed partial class PdfImportService : IPdfImportService
                 SetFlowRaw(parsedRecord, "商家订单号", parsedRecord.MerchantName);
             }
         }
+
+        return positionedByKey.Values.SelectMany(queue => queue).ToList();
     }
 
     private static IReadOnlyList<PdfPositionedRow> BuildAlipayPositionedRows(IReadOnlyList<PdfTextWord> words)
@@ -2061,7 +2127,7 @@ public sealed partial class PdfImportService : IPdfImportService
             @"^(?:收入|支出|不计)$",
             72d,
             0d,
-            0d);
+            3d);
     }
 
     private static bool TryParseAlipayPositionedRecord(
@@ -3294,7 +3360,9 @@ public sealed partial class PdfImportService : IPdfImportService
         string rowStartPattern,
         double rowStartLeftMax,
         double defaultHeaderBottom,
-        double rowTopLead)
+        double rowTopLead,
+        Func<PdfTextWord, IReadOnlyList<PdfTextWord>, bool>? isRowStartWord = null,
+        Func<IEnumerable<PdfTextWord>, string>? joinCellWords = null)
     {
         if (words.Count == 0)
         {
@@ -3327,7 +3395,7 @@ public sealed partial class PdfImportService : IPdfImportService
                 .Where(item => item.Top > headerBottom
                     && item.Top < footerTop
                     && item.Left < rowStartLeftMax
-                    && Regex.IsMatch(item.Text, rowStartPattern))
+                    && (isRowStartWord?.Invoke(item, pageWords) ?? Regex.IsMatch(item.Text, rowStartPattern)))
                 .OrderBy(item => item.Top)
                 .ThenBy(item => item.Left)
                 .ToList();
@@ -3362,7 +3430,7 @@ public sealed partial class PdfImportService : IPdfImportService
                     var columnWords = rowWords
                         .Where(item => GetHorizontalCenter(item) >= column.Left && GetHorizontalCenter(item) < column.Right)
                         .ToList();
-                    var value = JoinPositionedCellWords(columnWords);
+                    var value = joinCellWords?.Invoke(columnWords) ?? JoinPositionedCellWords(columnWords);
                     if (!string.IsNullOrWhiteSpace(value))
                     {
                         cells[column.Key] = value;
@@ -4732,6 +4800,36 @@ public sealed partial class PdfImportService : IPdfImportService
         oppositeAccount = CleanPdfValue(accountMatch.Groups["account"].Value);
     }
 
+    private static void NormalizeIcbcImportedCounterpartyFields(FlowRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.TradeChannel)
+            || !string.IsNullOrWhiteSpace(record.OppositeUsername)
+            || !string.IsNullOrWhiteSpace(record.OppositeAccount))
+        {
+            return;
+        }
+
+        SplitIcbcCounterpartyTail(
+            record.TradeChannel,
+            out var oppositeUsername,
+            out var oppositeAccount,
+            out var tradeChannel);
+        if (string.IsNullOrWhiteSpace(oppositeUsername)
+            && string.IsNullOrWhiteSpace(oppositeAccount))
+        {
+            return;
+        }
+
+        record.OppositeUsername = oppositeUsername;
+        record.OppositeAccount = oppositeAccount;
+        record.TradeChannel = tradeChannel;
+        record.InterfacePage = tradeChannel;
+        SetFlowRaw(record, "对方户名", oppositeUsername);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "渠道", tradeChannel);
+        SetFlowRaw(record, "界面", tradeChannel);
+    }
+
     private static bool TryParseCcbRecord(
         IReadOnlyList<PdfTextLine> group,
         Bank bank,
@@ -4817,7 +4915,7 @@ public sealed partial class PdfImportService : IPdfImportService
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
         record.Account = FirstNotBlank(user.CardNo, user.AccountNo);
-        record.VoucherType = "卡";
+        record.VoucherType = string.IsNullOrWhiteSpace(first) ? string.Empty : "卡";
         record.VoucherNum = CleanPdfValue(first);
         record.AccountTime = ParseDateTimeOrNull($"{match.Groups["date"].Value} {match.Groups["time"].Value}");
         record.ProductBrief = CleanPdfValue(match.Groups["summary"].Value);
@@ -5562,14 +5660,112 @@ public sealed partial class PdfImportService : IPdfImportService
         // lines. Midpoint bands split those cells between adjacent rows, so each row must
         // begin at its order-number anchor and extend to the next anchor.
         return BuildPositionedRowsWithTopLead(
-            words,
+            SplitWechatWordsAtColumnBoundaries(words),
             WechatPersonalColumns,
             IsWechatPositionedHeaderWord,
             IsWechatPositionedFooterWord,
             @"^\d{16,}",
             148d,
             0d,
-            2d);
+            2d,
+            IsWechatPositionedRowStart,
+            JoinWechatPositionedCellWords);
+    }
+
+    private static IReadOnlyList<PdfTextWord> SplitWechatWordsAtColumnBoundaries(
+        IReadOnlyList<PdfTextWord> words)
+    {
+        // Only this boundary is affected by WeChat's overlapping counterparty and
+        // merchant-order text objects. Splitting the order/time boundary would damage
+        // order numbers because the source embeds the date in the same PDF word.
+        var boundaries = new[] { 468d };
+        var splitWords = new List<PdfTextWord>(words.Count);
+
+        foreach (var word in words)
+        {
+            var width = word.Right - word.Left;
+            if (word.Text.Length < 2 || width <= 0)
+            {
+                splitWords.Add(word);
+                continue;
+            }
+
+            var splitIndexes = boundaries
+                .Where(boundary => boundary > word.Left && boundary < word.Right)
+                .Select(boundary => (int)Math.Round(
+                    (boundary - word.Left) / width * word.Text.Length,
+                    MidpointRounding.AwayFromZero))
+                .Where(index => index > 0 && index < word.Text.Length)
+                .Distinct()
+                .OrderBy(index => index)
+                .ToList();
+            if (splitIndexes.Count == 0)
+            {
+                splitWords.Add(word);
+                continue;
+            }
+
+            var startIndex = 0;
+            foreach (var endIndex in splitIndexes.Append(word.Text.Length))
+            {
+                var segmentLeft = word.Left + width * startIndex / word.Text.Length;
+                var segmentRight = word.Left + width * endIndex / word.Text.Length;
+                splitWords.Add(word with
+                {
+                    Text = word.Text[startIndex..endIndex],
+                    Left = segmentLeft,
+                    Right = segmentRight
+                });
+                startIndex = endIndex;
+            }
+        }
+
+        return splitWords;
+    }
+
+    private static string JoinWechatPositionedCellWords(IEnumerable<PdfTextWord> words)
+    {
+        const double lineTolerance = 2d;
+        var lines = new List<List<PdfTextWord>>();
+        foreach (var word in words.OrderBy(item => item.Top).ThenBy(item => item.Left))
+        {
+            if (lines.Count == 0 || Math.Abs(lines[^1].Average(item => item.Top) - word.Top) > lineTolerance)
+            {
+                lines.Add([word]);
+            }
+            else
+            {
+                lines[^1].Add(word);
+            }
+        }
+
+        return CleanPdfValue(string.Concat(lines.SelectMany(line =>
+            line.OrderBy(item => item.Left).Select(item => item.Text))));
+    }
+
+    private static bool IsWechatPositionedRowStart(
+        PdfTextWord candidate,
+        IReadOnlyList<PdfTextWord> pageWords)
+    {
+        if (candidate.Left >= 148d || !Regex.IsMatch(CleanPdfValue(candidate.Text), @"^\d{16,}"))
+        {
+            return false;
+        }
+
+        // Wrapped numeric fragments in the order-number column are continuations, not
+        // new rows. A real row begins level with both its direction and amount cells.
+        const double verticalTolerance = 3.5d;
+        var hasDirection = pageWords.Any(word =>
+            Math.Abs(word.Top - candidate.Top) <= verticalTolerance
+            && GetHorizontalCenter(word) >= 256d
+            && GetHorizontalCenter(word) < 318d
+            && IsWechatDirectionToken(CleanPdfValue(word.Text)));
+        var hasAmount = pageWords.Any(word =>
+            Math.Abs(word.Top - candidate.Top) <= verticalTolerance
+            && GetHorizontalCenter(word) >= 370d
+            && GetHorizontalCenter(word) < 418d
+            && ParseDoubleOrNull(CleanPdfValue(word.Text)).HasValue);
+        return hasDirection && hasAmount;
     }
 
     private static void AddWechatPositionedRowWarning(
@@ -5646,7 +5842,6 @@ public sealed partial class PdfImportService : IPdfImportService
 
         if (string.IsNullOrWhiteSpace(tradeOrder)
             || !accountTime.HasValue
-            || string.IsNullOrWhiteSpace(tradeType)
             || string.IsNullOrWhiteSpace(direction)
             || !amount.HasValue)
         {
@@ -7851,6 +8046,19 @@ public sealed partial class PdfImportService : IPdfImportService
         if (string.IsNullOrWhiteSpace(text))
         {
             return (string.Empty, string.Empty, string.Empty);
+        }
+
+        // Some CCB reversal rows contain only a counterparty name (no account and
+        // therefore no slash). Flattened PDF text joins that final-column name to the
+        // masked location cell, for example "*** 吴虹毅". Keep the two source columns
+        // separate instead of treating the complete text as the location/remark.
+        var maskedPlaceWithName = Regex.Match(text, @"^(?<place>\*{3})\s+(?<name>\S.*)$");
+        if (maskedPlaceWithName.Success)
+        {
+            return (
+                CleanPdfValue(maskedPlaceWithName.Groups["place"].Value),
+                string.Empty,
+                CleanPdfValue(maskedPlaceWithName.Groups["name"].Value));
         }
 
         var slashIndex = text.LastIndexOf('/');
