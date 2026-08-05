@@ -8,6 +8,8 @@ public sealed class PrintPdfConfig
 
     public int RowCount { get; set; } = 28;
 
+    public double TableHeight { get; set; }
+
     public double MarginLeft { get; set; } = 18;
 
     public double MarginTop { get; set; } = 16;
@@ -49,6 +51,7 @@ public sealed class PrintPdfConfig
             Name = Name,
             Desc = Desc,
             RowCount = RowCount,
+            TableHeight = TableHeight,
             MarginLeft = MarginLeft,
             MarginTop = MarginTop,
             MarginRight = MarginRight,

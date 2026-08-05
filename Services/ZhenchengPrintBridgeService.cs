@@ -228,10 +228,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private async Task ExportInternalCoreAsync(PrintRenderContext context, string path)
     {
+        // Apply the template ordering once before selecting a renderer. Vendor,
+        // dedicated QuestPDF and fallback templates must all honour the same
+        // Descending setting from the template-settings dialog.
+        context = context.ApplyTemplateRecordOrder();
+
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
+        }
+
+        if (IsIndustrialPersonalElectronicVersion8Or13(context))
+        {
+            QuestPdfPrintService.ExportIndustrialPersonalElectronicVersion8Or13(context, path);
+            return;
         }
 
         var forceVendorRenderer = ShouldForceVendorRenderer(context);
@@ -259,6 +270,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (currentBridge.TryExport(context, path))
         {
             NormalizeCgbPersonalElectronicBlankPages(context, path);
+            NormalizeCgbPersonalElectronicFooterPdf(context, path);
             NormalizeMinshengPersonalVoucherColumns(context, path);
             return;
         }
@@ -277,6 +289,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static bool ShouldApplyLocalPdfConfig(PrintRenderContext context)
     {
         return !context.Template.IsSystem || context.Template.IsPageRowsOverride;
+    }
+
+    private static bool IsIndustrialPersonalElectronicVersion8Or13(PrintRenderContext context)
+    {
+        return IsIndustrialBank(context.Bank)
+            && (string.Equals(context.Template.Name, "兴业个人电子版8", StringComparison.Ordinal)
+                || string.Equals(context.Template.Name, "兴业个人电子版13", StringComparison.Ordinal));
     }
 
     private static void TryWritePrintFailureDiagnostic(
@@ -1221,6 +1240,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     if (!IsDefaultQuestPdfBridgeDisabled()
                         && !IsAgriculturalBankPersonalPaperTemplate(context)
                         && !ShouldBypassDefaultQuestPdfBridge(context)
+                        && !HasLocalPageRowsOverride(context, resolvedTemplate)
                         && !ShouldUseIcbcFallbackStampCode(context))
                     {
                         try
@@ -1399,9 +1419,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var vendorName = ReadString(vendorTemplate, "Name", context.Template.Name);
                 var vendorPdfData = ReadString(vendorTemplate, "PdfData", string.Empty);
                 var vendorPageRows = (int)ReadLong(vendorTemplate, "PageSize", context.Template.PageRows);
-                var effectivePageRows = vendorPageRows > 0
-                    ? vendorPageRows
-                    : context.Template.PageRows;
+                var applyLocalConfig = ShouldApplyLocalPdfConfig(context);
+                var effectivePageRows = applyLocalConfig && context.Template.PageRows > 0
+                    ? context.Template.PageRows
+                    : vendorPageRows > 0
+                        ? vendorPageRows
+                        : context.Template.PageRows;
                 var vendorConfig = templateType.GetProperty("PdfConfig", BindingFlags.Public | BindingFlags.Instance)?.GetValue(vendorTemplate)
                     ?? CreateVendorConfig(candidateNames.Prepend(vendorName));
                 if (vendorConfig is null)
@@ -1411,7 +1434,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         : new ResolvedTemplate(vendorName, null, vendorTemplate, vendorPdfData, effectivePageRows);
                 }
 
-                if (ShouldApplyLocalPdfConfig(context))
+                if (applyLocalConfig)
                 {
                     ApplyLocalPdfConfigToVendorConfig(vendorConfig, context.Template.Config, context.Template.PageRows);
                 }
@@ -1992,6 +2015,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             return ShouldUseVendorCompletePdfPipeline(context)
                 || IsEverbrightCorporateElectronicTemplate(context);
+        }
+
+        private static bool HasLocalPageRowsOverride(
+            PrintRenderContext context,
+            ResolvedTemplate resolvedTemplate)
+        {
+            if (context.Template.PageRows <= 0)
+            {
+                return false;
+            }
+
+            var vendorRows = ReadLong(
+                resolvedTemplate.Template ?? new object(),
+                "PageSize",
+                0);
+            return context.Template.IsPageRowsOverride;
         }
 
         private static bool IsEverbrightCorporateElectronicTemplate(PrintRenderContext context)
@@ -4305,6 +4344,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyMinshengBankUserFields(context, target, values);
         }
 
+        if (IsIndustrialBank(context.Bank))
+        {
+            ApplyIndustrialBankUserFields(context, target, values);
+        }
+
         if (IsSpdbPersonalElectronicPrintContext(context))
         {
             ApplySpdbPersonalElectronicBankUserFields(context, target, values);
@@ -4800,6 +4844,55 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "CashExchange", cashExchange);
     }
 
+    private static void ApplyIndustrialBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var englishName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "姓名英文", "英文姓名", "客户英文名"),
+            GetValue(values, "UsernameEn")));
+        if (!string.IsNullOrWhiteSpace(englishName))
+        {
+            Set(target, "UsernameEn", englishName);
+        }
+
+        var tellerSerial = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "柜员流水号", "柜员流水", "打印流水号"),
+            GetValue(values, "UserField_864A3ADB322C"),
+            GetValue(values, "柜员流水号"),
+            GetValue(values, "UserNum")));
+        if (!string.IsNullOrWhiteSpace(tellerSerial))
+        {
+            // Industrial Bank's watermark formatter reads Operator as its
+            // leading text and combines it with PrintTime. The genuine runtime
+            // stores the bank title and teller serial together in that field.
+            Set(target, "UserNum", tellerSerial);
+            Set(target, "Operator", $"兴业银行 {tellerSerial}");
+            Set(target, "VerificationCode", tellerSerial);
+        }
+
+        var institutionNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "机构号", "机构编号", "开户机构号"),
+            GetValue(values, "UserField_95DC96719D7A"),
+            GetValue(values, "机构号"),
+            GetValue(values, "OpenBranchNum")));
+        if (!string.IsNullOrWhiteSpace(institutionNumber))
+        {
+            Set(target, "OpenBranchNum", institutionNumber);
+        }
+
+        var printTime = ResolveBankUserPrintTime(context, values);
+        if (printTime is not { } resolvedPrintTime)
+        {
+            return;
+        }
+
+        Set(target, "PrintTime", resolvedPrintTime);
+        Set(target, "StampTime", resolvedPrintTime);
+        Set(target, "BillTime", resolvedPrintTime);
+    }
+
     private static void ApplySpdbPersonalElectronicBankUserFields(
         PrintRenderContext context,
         object target,
@@ -4826,6 +4919,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "CashCheck", cashExchange);
             Set(target, "CashExchange", cashExchange);
         }
+
+        // The vendor SPDB stamp layer renders its date from PrintTime (not EndTime).
+        // A bank statement uses its query end date as the electronic-seal date.
+        Set(target, "PrintTime", context.BankUser.EndDate);
+        Set(target, "StampTime", context.BankUser.EndDate);
 
     }
 
@@ -5575,6 +5673,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             productName = FirstNotBlank(productName, tradeKind);
             productBrief = FirstNotBlank(productBrief, tradeKind);
             tradeExplain = FirstNotBlank(tradeExplain, tradeKind);
+            if (context.Template.Name is "兴业个人电子版9" or "兴业个人电子版10" or "兴业个人电子版14")
+            {
+                // These genuine runtime layouts label the final column as
+                // "交易地点" but read GenerateFlowRecord.TradeChannel.
+                tradeChannel = FirstNotBlank(tradePlace, tradeChannel);
+            }
         }
 
         if (IsAgriculturalBank(bank))
@@ -5666,6 +5770,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, nameof(FlowRecord.NetNum), netNum);
         Set(target, nameof(FlowRecord.AreaNum), areaNum);
         Set(target, nameof(FlowRecord.TradePlace), tradePlace);
+        if (IsIndustrialBank(bank))
+        {
+            // Industrial Bank has both nine-column counterparty templates and a
+            // seven-column Transaction Place template. Runtime versions use
+            // different property names for that last column, so bridge the same
+            // source field to each supported alias.
+            Set(target, "TransactionPlace", tradePlace);
+            Set(target, "TradingPlace", tradePlace);
+            Set(target, "TradeAddress", tradePlace);
+            Set(target, "TradeLocation", tradePlace);
+        }
         Set(target, nameof(FlowRecord.Remark), remark);
         Set(target, nameof(FlowRecord.TradeChannelEn), tradeChannelEn);
         Set(target, nameof(FlowRecord.Currency), currency);
@@ -7767,6 +7882,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(vendorConfig, "RowCount", rowCount);
         }
 
+        var tableHeight = localConfig.TableHeight > 0 ? localConfig.TableHeight : pageRows;
+        if (tableHeight > 0)
+        {
+            Set(vendorConfig, "TableHight", tableHeight);
+        }
+
         Set(vendorConfig, "MarginLeft", localConfig.MarginLeft);
         Set(vendorConfig, "MarginTop", localConfig.MarginTop);
         Set(vendorConfig, "MarginRight", localConfig.MarginRight);
@@ -8168,6 +8289,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             "yyyy-MM-dd HH:mm:ss",
             "yyyy-MM-dd H:mm:ss",
+            "yyyy-MM-ddHH:mm:ss",
+            "yyyy-MM-ddH:mm:ss",
             "yyyy/M/d HH:mm:ss",
             "yyyy/M/d H:mm:ss",
             "yyyy/M/d",
@@ -8449,6 +8572,118 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 throw;
             }
         }
+    }
+
+    private static void NormalizeCgbPersonalElectronicFooterPdf(PrintRenderContext context, string path)
+    {
+        if (!string.Equals(context.Bank.Name, "广发", StringComparison.Ordinal)
+            || !string.Equals(context.Template.Name, "广发个人电子版3", StringComparison.Ordinal)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            List<double> footerTops = [];
+            using (var textDocument = UglyToad.PdfPig.PdfDocument.Open(path))
+            {
+                foreach (var page in textDocument.GetPages())
+                {
+                    var rowDates = page.GetWords()
+                        .Where(word => Regex.IsMatch(word.Text, @"^\d{4}-\d{2}-\d{2}$")
+                            && word.BoundingBox.Left < 150d
+                            && page.Height - word.BoundingBox.Top > 140d)
+                        .Select(word => page.Height - word.BoundingBox.Top)
+                        .ToList();
+
+                    // The footer follows the last transaction row in the genuine
+                    // electronic-v3 template instead of being fixed at the page edge.
+                    footerTops.Add(rowDates.Count > 0 ? rowDates.Max() + 25d : 225d);
+                }
+            }
+
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            if (document.PageCount == 0)
+            {
+                return;
+            }
+
+            var footerDate = context.BankUser.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            for (var pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
+            {
+                var page = document.Pages[pageIndex];
+                var top = Math.Min(footerTops.ElementAtOrDefault(pageIndex), page.Height.Point - 30d);
+                using var graphics = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+
+                // Cover the vendor's last-page-only footer before drawing the
+                // genuine three-part footer with the post-cleanup page count.
+                graphics.DrawRectangle(XBrushes.White, 34d, top - 8d, page.Width.Point - 68d, 28d);
+                graphics.DrawLine(new XPen(XColors.Black, 0.7d), 34d, top, page.Width.Point - 34d, top);
+                DrawCgbFooterText(graphics, $"日期：{footerDate}", 35d, top + 4d, 170d, TextAlignment.Left);
+                DrawCgbFooterText(graphics, $"第{pageIndex + 1}页，共{document.PageCount}页",
+                    190d, top + 4d, page.Width.Point - 380d, TextAlignment.Center);
+                DrawCgbFooterText(graphics, "广发银行股份有限公司",
+                    page.Width.Point - 205d, top + 4d, 170d, TextAlignment.Right);
+            }
+
+            document.Save(path);
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static void DrawCgbFooterText(
+        XGraphics graphics,
+        string text,
+        double left,
+        double top,
+        double width,
+        TextAlignment alignment)
+    {
+        const double height = 12d;
+        const double scale = 1d;
+        var visual = new System.Windows.Media.DrawingVisual();
+        using (var drawing = visual.RenderOpen())
+        {
+            var formatted = new System.Windows.Media.FormattedText(
+                text,
+                CultureInfo.GetCultureInfo("zh-CN"),
+                FlowDirection.LeftToRight,
+                new System.Windows.Media.Typeface("SimSun"),
+                7d * 96d / 72d * scale,
+                System.Windows.Media.Brushes.Black,
+                1d)
+            {
+                TextAlignment = TextAlignment.Left,
+                MaxTextWidth = width * 96d / 72d * scale
+            };
+            var canvasWidth = formatted.MaxTextWidth;
+            var originX = alignment switch
+            {
+                TextAlignment.Center => Math.Max(0d, (canvasWidth - formatted.WidthIncludingTrailingWhitespace) / 2d),
+                TextAlignment.Right => Math.Max(0d, canvasWidth - formatted.WidthIncludingTrailingWhitespace),
+                _ => 0d
+            };
+            drawing.DrawText(formatted, new System.Windows.Point(originX, 0d));
+        }
+
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(width * 96d / 72d * scale));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(height * 96d / 72d * scale));
+        var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, 96d * scale, 96d * scale, System.Windows.Media.PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        var imageBytes = stream.ToArray();
+        using var image = XImage.FromStream(() => new MemoryStream(imageBytes, writable: false));
+        graphics.DrawImage(image, left, top, width, height);
     }
 
     private static void NormalizeImportedDocumentSerialNumbersInPdf(PrintRenderContext context, string path)

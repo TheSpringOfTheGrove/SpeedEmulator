@@ -154,7 +154,7 @@
                         <TextBlock Grid.Row="4" Text="表格行高:" VerticalAlignment="Center" />
                         <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding ColumnMinHeight, UpdateSourceTrigger=PropertyChanged, StringFormat=F1}" Style="{StaticResource SettingTextBoxStyle}" />
                         <TextBlock Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2" Text="表格行数:" VerticalAlignment="Center" Margin="10,0,4,0" />
-                        <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding PageRows, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
+                        <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding TableHeight, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource SettingTextBoxStyle}" />
                         <TextBlock Grid.Row="4" Grid.Column="4" Text="倒序:" VerticalAlignment="Center" Margin="10,0,4,0" />
                         <CheckBox Grid.Row="4" Grid.Column="5" IsChecked="{Binding Descending}" VerticalAlignment="Center" />
 

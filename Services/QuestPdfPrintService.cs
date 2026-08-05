@@ -123,6 +123,189 @@ public sealed class QuestPdfPrintService : IPrintPdfService
         }).GeneratePdf(path);
     }
 
+    public static void ExportIndustrialPersonalElectronicVersion8Or13(PrintRenderContext context, string path)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        var includeTime = string.Equals(context.Template.Name, "兴业个人电子版13", StringComparison.Ordinal);
+        var rowsPerPage = context.Template.PageRows > 0 ? context.Template.PageRows : 16;
+        var records = context.Records.ToList();
+        var qrPath = ResolveRuntimeImagePath("兴业个人qr.png");
+        var sealPath = ResolveRuntimeImagePath("兴业个人.png");
+        var printDateTime = ResolveIndustrialPrintDateTime(context);
+        var verificationCode = FirstNotBlank(
+            context.BankUser["柜员流水号"],
+            context.BankUser["VerificationCode"],
+            context.BankUser["UserNum"]);
+        var accountType = FirstNotBlank(context.BankUser["账户类型"], "活期储蓄存款-现钞");
+
+        Document.Create(document =>
+        {
+            document.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.MarginHorizontal(24);
+                page.MarginTop(25);
+                page.MarginBottom(22);
+                page.DefaultTextStyle(style => style.FontFamily("Microsoft YaHei").FontSize(7));
+
+                page.Header().Height(218).Column(header =>
+                {
+                    header.Item().AlignCenter().Text("兴业银行交易流水").FontSize(12).SemiBold();
+                    header.Item().AlignCenter().Text("Industrial Bank Transaction Details").FontSize(11).SemiBold();
+                    header.Item().AlignCenter().Text($"{context.BankUser.StartDate:yyyy-MM-dd}-{context.BankUser.EndDate:yyyy-MM-dd}").FontSize(9);
+                    header.Item().PaddingTop(12).Row(row =>
+                    {
+                        row.ConstantItem(155).Column(left =>
+                        {
+                            if (!string.IsNullOrWhiteSpace(qrPath))
+                                left.Item().Height(82).AlignCenter().Image(qrPath).FitArea();
+                            left.Item().AlignCenter().Text("微信扫码验证").FontSize(9);
+                            left.Item().AlignCenter().Text("WeChat Code").FontSize(9);
+                            left.Item().AlignCenter().Text("Scanning Verification").FontSize(9);
+                            left.Item().PaddingTop(5).Text($"核验编号:{verificationCode}").FontSize(8);
+                            left.Item().Text("Verification No.:").FontSize(8);
+                        });
+                        row.RelativeItem().PaddingLeft(16).Column(left =>
+                        {
+                            left.Item().Text($"户    名:{context.BankUser.AccountName}");
+                            left.Item().Text("Account Name:");
+                            left.Item().Text($"币    种:{FirstNotBlank(context.BankUser.Currency, "人民币")}");
+                            left.Item().Text("Currency:");
+                            left.Item().Text("收支类别: 全部");
+                            left.Item().Text("Income and Expenditure Categories:");
+                            left.Item().Text("转账金额区间: 无");
+                            left.Item().Text("Transfer Amount Range:");
+                            left.Item().Text("对方账号: 无");
+                            left.Item().Text("Counterparty's Account No.");
+                            left.Item().Text($"打印日期: {printDateTime:yyyy-MM-dd HH:mm:ss}");
+                            left.Item().Text("Print Time:");
+                        });
+                        row.RelativeItem().PaddingLeft(12).Column(right =>
+                        {
+                            right.Item().Text($"账    号:{FirstNotBlank(context.BankUser.AccountNo, context.BankUser.CardNo)}");
+                            right.Item().Text("Account No.:");
+                            right.Item().Text($"账户类型:{accountType}");
+                            right.Item().Text("Account Type:");
+                            right.Item().Text("交易类型: 全部");
+                            right.Item().Text("Transaction Type");
+                            right.Item().PaddingTop(12).Text("对方户名: 无");
+                            right.Item().Text("Counterparty's Account Name:");
+                            right.Item().Text("用途/备注: 无");
+                            right.Item().Text("Use/Remark");
+                        });
+                        row.ConstantItem(122).Column(seal =>
+                        {
+                            if (!string.IsNullOrWhiteSpace(sealPath))
+                                seal.Item().Height(90).AlignCenter().Image(sealPath).FitArea();
+                            seal.Item().AlignCenter().Text($"{printDateTime:yyyy年MM月dd日}").FontSize(8);
+                        });
+                    });
+                });
+
+                page.Content().Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(0.78f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.05f);
+                        columns.RelativeColumn(1.68f);
+                    });
+                    table.Header(header =>
+                    {
+                        var titles = new (string Chinese, string English)[]
+                        {
+                            ("交易日期", includeTime ? "Transaction Time" : "Transaction Date"),
+                            ("记账日期", "Accounting Date"),
+                            ("摘要", "Transaction Type"),
+                            ("支/收", "Expenditure/Income"),
+                            ("交易金额", "Transaction Amount"),
+                            ("账户余额", "Amount Balance"),
+                            ("交易用途", "Transaction Usage"),
+                            ("对方户名", "Counterparty's Account Name"),
+                            ("对方账户/对方银行", "Counterparty's Account No./Counterparty's Account Bank")
+                        };
+                        foreach (var title in titles)
+                            header.Cell().Border(0.55f).MinHeight(36).PaddingHorizontal(1).AlignCenter().AlignMiddle()
+                                .Column(cell =>
+                                {
+                                    cell.Item().AlignCenter().Text(title.Chinese).FontSize(7.2f);
+                                    cell.Item().AlignCenter().Text(title.English).FontSize(5.2f);
+                                });
+                    });
+                    foreach (var record in records)
+                    {
+                        var accountTime = record.AccountTime;
+                        var values = new[]
+                        {
+                            accountTime?.ToString(includeTime ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd") ?? string.Empty,
+                            accountTime?.ToString(includeTime ? "yyyyMMdd" : "yyyy-MM-dd") ?? string.Empty,
+                            FirstNotBlank(record.ProductBrief, record.ProductName, record.Remark),
+                            FirstNotBlank(record.IncomeAttribute, (record.TradeMoney ?? 0d) >= 0 ? "收" : "支"),
+                            (record.TradeMoney ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
+                            (record.Balance ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
+                            FirstNotBlank(record.Usage, record.TradeExplain),
+                            record.OppositeUsername,
+                            string.Join(Environment.NewLine, new[] { record.OppositeAccount, record.OppositeBank }.Where(value => !string.IsNullOrWhiteSpace(value)))
+                        };
+                        foreach (var value in values)
+                            table.Cell().Border(0.45f).MinHeight(31).Padding(1).AlignCenter().AlignMiddle().Text(value ?? string.Empty).FontSize(5.4f);
+                    }
+                });
+
+                page.Footer().Height(36).Column(footer =>
+                {
+                    footer.Item().Text("说明：交易明细涉及您的个人隐私，请妥善处理，避免信息篡改或泄露。交易明细内容仅供个人参考。").FontSize(7);
+                    footer.Item().PaddingTop(9).AlignCenter().Text(text =>
+                    {
+                        text.Span("第");
+                        text.CurrentPageNumber();
+                        text.Span("页/共");
+                        text.TotalPages();
+                        text.Span("页");
+                    });
+                });
+            });
+        }).GeneratePdf(path);
+
+        static string ResolveRuntimeImagePath(string fileName)
+        {
+            foreach (var candidate in new[]
+            {
+                Path.Combine(AppContext.BaseDirectory, "zhencheng-runtime", "static", "bank", fileName),
+                Path.Combine(AppContext.BaseDirectory, "static", "bank", fileName),
+                Path.Combine(Directory.GetCurrentDirectory(), "static", "bank", fileName)
+            })
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            return string.Empty;
+        }
+
+        static DateTime ResolveIndustrialPrintDateTime(PrintRenderContext renderContext)
+        {
+            foreach (var value in new[] { renderContext.BankUser["打印日期"], renderContext.BankUser["PrintTime"] })
+            {
+                if (DateTime.TryParseExact(
+                        value,
+                        ["yyyy-MM-ddHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy/M/d H:mm:ss"],
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AllowWhiteSpaces,
+                        out var exact))
+                    return exact;
+                if (DateTime.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out var parsed))
+                    return parsed;
+            }
+            return renderContext.BankUser.EndDate == default ? DateTime.Now : renderContext.BankUser.EndDate;
+        }
+    }
+
     public static void ExportAgriculturalPersonalLatestElectronic(
         PrintRenderContext context,
         string path,
@@ -320,7 +503,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
     private static void ExportCore(PrintRenderContext context, string path)
     {
         QuestPDF.Settings.License = LicenseType.Community;
-        var renderContext = context;
+        var renderContext = context.ApplyTemplateRecordOrder();
         var maxAttempts = Math.Max(1, Math.Min(GetConfiguredRowCount(context), 80));
         Exception? lastLayoutException = null;
 

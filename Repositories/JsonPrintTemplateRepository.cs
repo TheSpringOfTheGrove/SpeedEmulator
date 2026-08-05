@@ -644,6 +644,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             }
         }
 
+        if (bank.Type == BankTypes.Personal
+            && string.Equals(bank.Name, "光大", StringComparison.Ordinal)
+            && string.Equals(definition.Name, "光大个人电子版", StringComparison.Ordinal))
+        {
+            config.Descending = true;
+        }
+
         return new PrintTemplate
         {
             Id = -(index + 1),
@@ -1393,6 +1400,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 Name = templateName,
                 Desc = Convert.ToString(GetPropertyValue(source, "Name")) ?? string.Empty,
                 RowCount = ConvertToInt(GetPropertyValue(source, "RowCount")),
+                TableHeight = ConvertToDouble(GetPropertyValue(source, "TableHight")),
                 MarginLeft = ConvertToDouble(GetPropertyValue(source, "MarginLeft")),
                 MarginTop = ConvertToDouble(GetPropertyValue(source, "MarginTop")),
                 MarginRight = ConvertToDouble(GetPropertyValue(source, "MarginRight")),

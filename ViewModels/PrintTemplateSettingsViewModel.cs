@@ -151,6 +151,19 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
         }
     }
 
+    public double TableHeight
+    {
+        get => workingTemplate.Config.TableHeight;
+        set
+        {
+            if (!NearlyEquals(workingTemplate.Config.TableHeight, value))
+            {
+                workingTemplate.Config.TableHeight = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public bool Descending
     {
         get => workingTemplate.Config.Descending;
@@ -318,6 +331,11 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
         if (workingTemplate.Config.Columns.Count == 0)
         {
             workingTemplate.Config = defaultConfig;
+        }
+
+        if (workingTemplate.Config.TableHeight <= 0 && workingTemplate.PageRows > 0)
+        {
+            workingTemplate.Config.TableHeight = workingTemplate.PageRows;
         }
     }
 

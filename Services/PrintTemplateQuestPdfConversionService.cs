@@ -83,6 +83,7 @@ public static class PrintTemplateQuestPdfConversionService
             Name = string.IsNullOrWhiteSpace(existing.Name) ? template.Name : existing.Name,
             Desc = existing.Desc,
             RowCount = template.PageRows > 0 ? template.PageRows : existing.RowCount,
+            TableHeight = existing.TableHeight > 0 ? existing.TableHeight : template.PageRows,
             MarginLeft = hasExistingLayoutConfig ? existing.MarginLeft : existing.MarginLeft > 0 ? existing.MarginLeft : parsed?.Margins.Left ?? (isPortrait ? 54 : 22),
             MarginTop = hasExistingLayoutConfig ? existing.MarginTop : existing.MarginTop > 0 ? existing.MarginTop : parsed?.Margins.Top ?? (isPortrait ? 54 : 22),
             MarginRight = hasExistingLayoutConfig ? existing.MarginRight : existing.MarginRight > 0 ? existing.MarginRight : parsed?.Margins.Right ?? (isPortrait ? 54 : 22),
