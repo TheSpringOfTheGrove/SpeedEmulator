@@ -110,6 +110,7 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="编号" Binding="{Binding UserCode}" Width="110" />
                         <DataGridTextColumn Header="户名/姓名" Binding="{Binding AccountName}" Width="120" />
+                        <DataGridTextColumn Header="客户编号" Binding="{Binding [客户编号]}" Width="120" />
                         <DataGridTextColumn Header="账号" Binding="{Binding AccountNo}" Width="160" />
                         <DataGridTextColumn Header="卡号" Binding="{Binding CardNo}" Width="160" />
                         <DataGridTextColumn Header="证件号" Binding="{Binding IdNumber}" Width="160" />

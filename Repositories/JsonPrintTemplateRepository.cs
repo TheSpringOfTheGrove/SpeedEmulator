@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using SpeedEmulator.Models;
 using SpeedEmulator.Services;
 
@@ -761,6 +762,9 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             if (bankName == "平安")
             {
                 yield return Template("平安个人电子版", 0, string.Empty, "A4Portrait");
+                yield return Template("平安个人电子版2", 0, string.Empty, "A4Portrait");
+                yield return Template("平安个人电子版3", 0, string.Empty, "A4Portrait");
+                yield return Template("平安个人电子版4", 0, "邮件同步", "A4Portrait");
                 yield return Template("平安个人纸质版1", rows, string.Empty, "A4Portrait");
                 yield return Template("平安个人纸质版2", rows, string.Empty, "A4Portrait");
                 yield break;
@@ -1368,6 +1372,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             var type = source.GetType();
             var name = Convert.ToString(type.GetProperty("Name")?.GetValue(source)) ?? string.Empty;
             var recordPageSize = ConvertToInt(type.GetProperty("PageSize")?.GetValue(source));
+            var pdfData = Convert.ToString(type.GetProperty("PdfData")?.GetValue(source)) ?? string.Empty;
             var vendorConfig = type.GetProperty("PdfConfig")?.GetValue(source);
             if (vendorConfig is null && configFactory is not null && !string.IsNullOrWhiteSpace(name))
             {
@@ -1375,6 +1380,11 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             }
 
             var config = ReadPdfConfig(vendorConfig, name, recordPageSize);
+            if (TryReadAccountTimeSortDirection(pdfData, out var descending))
+            {
+                config ??= new PrintPdfConfig { Name = name };
+                config.Descending = descending;
+            }
             var pageRows = config?.RowCount > 0 ? config.RowCount : recordPageSize;
 
             return new VendorTemplateItem(
@@ -1383,9 +1393,30 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 name,
                 pageRows,
                 Convert.ToString(type.GetProperty("Remark")?.GetValue(source)) ?? string.Empty,
-                Convert.ToString(type.GetProperty("PdfData")?.GetValue(source)) ?? string.Empty,
+                pdfData,
                 ConvertToBool(type.GetProperty("IsSystem")?.GetValue(source), defaultValue: true),
                 config);
+        }
+
+        private static bool TryReadAccountTimeSortDirection(string pdfData, out bool descending)
+        {
+            descending = false;
+            if (string.IsNullOrWhiteSpace(pdfData))
+            {
+                return false;
+            }
+
+            var match = Regex.Match(
+                pdfData,
+                @"<Sort\s+isList=""true""\s+count=""2"">\s*<value>(?<direction>ASC|DESC)</value>\s*<value>AccountTime</value>\s*</Sort>",
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return false;
+            }
+
+            descending = string.Equals(match.Groups["direction"].Value, "DESC", StringComparison.OrdinalIgnoreCase);
+            return true;
         }
 
         private static PrintPdfConfig? ReadPdfConfig(object? source, string templateName, int pageRows)

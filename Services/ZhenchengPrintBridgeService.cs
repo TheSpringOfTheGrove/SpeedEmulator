@@ -272,6 +272,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             NormalizeCgbPersonalElectronicBlankPages(context, path);
             NormalizeCgbPersonalElectronicFooterPdf(context, path);
             NormalizeMinshengPersonalVoucherColumns(context, path);
+            NormalizeBocomCorporateElectronic2CurrentPageCounts(context, path);
             return;
         }
 
@@ -2039,6 +2040,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 && context.Template.Name.Contains("光大对公电子版", StringComparison.Ordinal);
         }
 
+        private static bool IsBocomCorporateElectronicTemplate(PrintRenderContext context)
+        {
+            return (context.Bank.Name.Contains("交行对公", StringComparison.Ordinal)
+                    || context.BankUser.BankName.Contains("交行对公", StringComparison.Ordinal))
+                && context.Template.Name.Contains("交行对公电子版", StringComparison.Ordinal);
+        }
+
         private static IEnumerable<int?> GetVendorQuestPdfPageRowAttempts(
             PrintRenderContext context,
             ResolvedTemplate resolvedTemplate)
@@ -2048,6 +2056,24 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 yield return null;
                 yield break;
+            }
+
+            // The vendor Everbright corporate electronic template reserves one
+            // configured row for its repeating page structure. Passing all 17
+            // configured rows makes QuestPDF place row 17 alone on a spill page,
+            // while the vendor paginator still starts the next 17-row batch on a
+            // new page. Use the actual printable capacity for this template.
+            if (IsEverbrightCorporateElectronicTemplate(context) && pageRows == 17)
+            {
+                pageRows = 16;
+            }
+
+            // The 22nd row fills the last table slot and pushes the statement
+            // cutoff footer onto a page of its own. Keep one slot for that footer
+            // so the following vendor batch does not start after an empty page.
+            if (IsBocomCorporateElectronicTemplate(context) && pageRows == 22)
+            {
+                pageRows = 21;
             }
 
             yield return pageRows;
@@ -4329,6 +4355,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyPostalBankUserFields(context, target, values);
         }
 
+        if (string.Equals(context.Bank.Name, "中行", StringComparison.Ordinal)
+            && context.Bank.Type == BankTypes.Personal)
+        {
+            ApplyBocPersonalBankUserFields(context, target, values);
+        }
+
         if (IsPingAnPrintContext(context))
         {
             ApplyPingAnBankUserFields(context, target, values);
@@ -4342,6 +4374,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (IsMinshengBank(context.Bank))
         {
             ApplyMinshengBankUserFields(context, target, values);
+            ApplyMinshengCorporatePrintFooterFields(context, target, values);
         }
 
         if (IsIndustrialBank(context.Bank))
@@ -4363,6 +4396,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 Set(target, "UsernameEn", englishName);
             }
+        }
+
+        if (IsBocomCorporateElectronicPrintContext(context))
+        {
+            ApplyBocomCorporateBankUserFields(context, target, values);
         }
 
         if (IsWechatPersonalStatementPrintContext(context))
@@ -4419,11 +4457,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         var customerNumber = NormalizeSingleLinePrintText(FirstNotBlank(
-            GetValue(values, "\u5BA2\u6237\u53F7"),
             GetValue(values, "\u5BA2\u6237\u7F16\u53F7"),
+            GetValue(values, "\u5BA2\u6237\u53F7"),
             GetValue(values, "CustomerNo"),
             GetValue(values, "CustomerNumber"),
-            GetBankUserColumnValue(context, values, "\u5BA2\u6237\u53F7", "\u5BA2\u6237\u7F16\u53F7"),
+            GetBankUserColumnValue(context, values, "\u5BA2\u6237\u7F16\u53F7", "\u5BA2\u6237\u53F7"),
             context.BankUser.UserCode));
         if (!string.IsNullOrWhiteSpace(customerNumber))
         {
@@ -4432,6 +4470,41 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "CustomerNumber", customerNumber);
             Set(target, "CustomerCode", customerNumber);
             Set(target, "PrintNo", customerNumber);
+
+            // The vendor Stimulsoft template named “浦发对公电子版（新版）”
+            // binds its Customer Number label to BankUser.Remark.
+            if (string.Equals(context.Template.Name, "浦发对公电子版（新版）", StringComparison.Ordinal))
+            {
+                Set(target, "Remark", customerNumber);
+            }
+        }
+    }
+
+    private static void ApplyBocPersonalBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var debitCardNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.CardNo,
+            GetBankUserColumnValue(context, values, "借记卡号"),
+            GetValue(values, "CardNum")));
+        if (!string.IsNullOrWhiteSpace(debitCardNumber))
+        {
+            // BOC personal templates bind “借记卡号” to Account.
+            Set(target, "Account", debitCardNumber);
+        }
+
+        var accountNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.AccountNo,
+            GetBankUserColumnValue(context, values, "账号"),
+            GetValue(values, "Account")));
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            // BOC personal templates bind the separately labelled “账号” to CardNum.
+            Set(target, "AccountNum", accountNumber);
+            Set(target, "AccountNo", accountNumber);
+            Set(target, "CardNum", accountNumber);
         }
     }
 
@@ -4794,11 +4867,86 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
     }
 
+    private static void ApplyBocomCorporateBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var accountName = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.AccountName,
+            GetBankUserColumnValue(context, values, "存款人名称", "单位名称", "户名", "账户名称"),
+            GetValue(values, "Username")));
+        if (!string.IsNullOrWhiteSpace(accountName))
+        {
+            Set(target, "Username", accountName);
+            // The vendor BOCOM corporate electronic templates bind the header
+            // labelled "户名" to BankUser.OperationArea rather than Username.
+            Set(target, "OperationArea", accountName);
+        }
+
+        var branchName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "支行名称", "开户机构", "开户行"),
+            context.BankUser.OpenBranch,
+            GetValue(values, "PrintBranch"),
+            GetValue(values, "OpenBranch")));
+        if (!string.IsNullOrWhiteSpace(branchName))
+        {
+            // The vendor BOCOM corporate templates bind "开户机构" to
+            // BankUser.PrintBranch. Keep OpenBranch aligned for sibling templates.
+            Set(target, "PrintBranch", branchName);
+            Set(target, "OpenBranch", branchName);
+        }
+
+        var openingBalance = context.BankUser.OpeningBalance;
+        if (openingBalance == 0)
+        {
+            openingBalance = ParseNullableDecimal(GetBankUserColumnValue(context, values, "期初余额")) ?? 0m;
+        }
+
+        Set(target, "InitialBalance", (double)openingBalance);
+    }
+
+    private static bool IsBocomCorporateElectronicPrintContext(PrintRenderContext context)
+    {
+        return (context.Bank.Name.Contains("交行对公", StringComparison.Ordinal)
+                || context.BankUser.BankName.Contains("交行对公", StringComparison.Ordinal))
+            && context.Template.Name.Contains("交行对公电子版", StringComparison.Ordinal);
+    }
+
     private static void ApplyPingAnBankUserFields(
         PrintRenderContext context,
         object target,
         IReadOnlyDictionary<string, object?> values)
     {
+        var listNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "\u6E05\u5355\u7F16\u53F7"),
+            GetValue(values, "UserNum")));
+        if (!string.IsNullOrWhiteSpace(listNumber))
+        {
+            // Ping An personal templates bind "\u6E05\u5355\u7F16\u53F7 / List Number"
+            // to the vendor BankUser.VoucherType property.
+            Set(target, "VoucherType", listNumber);
+        }
+
+        var accountNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            context.BankUser.AccountNo,
+            GetBankUserColumnValue(context, values, "\u8D26\u53F7", "\u5361\u53F7", "\u5361\u53F7/\u8D26\u53F7"),
+            GetValue(values, "AccountNum"),
+            GetValue(values, "Account"),
+            GetValue(values, "CardNum")));
+        if (!string.IsNullOrWhiteSpace(accountNumber))
+        {
+            // Electronic template 4 places the account in a fixed-width QuestPDF cell.
+            // Its vendor layout clips a 19-digit unbreakable word down to the last glyph.
+            // Soft hyphens provide invisible wrap opportunities while preserving the number.
+            var printableAccountNumber = IsPingAnPersonalElectronic4Template(context)
+                ? InsertInvisiblePrintBreaks(accountNumber, 4)
+                : accountNumber;
+            Set(target, "AccountNum", printableAccountNumber);
+            Set(target, "Account", printableAccountNumber);
+            Set(target, "CardNum", printableAccountNumber);
+        }
+
         var acceptBranch = NormalizeSingleLinePrintText(FirstNotBlank(
             GetBankUserColumnValue(context, values, "\u53D7\u7406\u884C", "\u53D7\u7406\u7F51\u70B9", "\u64CD\u4F5C\u7F51\u70B9"),
             GetValue(values, "AcceptBranch"),
@@ -4807,6 +4955,33 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             Set(target, "AcceptBranch", acceptBranch);
         }
+    }
+
+    private static bool IsPingAnPersonalElectronic4Template(PrintRenderContext context)
+    {
+        return IsPingAnPrintContext(context)
+            && context.Template.Name.Contains("\u5E73\u5B89\u4E2A\u4EBA\u7535\u5B50\u72484", StringComparison.Ordinal);
+    }
+
+    private static string InsertInvisiblePrintBreaks(string value, int groupSize)
+    {
+        if (string.IsNullOrEmpty(value) || groupSize <= 0 || value.Length <= groupSize)
+        {
+            return value;
+        }
+
+        var builder = new StringBuilder(value.Length + (value.Length / groupSize));
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (index > 0 && index % groupSize == 0)
+            {
+                builder.Append('\u00AD');
+            }
+
+            builder.Append(value[index]);
+        }
+
+        return builder.ToString();
     }
 
     private static void ApplyEverbrightPersonalElectronicBankUserFields(
@@ -4853,6 +5028,41 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         // blank even though the local BankUser column contained "\u949E".
         Set(target, "CashCheck", cashExchange);
         Set(target, "CashExchange", cashExchange);
+    }
+
+    private static void ApplyMinshengCorporatePrintFooterFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        if (!context.Bank.Name.Contains("\u5BF9\u516C", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var printChannel = NormalizeSingleLinePrintText(
+            GetBankUserColumnValue(context, values, "\u6253\u5370\u6E20\u9053"));
+        if (!string.IsNullOrWhiteSpace(printChannel))
+        {
+            Set(target, "DepositMethod", printChannel);
+        }
+
+        var printOperator = NormalizeSingleLinePrintText(
+            GetBankUserColumnValue(context, values, "\u6253\u5370\u67DC\u5458"));
+        if (!string.IsNullOrWhiteSpace(printOperator))
+        {
+            Set(target, "Operator", printOperator);
+            Set(target, "OperatorNum", printOperator);
+            Set(target, "PassbookNum", printOperator);
+        }
+
+        if (ResolveBankUserPrintTime(context, values) is { } printTime)
+        {
+            Set(target, "PrintTime", printTime);
+            Set(target, "PrintDate", printTime);
+            Set(target, "PrintDateTime", printTime);
+        }
+
     }
 
     private static void ApplyIndustrialBankUserFields(
@@ -8516,6 +8726,100 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
     }
+
+    private static void NormalizeBocomCorporateElectronic2CurrentPageCounts(PrintRenderContext context, string path)
+    {
+        if (!string.Equals(context.Bank.Name, "交行对公", StringComparison.Ordinal)
+            || !string.Equals(context.Template.Name, "交行对公电子版2", StringComparison.Ordinal)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var records = GetVendorPrintRecords(context);
+            var configuredRows = context.Template.PageRows > 0
+                ? context.Template.PageRows
+                : context.Template.Config.RowCount;
+            var pageRows = configuredRows == 22 ? 21 : Math.Max(1, configuredRows);
+            List<(PdfTextBox? Debit, PdfTextBox? Credit)> pageBoxes = [];
+            using (var textDocument = UglyToad.PdfPig.PdfDocument.Open(path))
+            {
+                foreach (var page in textDocument.GetPages())
+                {
+                    PdfTextBox? debit = null;
+                    PdfTextBox? credit = null;
+                    foreach (var word in page.GetWords())
+                    {
+                        if (word.Text.StartsWith("当前账单借方发生数", StringComparison.Ordinal))
+                        {
+                            debit = new PdfTextBox(word.Text, word.BoundingBox.Left, word.BoundingBox.Right,
+                                page.Height - word.BoundingBox.Top, page.Height - word.BoundingBox.Bottom);
+                        }
+                        else if (word.Text.StartsWith("当前账单贷方发生数", StringComparison.Ordinal))
+                        {
+                            credit = new PdfTextBox(word.Text, word.BoundingBox.Left, word.BoundingBox.Right,
+                                page.Height - word.BoundingBox.Top, page.Height - word.BoundingBox.Bottom);
+                        }
+                    }
+
+                    pageBoxes.Add((debit, credit));
+                }
+            }
+
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            var changed = false;
+            for (var pageIndex = 0; pageIndex < document.PageCount && pageIndex < pageBoxes.Count; pageIndex++)
+            {
+                var pageRecords = records.Skip(pageIndex * pageRows).Take(pageRows).ToArray();
+                if (pageRecords.Length == 0)
+                {
+                    continue;
+                }
+
+                var debitCount = pageRecords.Count(record => record.DebitAmount.HasValue && Math.Abs(record.DebitAmount.Value) > 0.005d);
+                var creditCount = pageRecords.Count(record => record.CreditAmount.HasValue && Math.Abs(record.CreditAmount.Value) > 0.005d);
+                using var graphics = XGraphics.FromPdfPage(document.Pages[pageIndex], XGraphicsPdfPageOptions.Append);
+                changed |= ReplaceBocomCurrentPageCount(graphics, pageBoxes[pageIndex].Debit, debitCount);
+                changed |= ReplaceBocomCurrentPageCount(graphics, pageBoxes[pageIndex].Credit, creditCount);
+            }
+
+            if (changed)
+            {
+                document.Save(path);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool ReplaceBocomCurrentPageCount(XGraphics graphics, PdfTextBox? box, int count)
+    {
+        if (box is null)
+        {
+            return false;
+        }
+
+        var separatorIndex = box.Value.Text.LastIndexOfAny(['：', ':']);
+        var oldValue = separatorIndex >= 0 ? box.Value.Text[(separatorIndex + 1)..].Trim() : string.Empty;
+        var newValue = count.ToString(CultureInfo.InvariantCulture);
+        const double digitWidth = 5.4d;
+        var digits = Math.Max(Math.Max(1, oldValue.Length), newValue.Length);
+        var left = box.Value.Right - (Math.Max(1, oldValue.Length) * digitWidth) - 1d;
+        var width = digits * digitWidth + 4d;
+        graphics.DrawRectangle(XBrushes.White, left, box.Value.Top - 1d, width, box.Value.Bottom - box.Value.Top + 2d);
+        graphics.DrawString(newValue, new XFont("SimSun", 7d, XFontStyle.Regular), XBrushes.Black,
+            new XPoint(left + 1d, box.Value.Bottom - 1.2d));
+        return true;
+    }
+
+    private readonly record struct PdfTextBox(string Text, double Left, double Right, double Top, double Bottom);
 
     private static void NormalizeCgbPersonalElectronicBlankPages(PrintRenderContext context, string path)
     {

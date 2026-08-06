@@ -1,36 +1,28 @@
 {
   "runtimeTarget": {
-    "name": ".NETCoreApp,Version=v8.0",
+    "name": ".NETCoreApp,Version=v8.0/win-x64",
     "signature": ""
   },
   "compilationOptions": {},
   "targets": {
-    ".NETCoreApp,Version=v8.0": {
+    ".NETCoreApp,Version=v8.0": {},
+    ".NETCoreApp,Version=v8.0/win-x64": {
       "真诚财务软件/1.0.0": {
         "dependencies": {
-          "CommunityToolkit.Mvvm": "8.4.2",
-          "DeepCopy": "1.0.3",
-          "EPPlus": "8.6.0",
-          "Extended.Wpf.Toolkit": "5.0.0",
-          "LiveChartsCore.SkiaSharpView.WPF": "2.0.4",
+          "Extended.Wpf.Toolkit": "5.1.2",
+          "LiveChartsCore.SkiaSharpView.WPF": "2.0.5",
           "Microsoft.Toolkit.Uwp.Notifications": "7.1.3",
-          "Microsoft.Web.WebView2": "1.0.3967.48",
-          "MiniExcel": "1.44.1",
-          "PdfSharpCore": "1.3.67",
-          "QRCoder": "1.8.0",
-          "Quartz": "3.18.1",
-          "QuestPDF": "2026.5.0",
-          "SQLitePCLRaw.bundle_e_sqlcipher": "2.1.11",
+          "Microsoft.Web.WebView2": "1.0.4078.44",
+          "MiniExcel": "1.45.0",
           "SingleInstanceCore": "2.2.2",
-          "SqlSugarCore": "5.1.4.214",
-          "Stimulsoft.Reports.Wpf": "2026.2.4",
           "System.Data.SQLite": "2.0.3",
-          "System.Linq.Dynamic.Core": "1.7.2",
-          "System.Management": "10.0.9",
+          "System.Linq.Dynamic.Core": "1.7.3",
+          "System.Management": "10.0.10",
           "WPF-UI": "4.3.0",
-          "Microsoft.Web.WebView2.Core": "1.0.3967.48",
-          "Microsoft.Web.WebView2.WinForms": "1.0.3967.48",
-          "Microsoft.Web.WebView2.Wpf": "1.0.3967.48",
+          "caiwu-core": "1.0.0",
+          "Microsoft.Web.WebView2.Core": "1.0.4078.44",
+          "Microsoft.Web.WebView2.WinForms": "1.0.4078.44",
+          "Microsoft.Web.WebView2.Wpf": "1.0.4078.44",
           "runtimepack.Microsoft.Windows.SDK.NET.Ref": "10.0.17763.57"
         },
         "runtime": {
@@ -53,7 +45,9 @@
         "dependencies": {
           "Microsoft.Bcl.AsyncInterfaces": "1.1.1",
           "System.ClientModel": "1.0.0",
-          "System.Memory.Data": "1.0.2"
+          "System.Memory.Data": "1.0.2",
+          "System.Text.Encodings.Web": "10.0.2",
+          "System.Text.Json": "10.0.2"
         },
         "runtime": {
           "lib/net6.0/Azure.Core.dll": {
@@ -66,12 +60,21 @@
         "dependencies": {
           "Azure.Core": "1.38.0",
           "Microsoft.Identity.Client": "4.61.3",
-          "Microsoft.Identity.Client.Extensions.Msal": "4.61.3"
+          "Microsoft.Identity.Client.Extensions.Msal": "4.61.3",
+          "System.Text.Json": "10.0.2"
         },
         "runtime": {
           "lib/netstandard2.0/Azure.Identity.dll": {
             "assemblyVersion": "1.11.4.0",
             "fileVersion": "1.1100.424.31005"
+          }
+        }
+      },
+      "BouncyCastle.Cryptography/2.6.2": {
+        "runtime": {
+          "lib/net6.0/BouncyCastle.Cryptography.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.6.2.46322"
           }
         }
       },
@@ -91,7 +94,7 @@
           }
         }
       },
-      "EPPlus/8.6.0": {
+      "EPPlus/8.6.1": {
         "dependencies": {
           "EPPlus.Interfaces": "8.4.0",
           "Microsoft.Extensions.Configuration.Json": "8.0.1",
@@ -101,8 +104,8 @@
         },
         "runtime": {
           "lib/net8.0/EPPlus.dll": {
-            "assemblyVersion": "8.6.0.0",
-            "fileVersion": "8.6.0.0"
+            "assemblyVersion": "8.6.1.0",
+            "fileVersion": "8.6.1.0"
           }
         }
       },
@@ -114,27 +117,27 @@
           }
         }
       },
-      "Extended.Wpf.Toolkit/5.0.0": {
+      "Extended.Wpf.Toolkit/5.1.2": {
         "runtime": {
           "lib/net5.0/Xceed.Wpf.AvalonDock.Themes.Aero.dll": {
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.0.0.0"
+            "assemblyVersion": "5.1.0.0",
+            "fileVersion": "5.1.0.0"
           },
           "lib/net5.0/Xceed.Wpf.AvalonDock.Themes.Metro.dll": {
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.0.0.0"
+            "assemblyVersion": "5.1.0.0",
+            "fileVersion": "5.1.0.0"
           },
           "lib/net5.0/Xceed.Wpf.AvalonDock.Themes.VS2010.dll": {
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.0.0.0"
+            "assemblyVersion": "5.1.0.0",
+            "fileVersion": "5.1.0.0"
           },
           "lib/net5.0/Xceed.Wpf.AvalonDock.dll": {
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.0.0.0"
+            "assemblyVersion": "5.1.0.0",
+            "fileVersion": "5.1.0.0"
           },
           "lib/net5.0/Xceed.Wpf.Toolkit.dll": {
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.0.0.0"
+            "assemblyVersion": "5.1.0.0",
+            "fileVersion": "5.1.0.0"
           }
         },
         "resources": {
@@ -178,8 +181,7 @@
       },
       "HarfBuzzSharp/8.3.1.1": {
         "dependencies": {
-          "HarfBuzzSharp.NativeAssets.Win32": "8.3.1.1",
-          "HarfBuzzSharp.NativeAssets.macOS": "8.3.1.1"
+          "HarfBuzzSharp.NativeAssets.Win32": "8.3.1.1"
         },
         "runtime": {
           "lib/net8.0/HarfBuzzSharp.dll": {
@@ -188,65 +190,128 @@
           }
         }
       },
-      "HarfBuzzSharp.NativeAssets.macOS/8.3.1.1": {
-        "runtimeTargets": {
-          "runtimes/osx/native/libHarfBuzzSharp.dylib": {
-            "rid": "osx",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          }
-        }
-      },
       "HarfBuzzSharp.NativeAssets.Win32/8.3.1.1": {
-        "runtimeTargets": {
-          "runtimes/win-arm64/native/libHarfBuzzSharp.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
+        "native": {
           "runtimes/win-x64/native/libHarfBuzzSharp.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/libHarfBuzzSharp.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
       },
-      "LiveChartsCore/2.0.4": {
+      "itext/9.7.0": {
+        "dependencies": {
+          "Microsoft.DotNet.PlatformAbstractions": "1.1.0",
+          "Microsoft.Extensions.DependencyModel": "10.0.2",
+          "Microsoft.Extensions.Logging": "5.0.0",
+          "System.Security.Cryptography.Xml": "8.0.3",
+          "itext.commons": "9.7.0"
+        },
+        "runtime": {
+          "lib/netstandard2.0/itext.barcodes.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.bouncy-castle-connector.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.forms.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.io.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.kernel.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.layout.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.pdfa.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.pdfua.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.sign.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.styledxmlparser.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          },
+          "lib/netstandard2.0/itext.svg.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          }
+        }
+      },
+      "itext.bouncy-castle-adapter/9.7.0": {
+        "dependencies": {
+          "BouncyCastle.Cryptography": "2.6.2",
+          "itext.commons": "9.7.0"
+        },
+        "runtime": {
+          "lib/netstandard2.0/itext.bouncy-castle-adapter.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          }
+        }
+      },
+      "itext.commons/9.7.0": {
+        "dependencies": {
+          "Microsoft.Extensions.Logging": "5.0.0",
+          "System.Text.Json": "10.0.2"
+        },
+        "runtime": {
+          "lib/netstandard2.0/itext.commons.dll": {
+            "assemblyVersion": "9.7.0.0",
+            "fileVersion": "9.7.0.0"
+          }
+        }
+      },
+      "itext7/9.7.0": {
+        "dependencies": {
+          "itext": "9.7.0"
+        }
+      },
+      "LiveChartsCore/2.0.5": {
         "runtime": {
           "lib/net8.0-windows7.0/LiveChartsCore.dll": {
-            "assemblyVersion": "2.0.4.0",
-            "fileVersion": "2.0.4.0"
+            "assemblyVersion": "2.0.5.0",
+            "fileVersion": "2.0.5.0"
           }
         }
       },
-      "LiveChartsCore.SkiaSharpView/2.0.4": {
+      "LiveChartsCore.SkiaSharpView/2.0.5": {
         "dependencies": {
-          "LiveChartsCore": "2.0.4",
-          "SkiaSharp": "3.119.0",
+          "LiveChartsCore": "2.0.5",
+          "SkiaSharp": "3.119.1",
           "SkiaSharp.HarfBuzz": "3.119.0"
         },
         "runtime": {
           "lib/net8.0-windows7.0/LiveChartsCore.SkiaSharpView.dll": {
-            "assemblyVersion": "2.0.4.0",
-            "fileVersion": "2.0.4.0"
+            "assemblyVersion": "2.0.5.0",
+            "fileVersion": "2.0.5.0"
           }
         }
       },
-      "LiveChartsCore.SkiaSharpView.WPF/2.0.4": {
+      "LiveChartsCore.SkiaSharpView.WPF/2.0.5": {
         "dependencies": {
-          "LiveChartsCore.SkiaSharpView": "2.0.4",
+          "LiveChartsCore.SkiaSharpView": "2.0.5",
           "SkiaSharp.HarfBuzz": "3.119.0",
           "SkiaSharp.Views.WPF": "3.119.0"
         },
         "runtime": {
           "lib/net8.0-windows7.0/LiveChartsCore.SkiaSharpView.WPF.dll": {
-            "assemblyVersion": "2.0.4.0",
-            "fileVersion": "2.0.4.0"
+            "assemblyVersion": "2.0.5.0",
+            "fileVersion": "2.0.5.0"
           }
         }
       },
@@ -423,7 +488,7 @@
           "System.Runtime.Caching": "8.0.0"
         },
         "runtime": {
-          "lib/net8.0/Microsoft.Data.SqlClient.dll": {
+          "runtimes/win/lib/net8.0/Microsoft.Data.SqlClient.dll": {
             "assemblyVersion": "5.0.0.0",
             "fileVersion": "5.23.25118.4"
           }
@@ -459,61 +524,38 @@
           "lib/net8.0/zh-Hant/Microsoft.Data.SqlClient.resources.dll": {
             "locale": "zh-Hant"
           }
-        },
-        "runtimeTargets": {
-          "runtimes/unix/lib/net8.0/Microsoft.Data.SqlClient.dll": {
-            "rid": "unix",
-            "assetType": "runtime",
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.23.25118.4"
-          },
-          "runtimes/win/lib/net8.0/Microsoft.Data.SqlClient.dll": {
-            "rid": "win",
-            "assetType": "runtime",
-            "assemblyVersion": "5.0.0.0",
-            "fileVersion": "5.23.25118.4"
-          }
         }
       },
       "Microsoft.Data.SqlClient.SNI.runtime/5.2.0": {
-        "runtimeTargets": {
-          "runtimes/win-arm/native/Microsoft.Data.SqlClient.SNI.dll": {
-            "rid": "win-arm",
-            "assetType": "native",
-            "fileVersion": "5.2.0.0"
-          },
-          "runtimes/win-arm64/native/Microsoft.Data.SqlClient.SNI.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "5.2.0.0"
-          },
+        "native": {
           "runtimes/win-x64/native/Microsoft.Data.SqlClient.SNI.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "5.2.0.0"
-          },
-          "runtimes/win-x86/native/Microsoft.Data.SqlClient.SNI.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "5.2.0.0"
           }
         }
       },
-      "Microsoft.Data.Sqlite/9.0.0": {
+      "Microsoft.Data.Sqlite/10.0.9": {
         "dependencies": {
-          "Microsoft.Data.Sqlite.Core": "9.0.0",
-          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.10",
+          "Microsoft.Data.Sqlite.Core": "10.0.9",
+          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.11",
           "SQLitePCLRaw.core": "2.1.11"
         }
       },
-      "Microsoft.Data.Sqlite.Core/9.0.0": {
+      "Microsoft.Data.Sqlite.Core/10.0.9": {
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.11"
         },
         "runtime": {
           "lib/net8.0/Microsoft.Data.Sqlite.dll": {
-            "assemblyVersion": "9.0.0.0",
-            "fileVersion": "9.0.24.52902"
+            "assemblyVersion": "10.0.9.0",
+            "fileVersion": "10.0.926.27113"
+          }
+        }
+      },
+      "Microsoft.DotNet.PlatformAbstractions/1.1.0": {
+        "runtime": {
+          "lib/netstandard1.3/Microsoft.DotNet.PlatformAbstractions.dll": {
+            "assemblyVersion": "1.1.0.0",
+            "fileVersion": "1.1.0.0"
           }
         }
       },
@@ -569,6 +611,37 @@
           }
         }
       },
+      "Microsoft.Extensions.DependencyInjection/5.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "5.0.0"
+        },
+        "runtime": {
+          "lib/net5.0/Microsoft.Extensions.DependencyInjection.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.0.20.51904"
+          }
+        }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions/5.0.0": {
+        "runtime": {
+          "lib/netstandard2.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.0.20.51904"
+          }
+        }
+      },
+      "Microsoft.Extensions.DependencyModel/10.0.2": {
+        "dependencies": {
+          "System.Text.Encodings.Web": "10.0.2",
+          "System.Text.Json": "10.0.2"
+        },
+        "runtime": {
+          "lib/net8.0/Microsoft.Extensions.DependencyModel.dll": {
+            "assemblyVersion": "10.0.0.2",
+            "fileVersion": "10.0.225.61305"
+          }
+        }
+      },
       "Microsoft.Extensions.FileProviders.Abstractions/8.0.0": {
         "dependencies": {
           "Microsoft.Extensions.Primitives": "8.0.0"
@@ -601,11 +674,37 @@
           }
         }
       },
-      "Microsoft.Extensions.Logging.Abstractions/2.1.1": {
+      "Microsoft.Extensions.Logging/5.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection": "5.0.0",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "5.0.0",
+          "Microsoft.Extensions.Logging.Abstractions": "5.0.0",
+          "Microsoft.Extensions.Options": "5.0.0"
+        },
+        "runtime": {
+          "lib/netstandard2.1/Microsoft.Extensions.Logging.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.0.20.51904"
+          }
+        }
+      },
+      "Microsoft.Extensions.Logging.Abstractions/5.0.0": {
         "runtime": {
           "lib/netstandard2.0/Microsoft.Extensions.Logging.Abstractions.dll": {
-            "assemblyVersion": "2.1.1.0",
-            "fileVersion": "2.1.1.18157"
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.0.20.51904"
+          }
+        }
+      },
+      "Microsoft.Extensions.Options/5.0.0": {
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "5.0.0",
+          "Microsoft.Extensions.Primitives": "8.0.0"
+        },
+        "runtime": {
+          "lib/net5.0/Microsoft.Extensions.Options.dll": {
+            "assemblyVersion": "5.0.0.0",
+            "fileVersion": "5.0.20.51904"
           }
         }
       },
@@ -649,7 +748,9 @@
       },
       "Microsoft.IdentityModel.JsonWebTokens/6.35.0": {
         "dependencies": {
-          "Microsoft.IdentityModel.Tokens": "6.35.0"
+          "Microsoft.IdentityModel.Tokens": "6.35.0",
+          "System.Text.Encodings.Web": "10.0.2",
+          "System.Text.Json": "10.0.2"
         },
         "runtime": {
           "lib/net6.0/Microsoft.IdentityModel.JsonWebTokens.dll": {
@@ -731,30 +832,18 @@
           }
         }
       },
-      "Microsoft.Web.WebView2/1.0.3967.48": {
-        "runtimeTargets": {
-          "runtimes/win-arm64/native/WebView2Loader.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "1.0.3967.48"
-          },
+      "Microsoft.Web.WebView2/1.0.4078.44": {
+        "native": {
           "runtimes/win-x64/native/WebView2Loader.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "1.0.3967.48"
-          },
-          "runtimes/win-x86/native/WebView2Loader.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "1.0.3967.48"
+            "fileVersion": "1.0.4078.44"
           }
         }
       },
-      "MiniExcel/1.44.1": {
+      "MiniExcel/1.45.0": {
         "runtime": {
           "lib/net8.0/MiniExcel.dll": {
-            "assemblyVersion": "1.44.1.0",
-            "fileVersion": "1.44.1.0"
+            "assemblyVersion": "1.45.0.0",
+            "fileVersion": "1.45.0.0"
           }
         }
       },
@@ -870,133 +959,29 @@
           }
         }
       },
-      "Quartz/3.18.1": {
+      "Quartz/3.18.2": {
         "dependencies": {
-          "Microsoft.Extensions.Logging.Abstractions": "2.1.1"
+          "Microsoft.Extensions.Logging.Abstractions": "5.0.0"
         },
         "runtime": {
           "lib/net8.0/Quartz.dll": {
-            "assemblyVersion": "3.18.1.0",
-            "fileVersion": "3.18.1.0"
+            "assemblyVersion": "3.18.2.0",
+            "fileVersion": "3.18.2.0"
           }
         }
       },
-      "QuestPDF/2026.5.0": {
+      "QuestPDF/2026.7.1": {
         "runtime": {
           "lib/net8.0/QuestPDF.dll": {
-            "assemblyVersion": "2026.5.0.0",
-            "fileVersion": "2026.5.0.0"
+            "assemblyVersion": "2026.7.1.0",
+            "fileVersion": "2026.7.1.0"
           }
         },
-        "runtimeTargets": {
-          "runtimes/linux-arm64/native/libQuestPdfSkia.so": {
-            "rid": "linux-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-arm64/native/libqpdf.so": {
-            "rid": "linux-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-x64/native/libQuestPdfSkia.so": {
-            "rid": "linux-musl-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-x64/native/libqpdf.so": {
-            "rid": "linux-musl-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x64/native/libQuestPdfSkia.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x64/native/libqpdf.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-arm64/native/libQuestPdfSkia.dylib": {
-            "rid": "osx-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-arm64/native/libqpdf.dylib": {
-            "rid": "osx-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-x64/native/libQuestPdfSkia.dylib": {
-            "rid": "osx-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-x64/native/libqpdf.dylib": {
-            "rid": "osx-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
+        "native": {
           "runtimes/win-x64/native/QuestPdfSkia.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/libgcc_s_seh-1.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/libstdc++-6.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/libwinpthread-1.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "1.0.0.0"
           },
           "runtimes/win-x64/native/qpdf.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x64/native/zlib1.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/QuestPdfSkia.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/libgcc_s_dw2-1.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/libstdc++-6.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/libwinpthread-1.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "1.0.0.0"
-          },
-          "runtimes/win-x86/native/qpdf.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/zlib1.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
@@ -1036,22 +1021,21 @@
           }
         }
       },
-      "SkiaSharp/3.119.0": {
+      "SkiaSharp/3.119.1": {
         "dependencies": {
-          "SkiaSharp.NativeAssets.Win32": "3.119.0",
-          "SkiaSharp.NativeAssets.macOS": "3.119.0"
+          "SkiaSharp.NativeAssets.Win32": "3.119.1"
         },
         "runtime": {
           "lib/net8.0/SkiaSharp.dll": {
             "assemblyVersion": "3.119.0.0",
-            "fileVersion": "3.119.0.0"
+            "fileVersion": "3.119.1.0"
           }
         }
       },
       "SkiaSharp.HarfBuzz/3.119.0": {
         "dependencies": {
           "HarfBuzzSharp": "8.3.1.1",
-          "SkiaSharp": "3.119.0"
+          "SkiaSharp": "3.119.1"
         },
         "runtime": {
           "lib/net8.0/SkiaSharp.HarfBuzz.dll": {
@@ -1060,37 +1044,16 @@
           }
         }
       },
-      "SkiaSharp.NativeAssets.macOS/3.119.0": {
-        "runtimeTargets": {
-          "runtimes/osx/native/libSkiaSharp.dylib": {
-            "rid": "osx",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          }
-        }
-      },
-      "SkiaSharp.NativeAssets.Win32/3.119.0": {
-        "runtimeTargets": {
-          "runtimes/win-arm64/native/libSkiaSharp.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
+      "SkiaSharp.NativeAssets.Win32/3.119.1": {
+        "native": {
           "runtimes/win-x64/native/libSkiaSharp.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/libSkiaSharp.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
       },
       "SkiaSharp.Views.Desktop.Common/3.119.0": {
         "dependencies": {
-          "SkiaSharp": "3.119.0"
+          "SkiaSharp": "3.119.1"
         },
         "runtime": {
           "lib/net8.0/SkiaSharp.Views.Desktop.Common.dll": {
@@ -1103,7 +1066,7 @@
         "dependencies": {
           "OpenTK": "3.3.1",
           "OpenTK.GLWpfControl": "3.3.0",
-          "SkiaSharp": "3.119.0",
+          "SkiaSharp": "3.119.1",
           "SkiaSharp.Views.Desktop.Common": "3.119.0"
         },
         "runtime": {
@@ -1125,10 +1088,10 @@
           }
         }
       },
-      "SQLitePCLRaw.bundle_e_sqlite3/2.1.10": {
+      "SQLitePCLRaw.bundle_e_sqlite3/2.1.11": {
         "dependencies": {
-          "SQLitePCLRaw.lib.e_sqlite3": "2.1.10",
-          "SQLitePCLRaw.provider.e_sqlite3": "2.1.10"
+          "SQLitePCLRaw.lib.e_sqlite3": "2.1.11",
+          "SQLitePCLRaw.provider.e_sqlite3": "2.1.11"
         }
       },
       "SQLitePCLRaw.core/2.1.11": {
@@ -1140,229 +1103,15 @@
         }
       },
       "SQLitePCLRaw.lib.e_sqlcipher/2.1.11": {
-        "runtimeTargets": {
-          "runtimes/browser-wasm/nativeassets/net8.0/e_sqlcipher.a": {
-            "rid": "browser-wasm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-arm/native/libe_sqlcipher.so": {
-            "rid": "linux-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-arm64/native/libe_sqlcipher.so": {
-            "rid": "linux-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-armel/native/libe_sqlcipher.so": {
-            "rid": "linux-armel",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-mips64/native/libe_sqlcipher.so": {
-            "rid": "linux-mips64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-arm/native/libe_sqlcipher.so": {
-            "rid": "linux-musl-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-arm64/native/libe_sqlcipher.so": {
-            "rid": "linux-musl-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-riscv64/native/libe_sqlcipher.so": {
-            "rid": "linux-musl-riscv64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-s390x/native/libe_sqlcipher.so": {
-            "rid": "linux-musl-s390x",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-x64/native/libe_sqlcipher.so": {
-            "rid": "linux-musl-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-ppc64le/native/libe_sqlcipher.so": {
-            "rid": "linux-ppc64le",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-riscv64/native/libe_sqlcipher.so": {
-            "rid": "linux-riscv64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-s390x/native/libe_sqlcipher.so": {
-            "rid": "linux-s390x",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x64/native/libe_sqlcipher.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x86/native/libe_sqlcipher.so": {
-            "rid": "linux-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/maccatalyst-arm64/native/libe_sqlcipher.dylib": {
-            "rid": "maccatalyst-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/maccatalyst-x64/native/libe_sqlcipher.dylib": {
-            "rid": "maccatalyst-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-arm64/native/libe_sqlcipher.dylib": {
-            "rid": "osx-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-x64/native/libe_sqlcipher.dylib": {
-            "rid": "osx-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-arm/native/e_sqlcipher.dll": {
-            "rid": "win-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-arm64/native/e_sqlcipher.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
+        "native": {
           "runtimes/win-x64/native/e_sqlcipher.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/e_sqlcipher.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
       },
-      "SQLitePCLRaw.lib.e_sqlite3/2.1.10": {
-        "runtimeTargets": {
-          "runtimes/browser-wasm/nativeassets/net8.0/e_sqlite3.a": {
-            "rid": "browser-wasm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-arm/native/libe_sqlite3.so": {
-            "rid": "linux-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-arm64/native/libe_sqlite3.so": {
-            "rid": "linux-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-armel/native/libe_sqlite3.so": {
-            "rid": "linux-armel",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-mips64/native/libe_sqlite3.so": {
-            "rid": "linux-mips64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-arm/native/libe_sqlite3.so": {
-            "rid": "linux-musl-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-arm64/native/libe_sqlite3.so": {
-            "rid": "linux-musl-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-s390x/native/libe_sqlite3.so": {
-            "rid": "linux-musl-s390x",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-musl-x64/native/libe_sqlite3.so": {
-            "rid": "linux-musl-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-ppc64le/native/libe_sqlite3.so": {
-            "rid": "linux-ppc64le",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-s390x/native/libe_sqlite3.so": {
-            "rid": "linux-s390x",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x64/native/libe_sqlite3.so": {
-            "rid": "linux-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/linux-x86/native/libe_sqlite3.so": {
-            "rid": "linux-x86",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/maccatalyst-arm64/native/libe_sqlite3.dylib": {
-            "rid": "maccatalyst-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/maccatalyst-x64/native/libe_sqlite3.dylib": {
-            "rid": "maccatalyst-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-arm64/native/libe_sqlite3.dylib": {
-            "rid": "osx-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/osx-x64/native/libe_sqlite3.dylib": {
-            "rid": "osx-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-arm/native/e_sqlite3.dll": {
-            "rid": "win-arm",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-arm64/native/e_sqlite3.dll": {
-            "rid": "win-arm64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
+      "SQLitePCLRaw.lib.e_sqlite3/2.1.11": {
+        "native": {
           "runtimes/win-x64/native/e_sqlite3.dll": {
-            "rid": "win-x64",
-            "assetType": "native",
-            "fileVersion": "0.0.0.0"
-          },
-          "runtimes/win-x86/native/e_sqlite3.dll": {
-            "rid": "win-x86",
-            "assetType": "native",
             "fileVersion": "0.0.0.0"
           }
         }
@@ -1378,33 +1127,33 @@
           }
         }
       },
-      "SQLitePCLRaw.provider.e_sqlite3/2.1.10": {
+      "SQLitePCLRaw.provider.e_sqlite3/2.1.11": {
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.11"
         },
         "runtime": {
           "lib/net6.0-windows7.0/SQLitePCLRaw.provider.e_sqlite3.dll": {
-            "assemblyVersion": "2.1.10.2445",
-            "fileVersion": "2.1.10.2445"
+            "assemblyVersion": "2.1.11.2622",
+            "fileVersion": "2.1.11.2622"
           }
         }
       },
-      "SqlSugarCore/5.1.4.214": {
+      "SqlSugarCore/5.1.4.216": {
         "dependencies": {
           "Microsoft.Data.SqlClient": "5.2.3",
-          "Microsoft.Data.Sqlite": "9.0.0",
+          "Microsoft.Data.Sqlite": "10.0.9",
           "MySqlConnector": "2.2.5",
           "Newtonsoft.Json": "13.0.2",
           "Npgsql": "5.0.18",
           "Oracle.ManagedDataAccess.Core": "23.8.0",
           "Oscar.Data.SqlClient": "4.0.4",
           "SqlSugarCore.Dm": "8.8.1",
-          "SqlSugarCore.Kdbndp": "9.3.8.122"
+          "SqlSugarCore.Kdbndp": "9.3.8.413"
         },
         "runtime": {
           "lib/netstandard2.1/SqlSugar.dll": {
-            "assemblyVersion": "5.1.4.211",
-            "fileVersion": "5.1.4.211"
+            "assemblyVersion": "5.1.4.216",
+            "fileVersion": "5.1.4.216"
           }
         }
       },
@@ -1416,11 +1165,11 @@
           }
         }
       },
-      "SqlSugarCore.Kdbndp/9.3.8.122": {
+      "SqlSugarCore.Kdbndp/9.3.8.413": {
         "runtime": {
           "lib/netstandard2.1/Kdbndp.dll": {
-            "assemblyVersion": "9.3.8.122",
-            "fileVersion": "9.3.8.122"
+            "assemblyVersion": "9.3.8.413",
+            "fileVersion": "9.3.8.413"
           }
         }
       },
@@ -1431,7 +1180,7 @@
           "Microsoft.CodeAnalysis.VisualBasic": "4.8.0",
           "Microsoft.Data.SqlClient": "5.2.3",
           "Stimulsoft.Svg": "2026.2.4",
-          "System.CodeDom": "10.0.9",
+          "System.CodeDom": "10.0.10",
           "System.Data.Odbc": "8.0.1",
           "System.Data.OleDb": "8.0.1"
         },
@@ -1468,7 +1217,7 @@
       },
       "Stimulsoft.Reports.Wpf/2026.2.4": {
         "dependencies": {
-          "Microsoft.Web.WebView2": "1.0.3967.48",
+          "Microsoft.Web.WebView2": "1.0.4078.44",
           "Stimulsoft.Reports.Engine": "2026.2.4"
         },
         "runtime": {
@@ -1513,9 +1262,47 @@
           }
         }
       },
+      "Syncfusion.Compression.Net.Core/34.1.31": {
+        "runtime": {
+          "lib/net8.0/Syncfusion.Compression.Portable.dll": {
+            "assemblyVersion": "34.1.31.0",
+            "fileVersion": "34.1.31.0"
+          }
+        }
+      },
+      "Syncfusion.Licensing/34.1.31": {
+        "runtime": {
+          "lib/net8.0/Syncfusion.Licensing.dll": {
+            "assemblyVersion": "34.1.31.0",
+            "fileVersion": "34.1.31.0"
+          }
+        }
+      },
+      "Syncfusion.Pdf.Net.Core/34.1.31": {
+        "dependencies": {
+          "Syncfusion.Compression.Net.Core": "34.1.31",
+          "Syncfusion.Licensing": "34.1.31",
+          "Syncfusion.Telemetry": "34.1.31"
+        },
+        "runtime": {
+          "lib/net8.0/Syncfusion.Pdf.Portable.dll": {
+            "assemblyVersion": "34.1.31.0",
+            "fileVersion": "34.1.31.0"
+          }
+        }
+      },
+      "Syncfusion.Telemetry/34.1.31": {
+        "runtime": {
+          "lib/net8.0/Syncfusion.Telemetry.dll": {
+            "assemblyVersion": "34.1.31.0",
+            "fileVersion": "34.1.31.0"
+          }
+        }
+      },
       "System.ClientModel/1.0.0": {
         "dependencies": {
-          "System.Memory.Data": "1.0.2"
+          "System.Memory.Data": "1.0.2",
+          "System.Text.Json": "10.0.2"
         },
         "runtime": {
           "lib/net6.0/System.ClientModel.dll": {
@@ -1524,11 +1311,11 @@
           }
         }
       },
-      "System.CodeDom/10.0.9": {
+      "System.CodeDom/10.0.10": {
         "runtime": {
           "lib/net8.0/System.CodeDom.dll": {
             "assemblyVersion": "10.0.0.0",
-            "fileVersion": "10.0.926.27113"
+            "fileVersion": "10.0.1026.32716"
           }
         }
       },
@@ -1545,57 +1332,7 @@
       },
       "System.Data.Odbc/8.0.1": {
         "runtime": {
-          "lib/net8.0/System.Data.Odbc.dll": {
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          }
-        },
-        "runtimeTargets": {
-          "runtimes/freebsd/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "freebsd",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/illumos/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "illumos",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/ios/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "ios",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/linux/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "linux",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/osx/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "osx",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/solaris/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "solaris",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
-          "runtimes/tvos/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "tvos",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          },
           "runtimes/win/lib/net8.0/System.Data.Odbc.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.1",
             "fileVersion": "8.0.1024.46610"
           }
@@ -1607,15 +1344,7 @@
           "System.Diagnostics.PerformanceCounter": "8.0.1"
         },
         "runtime": {
-          "lib/net8.0/System.Data.OleDb.dll": {
-            "assemblyVersion": "8.0.0.1",
-            "fileVersion": "8.0.1024.46610"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Data.OleDb.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.1",
             "fileVersion": "8.0.1024.46610"
           }
@@ -1631,15 +1360,7 @@
       },
       "System.Diagnostics.EventLog/8.0.1": {
         "runtime": {
-          "lib/net8.0/System.Diagnostics.EventLog.dll": {
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.1024.46610"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Diagnostics.EventLog.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.1024.46610"
           }
@@ -1650,15 +1371,7 @@
           "System.Configuration.ConfigurationManager": "8.0.1"
         },
         "runtime": {
-          "lib/net8.0/System.Diagnostics.PerformanceCounter.dll": {
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.1024.46610"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Diagnostics.PerformanceCounter.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.1024.46610"
           }
@@ -1666,27 +1379,7 @@
       },
       "System.DirectoryServices.Protocols/8.0.0": {
         "runtime": {
-          "lib/net8.0/System.DirectoryServices.Protocols.dll": {
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.23.53103"
-          }
-        },
-        "runtimeTargets": {
-          "runtimes/linux/lib/net8.0/System.DirectoryServices.Protocols.dll": {
-            "rid": "linux",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.23.53103"
-          },
-          "runtimes/osx/lib/net8.0/System.DirectoryServices.Protocols.dll": {
-            "rid": "osx",
-            "assetType": "runtime",
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.23.53103"
-          },
           "runtimes/win/lib/net8.0/System.DirectoryServices.Protocols.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.23.53103"
           }
@@ -1712,34 +1405,38 @@
           }
         }
       },
-      "System.Linq.Dynamic.Core/1.7.2": {
+      "System.IO.Pipelines/10.0.2": {
         "runtime": {
-          "lib/net8.0/System.Linq.Dynamic.Core.dll": {
-            "assemblyVersion": "1.7.2.0",
-            "fileVersion": "1.7.2.0"
+          "lib/net8.0/System.IO.Pipelines.dll": {
+            "assemblyVersion": "10.0.0.0",
+            "fileVersion": "10.0.225.61305"
           }
         }
       },
-      "System.Management/10.0.9": {
+      "System.Linq.Dynamic.Core/1.7.3": {
+        "runtime": {
+          "lib/net8.0/System.Linq.Dynamic.Core.dll": {
+            "assemblyVersion": "1.7.3.0",
+            "fileVersion": "1.7.3.0"
+          }
+        }
+      },
+      "System.Management/10.0.10": {
         "dependencies": {
-          "System.CodeDom": "10.0.9"
+          "System.CodeDom": "10.0.10"
         },
         "runtime": {
-          "lib/net8.0/System.Management.dll": {
-            "assemblyVersion": "10.0.0.9",
-            "fileVersion": "10.0.926.27113"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Management.dll": {
-            "rid": "win",
-            "assetType": "runtime",
-            "assemblyVersion": "10.0.0.9",
-            "fileVersion": "10.0.926.27113"
+            "assemblyVersion": "10.0.0.10",
+            "fileVersion": "10.0.1026.32716"
           }
         }
       },
       "System.Memory.Data/1.0.2": {
+        "dependencies": {
+          "System.Text.Encodings.Web": "10.0.2",
+          "System.Text.Json": "10.0.2"
+        },
         "runtime": {
           "lib/netstandard2.0/System.Memory.Data.dll": {
             "assemblyVersion": "1.0.2.0",
@@ -1752,15 +1449,7 @@
           "System.Configuration.ConfigurationManager": "8.0.1"
         },
         "runtime": {
-          "lib/net8.0/System.Runtime.Caching.dll": {
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.23.53103"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Runtime.Caching.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.23.53103"
           }
@@ -1768,15 +1457,7 @@
       },
       "System.Security.Cryptography.Pkcs/8.0.1": {
         "runtime": {
-          "lib/net8.0/System.Security.Cryptography.Pkcs.dll": {
-            "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.1024.46610"
-          }
-        },
-        "runtimeTargets": {
           "runtimes/win/lib/net8.0/System.Security.Cryptography.Pkcs.dll": {
-            "rid": "win",
-            "assetType": "runtime",
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.1024.46610"
           }
@@ -1790,6 +1471,26 @@
           "lib/net8.0/System.Security.Cryptography.Xml.dll": {
             "assemblyVersion": "8.0.0.0",
             "fileVersion": "8.0.2626.16921"
+          }
+        }
+      },
+      "System.Text.Encodings.Web/10.0.2": {
+        "runtime": {
+          "lib/net8.0/System.Text.Encodings.Web.dll": {
+            "assemblyVersion": "10.0.0.0",
+            "fileVersion": "10.0.225.61305"
+          }
+        }
+      },
+      "System.Text.Json/10.0.2": {
+        "dependencies": {
+          "System.IO.Pipelines": "10.0.2",
+          "System.Text.Encodings.Web": "10.0.2"
+        },
+        "runtime": {
+          "lib/net8.0/System.Text.Json.dll": {
+            "assemblyVersion": "10.0.0.0",
+            "fileVersion": "10.0.225.61305"
           }
         }
       },
@@ -1823,27 +1524,51 @@
           }
         }
       },
-      "Microsoft.Web.WebView2.Core/1.0.3967.48": {
+      "caiwu-core/1.0.0": {
+        "dependencies": {
+          "CommunityToolkit.Mvvm": "8.4.2",
+          "DeepCopy": "1.0.3",
+          "EPPlus": "8.6.1",
+          "PdfSharpCore": "1.3.67",
+          "QRCoder": "1.8.0",
+          "Quartz": "3.18.2",
+          "QuestPDF": "2026.7.1",
+          "SQLitePCLRaw.bundle_e_sqlcipher": "2.1.11",
+          "SkiaSharp": "3.119.1",
+          "SqlSugarCore": "5.1.4.216",
+          "Stimulsoft.Reports.Wpf": "2026.2.4",
+          "Syncfusion.Pdf.Net.Core": "34.1.31",
+          "itext.bouncy-castle-adapter": "9.7.0",
+          "itext7": "9.7.0"
+        },
+        "runtime": {
+          "caiwu-core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Microsoft.Web.WebView2.Core/1.0.4078.44": {
         "runtime": {
           "Microsoft.Web.WebView2.Core.dll": {
-            "assemblyVersion": "1.0.3967.48",
-            "fileVersion": "1.0.3967.48"
+            "assemblyVersion": "1.0.4078.44",
+            "fileVersion": "1.0.4078.44"
           }
         }
       },
-      "Microsoft.Web.WebView2.WinForms/1.0.3967.48": {
+      "Microsoft.Web.WebView2.WinForms/1.0.4078.44": {
         "runtime": {
           "Microsoft.Web.WebView2.WinForms.dll": {
-            "assemblyVersion": "1.0.3967.48",
-            "fileVersion": "1.0.3967.48"
+            "assemblyVersion": "1.0.4078.44",
+            "fileVersion": "1.0.4078.44"
           }
         }
       },
-      "Microsoft.Web.WebView2.Wpf/1.0.3967.48": {
+      "Microsoft.Web.WebView2.Wpf/1.0.4078.44": {
         "runtime": {
           "Microsoft.Web.WebView2.Wpf.dll": {
-            "assemblyVersion": "1.0.3967.48",
-            "fileVersion": "1.0.3967.48"
+            "assemblyVersion": "1.0.4078.44",
+            "fileVersion": "1.0.4078.44"
           }
         }
       }
@@ -1874,6 +1599,13 @@
       "path": "azure.identity/1.11.4",
       "hashPath": "azure.identity.1.11.4.nupkg.sha512"
     },
+    "BouncyCastle.Cryptography/2.6.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-7oWOcvnntmMKNzDLsdxAYqApt+AjpRpP2CShjMfIa3umZ42UQMvH0tl1qAliYPNYO6vTdcGMqnRrCPmsfzTI1w==",
+      "path": "bouncycastle.cryptography/2.6.2",
+      "hashPath": "bouncycastle.cryptography.2.6.2.nupkg.sha512"
+    },
     "CommunityToolkit.Mvvm/8.4.2": {
       "type": "package",
       "serviceable": true,
@@ -1888,12 +1620,12 @@
       "path": "deepcopy/1.0.3",
       "hashPath": "deepcopy.1.0.3.nupkg.sha512"
     },
-    "EPPlus/8.6.0": {
+    "EPPlus/8.6.1": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-5+ul28MjSE12OZwWzXDzF/LHTXwU5CavXBtjfASBfKxlJP9aiA+7KtuFGLydDbf0PwYwKjIkizfTj87y/cAC1A==",
-      "path": "epplus/8.6.0",
-      "hashPath": "epplus.8.6.0.nupkg.sha512"
+      "sha512": "sha512-ialCJVbku7pQ6Cf2qcdgVkynEkpdkx+6ryGpAu2n3Jlra//HY+0Fp54OM7ELRCE71id5qk55q3SMZgPGW1Pbbw==",
+      "path": "epplus/8.6.1",
+      "hashPath": "epplus.8.6.1.nupkg.sha512"
     },
     "EPPlus.Interfaces/8.4.0": {
       "type": "package",
@@ -1902,12 +1634,12 @@
       "path": "epplus.interfaces/8.4.0",
       "hashPath": "epplus.interfaces.8.4.0.nupkg.sha512"
     },
-    "Extended.Wpf.Toolkit/5.0.0": {
+    "Extended.Wpf.Toolkit/5.1.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-8QStq5cQd+anGBbA5XXSlb/BxEk457xRQ/vraLXNvf5fHG1b4Bu4DOkvSqvvu9MLRUf+q29ceWsLRGtAw3CzDg==",
-      "path": "extended.wpf.toolkit/5.0.0",
-      "hashPath": "extended.wpf.toolkit.5.0.0.nupkg.sha512"
+      "sha512": "sha512-xjnylqPScjYRJq5pULiSqNf7RiqOG9fgcpji83qbB2i0JSthK4i52JRYpKvDSVW4BDDVeHMjB4JQlIUcpIqGcA==",
+      "path": "extended.wpf.toolkit/5.1.2",
+      "hashPath": "extended.wpf.toolkit.5.1.2.nupkg.sha512"
     },
     "HarfBuzzSharp/8.3.1.1": {
       "type": "package",
@@ -1916,13 +1648,6 @@
       "path": "harfbuzzsharp/8.3.1.1",
       "hashPath": "harfbuzzsharp.8.3.1.1.nupkg.sha512"
     },
-    "HarfBuzzSharp.NativeAssets.macOS/8.3.1.1": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-jbtCsgftcaFLCA13tVKo5iWdElJScrulLTKJre36O4YQTIlwDtPPqhRZNk+Y0vv4D1gxbscasGRucUDfS44ofQ==",
-      "path": "harfbuzzsharp.nativeassets.macos/8.3.1.1",
-      "hashPath": "harfbuzzsharp.nativeassets.macos.8.3.1.1.nupkg.sha512"
-    },
     "HarfBuzzSharp.NativeAssets.Win32/8.3.1.1": {
       "type": "package",
       "serviceable": true,
@@ -1930,26 +1655,54 @@
       "path": "harfbuzzsharp.nativeassets.win32/8.3.1.1",
       "hashPath": "harfbuzzsharp.nativeassets.win32.8.3.1.1.nupkg.sha512"
     },
-    "LiveChartsCore/2.0.4": {
+    "itext/9.7.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-AHFa0WVdlHPXpo9yki4RnC4Vl2Akn9beEFUjeqRXi/x9KstHtV5WN6fH07DV641n7p1yf9kYPqjR5Yx0YUXWPQ==",
-      "path": "livechartscore/2.0.4",
-      "hashPath": "livechartscore.2.0.4.nupkg.sha512"
+      "sha512": "sha512-yQMjkvF5MjAzjDWf0AIyD1P1sjp/tRfAkXkKRTQsN1RjjfXcUNPZdbwcklPQTGt3MUGwPD8OYEmB76iTclEW3A==",
+      "path": "itext/9.7.0",
+      "hashPath": "itext.9.7.0.nupkg.sha512"
     },
-    "LiveChartsCore.SkiaSharpView/2.0.4": {
+    "itext.bouncy-castle-adapter/9.7.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-Smrk6vSIVkKo6M5ZP/brfeqME3eSZhhcRuwLDBA5LdCa3scYWj3XjlhYspyMnI4+0MvoXcXbea/ysAMnatFiKg==",
-      "path": "livechartscore.skiasharpview/2.0.4",
-      "hashPath": "livechartscore.skiasharpview.2.0.4.nupkg.sha512"
+      "sha512": "sha512-drkqO6La8G9m78AEYolNSjcp2xJL6HH42sdTFOq9JyO9H05gw297FHZAwhO9xe7QY+7EE3XOkqnEqhvJVGVw4w==",
+      "path": "itext.bouncy-castle-adapter/9.7.0",
+      "hashPath": "itext.bouncy-castle-adapter.9.7.0.nupkg.sha512"
     },
-    "LiveChartsCore.SkiaSharpView.WPF/2.0.4": {
+    "itext.commons/9.7.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-51/PGHnD79lrrWwD1DcZ8rBawUnvQa1Ngn+p7nERJgYnI32GVPZ5GQYe5cyoOSQi1wyr/9dGzPX/BJ8Xx3oJ+g==",
-      "path": "livechartscore.skiasharpview.wpf/2.0.4",
-      "hashPath": "livechartscore.skiasharpview.wpf.2.0.4.nupkg.sha512"
+      "sha512": "sha512-QRmNM4ZxzKCXBqsh5Dq6duA/i+TRd5AH/46nkbi762jcb3BnZkm1EY3t+OfpiQLraFSZEFKGDLLSdRdFlgT7Bg==",
+      "path": "itext.commons/9.7.0",
+      "hashPath": "itext.commons.9.7.0.nupkg.sha512"
+    },
+    "itext7/9.7.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-PzHX0+O0q6vQD2cTSzXL3q1PO9O5Lt3IY/nJv9th43rU29HhsRP+sKZvhIJ+uaJWfs4AAAp8Z29iDJJl0/Gsaw==",
+      "path": "itext7/9.7.0",
+      "hashPath": "itext7.9.7.0.nupkg.sha512"
+    },
+    "LiveChartsCore/2.0.5": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-cbGiOyGxO+fsWLvrQ4R6Rd8QHfkRGyhxyD6nBSk8/ZwKKtU+vWSqlC4ESgwKSUbrzvK8ooU/yfFJpjHXzPd+vA==",
+      "path": "livechartscore/2.0.5",
+      "hashPath": "livechartscore.2.0.5.nupkg.sha512"
+    },
+    "LiveChartsCore.SkiaSharpView/2.0.5": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-YgRhisuVev2RocHqq7d9juSBGBlMLKYQA5ijEuD/sWeV39dCBInBK4RSfqBYTuNNWs5Fe+NA+F0TCIWJ2t1Cew==",
+      "path": "livechartscore.skiasharpview/2.0.5",
+      "hashPath": "livechartscore.skiasharpview.2.0.5.nupkg.sha512"
+    },
+    "LiveChartsCore.SkiaSharpView.WPF/2.0.5": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-CffAGQ6VjBAfmrLJ0/dUGNR9hZDhEfw4Z9JSTUVjc+vRQBYI+i/AmJuN2BMGI1pDI2n9y1cLSk5vAnuuF8V/qw==",
+      "path": "livechartscore.skiasharpview.wpf/2.0.5",
+      "hashPath": "livechartscore.skiasharpview.wpf.2.0.5.nupkg.sha512"
     },
     "Microsoft.Bcl.AsyncInterfaces/1.1.1": {
       "type": "package",
@@ -1993,19 +1746,26 @@
       "path": "microsoft.data.sqlclient.sni.runtime/5.2.0",
       "hashPath": "microsoft.data.sqlclient.sni.runtime.5.2.0.nupkg.sha512"
     },
-    "Microsoft.Data.Sqlite/9.0.0": {
+    "Microsoft.Data.Sqlite/10.0.9": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-lw6wthgXGx3r/U775k1UkUAWIn0kAT0wj4ZRq0WlhPx4WAOiBsIjgDKgWkXcNTGT0KfHiClkM+tyPVFDvxeObw==",
-      "path": "microsoft.data.sqlite/9.0.0",
-      "hashPath": "microsoft.data.sqlite.9.0.0.nupkg.sha512"
+      "sha512": "sha512-/eBwiZPcNisn0qZX+Zk4YCftlK/vnoWqv7hHnmSk8MjPxFdYYkmPObpogT0MfCCWN6oAIZnMCo0SoOtZlbbmgQ==",
+      "path": "microsoft.data.sqlite/10.0.9",
+      "hashPath": "microsoft.data.sqlite.10.0.9.nupkg.sha512"
     },
-    "Microsoft.Data.Sqlite.Core/9.0.0": {
+    "Microsoft.Data.Sqlite.Core/10.0.9": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-cFfZjFL+tqzGYw9lB31EkV1IWF5xRQNk2k+MQd+Cf86Gl6zTeAoiZIFw5sRB1Z8OxpEC7nu+nTDsLSjieBAPTw==",
-      "path": "microsoft.data.sqlite.core/9.0.0",
-      "hashPath": "microsoft.data.sqlite.core.9.0.0.nupkg.sha512"
+      "sha512": "sha512-iZrONyMKPjxfVZnUktqO30QjzNwAGH+AxM61s8lKQnVhgbQ3bn0hiXI129ZmVicEbIcwljyy2OVsIYUR51ZHKQ==",
+      "path": "microsoft.data.sqlite.core/10.0.9",
+      "hashPath": "microsoft.data.sqlite.core.10.0.9.nupkg.sha512"
+    },
+    "Microsoft.DotNet.PlatformAbstractions/1.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Bl6KYfbFSIW3QIRHAp931iR5h01qHjKghdpAtncwbzNUs0+IUZ+XfwkIU0sQsR33ufGvi3u4dZMIYYFysjpHAA==",
+      "path": "microsoft.dotnet.platformabstractions/1.1.0",
+      "hashPath": "microsoft.dotnet.platformabstractions.1.1.0.nupkg.sha512"
     },
     "Microsoft.Extensions.Configuration/8.0.0": {
       "type": "package",
@@ -2035,6 +1795,27 @@
       "path": "microsoft.extensions.configuration.json/8.0.1",
       "hashPath": "microsoft.extensions.configuration.json.8.0.1.nupkg.sha512"
     },
+    "Microsoft.Extensions.DependencyInjection/5.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Rc2kb/p3Ze6cP6rhFC3PJRdWGbLvSHZc0ev7YlyeU6FmHciDMLrhoVoTUEzKPhN5ZjFgKF1Cf5fOz8mCMIkvpA==",
+      "path": "microsoft.extensions.dependencyinjection/5.0.0",
+      "hashPath": "microsoft.extensions.dependencyinjection.5.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyInjection.Abstractions/5.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-ORj7Zh81gC69TyvmcUm9tSzytcy8AVousi+IVRAI8nLieQjOFryRusSFh7+aLk16FN9pQNqJAiMd7BTKINK0kA==",
+      "path": "microsoft.extensions.dependencyinjection.abstractions/5.0.0",
+      "hashPath": "microsoft.extensions.dependencyinjection.abstractions.5.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.DependencyModel/10.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-DHXzj/FKmUDmhzw7AHbMXbNNcgO8Cb9PDbYOUDICjFAdIALy2WbC6pm+dFKiAUNtcYMucZu2iMVw1ef/sdcZFw==",
+      "path": "microsoft.extensions.dependencymodel/10.0.2",
+      "hashPath": "microsoft.extensions.dependencymodel.10.0.2.nupkg.sha512"
+    },
     "Microsoft.Extensions.FileProviders.Abstractions/8.0.0": {
       "type": "package",
       "serviceable": true,
@@ -2056,12 +1837,26 @@
       "path": "microsoft.extensions.filesystemglobbing/8.0.0",
       "hashPath": "microsoft.extensions.filesystemglobbing.8.0.0.nupkg.sha512"
     },
-    "Microsoft.Extensions.Logging.Abstractions/2.1.1": {
+    "Microsoft.Extensions.Logging/5.0.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-XRzK7ZF+O6FzdfWrlFTi1Rgj2080ZDsd46vzOjadHUB0Cz5kOvDG8vI7caa5YFrsHQpcfn0DxtjS4E46N4FZsA==",
-      "path": "microsoft.extensions.logging.abstractions/2.1.1",
-      "hashPath": "microsoft.extensions.logging.abstractions.2.1.1.nupkg.sha512"
+      "sha512": "sha512-MgOwK6tPzB6YNH21wssJcw/2MKwee8b2gI7SllYfn6rvTpIrVvVS5HAjSU2vqSku1fwqRvWP0MdIi14qjd93Aw==",
+      "path": "microsoft.extensions.logging/5.0.0",
+      "hashPath": "microsoft.extensions.logging.5.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Logging.Abstractions/5.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-NxP6ahFcBnnSfwNBi2KH2Oz8Xl5Sm2krjId/jRR3I7teFphwiUoUeZPwTNA21EX+5PtjqmyAvKaOeBXcJjcH/w==",
+      "path": "microsoft.extensions.logging.abstractions/5.0.0",
+      "hashPath": "microsoft.extensions.logging.abstractions.5.0.0.nupkg.sha512"
+    },
+    "Microsoft.Extensions.Options/5.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-CBvR92TCJ5uBIdd9/HzDSrxYak+0W/3+yxrNg8Qm6Bmrkh5L+nu6m3WeazQehcZ5q1/6dDA7J5YdQjim0165zg==",
+      "path": "microsoft.extensions.options/5.0.0",
+      "hashPath": "microsoft.extensions.options.5.0.0.nupkg.sha512"
     },
     "Microsoft.Extensions.Primitives/8.0.0": {
       "type": "package",
@@ -2147,19 +1942,19 @@
       "path": "microsoft.toolkit.uwp.notifications/7.1.3",
       "hashPath": "microsoft.toolkit.uwp.notifications.7.1.3.nupkg.sha512"
     },
-    "Microsoft.Web.WebView2/1.0.3967.48": {
+    "Microsoft.Web.WebView2/1.0.4078.44": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-b7dZ5kZ9bfU5Yo11M8feCOoiyalXCN+2Gsw674RBDBmQ2dJV5EOXb8/ivN2LuLJ+VO2V7FmK6l6LsyfEnG1lXw==",
-      "path": "microsoft.web.webview2/1.0.3967.48",
-      "hashPath": "microsoft.web.webview2.1.0.3967.48.nupkg.sha512"
+      "sha512": "sha512-TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A==",
+      "path": "microsoft.web.webview2/1.0.4078.44",
+      "hashPath": "microsoft.web.webview2.1.0.4078.44.nupkg.sha512"
     },
-    "MiniExcel/1.44.1": {
+    "MiniExcel/1.45.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-9O+Xmazr7d46iplPO/Egd4Xl9vHyM9CRDIKqOy/rMVh6hREThPoNfzd57JPVTdwqftd9aPU/lT/l7fQGvbTszg==",
-      "path": "miniexcel/1.44.1",
-      "hashPath": "miniexcel.1.44.1.nupkg.sha512"
+      "sha512": "sha512-VsBtvXyhfPcbtNliuD9IMNqfBW01kRQl2/tA7JRIGjj82rcKNrz9Gfpn1FW8euXw91gkINWZuQv+n6XUURB3XA==",
+      "path": "miniexcel/1.45.0",
+      "hashPath": "miniexcel.1.45.0.nupkg.sha512"
     },
     "MySqlConnector/2.2.5": {
       "type": "package",
@@ -2238,19 +2033,19 @@
       "path": "qrcoder/1.8.0",
       "hashPath": "qrcoder.1.8.0.nupkg.sha512"
     },
-    "Quartz/3.18.1": {
+    "Quartz/3.18.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-q/n/gKLcApDlTk90BRNvj6P8HKR+vbtZEQxo5BAbeEoN5e/8/aqRuG6yH7tVg02CeAXAD40boS74s9hVnh4XDw==",
-      "path": "quartz/3.18.1",
-      "hashPath": "quartz.3.18.1.nupkg.sha512"
+      "sha512": "sha512-/KaRLj7jv84RSIR/UtAWnzYRmS7o/mA6CdEuoLwxhLa9Nfl7Q1keMA7Fe/r2BzRfDf+7YpN1QNEYSSU89DA3OA==",
+      "path": "quartz/3.18.2",
+      "hashPath": "quartz.3.18.2.nupkg.sha512"
     },
-    "QuestPDF/2026.5.0": {
+    "QuestPDF/2026.7.1": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-QddELSgpJ7YFrNaqlqUik/OOhK2/yVDqdqGjtdH+V3nxml2cvjUorFp2yiK8xnTLLvR139SXpVt3G/0oVCynig==",
-      "path": "questpdf/2026.5.0",
-      "hashPath": "questpdf.2026.5.0.nupkg.sha512"
+      "sha512": "sha512-GsBxQb48dFAGmvI1eP3SHyz0Pua4uH6aUHX7f0ywTin6hordAviZRAiTiIQiKMLwq6hN1FmgS+qLjfh2v7vhOg==",
+      "path": "questpdf/2026.7.1",
+      "hashPath": "questpdf.2026.7.1.nupkg.sha512"
     },
     "SharpZipLib/1.4.2": {
       "type": "package",
@@ -2280,12 +2075,12 @@
       "path": "sixlabors.imagesharp/1.0.4",
       "hashPath": "sixlabors.imagesharp.1.0.4.nupkg.sha512"
     },
-    "SkiaSharp/3.119.0": {
+    "SkiaSharp/3.119.1": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-gR9yVoOta2Mc1Rxt15LD65AckfHMfwjIs/3kkD59C9bT2nYYISsE6uz3t4aMPNHA6CgsIL0Ssn+jE5OVilZ1yw==",
-      "path": "skiasharp/3.119.0",
-      "hashPath": "skiasharp.3.119.0.nupkg.sha512"
+      "sha512": "sha512-+Ru1BTSZQne3Vp+vbSb50Ke3Nlc3ZnItxx4+751J9WZ8YzLKAV/n+9DAo4zFTyeCI//ueT63c+VybmTTpYBEiw==",
+      "path": "skiasharp/3.119.1",
+      "hashPath": "skiasharp.3.119.1.nupkg.sha512"
     },
     "SkiaSharp.HarfBuzz/3.119.0": {
       "type": "package",
@@ -2294,19 +2089,12 @@
       "path": "skiasharp.harfbuzz/3.119.0",
       "hashPath": "skiasharp.harfbuzz.3.119.0.nupkg.sha512"
     },
-    "SkiaSharp.NativeAssets.macOS/3.119.0": {
+    "SkiaSharp.NativeAssets.Win32/3.119.1": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-YE1vNn0Nyw2PWtv7hw1PYkKJO0itFiQp9vSqGppZUKzQJqwp28a2jgdCMPfYtOiR8KCnDgZqQoynqJRRaE2ZVg==",
-      "path": "skiasharp.nativeassets.macos/3.119.0",
-      "hashPath": "skiasharp.nativeassets.macos.3.119.0.nupkg.sha512"
-    },
-    "SkiaSharp.NativeAssets.Win32/3.119.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-IwC9yx36lOdXVT2DjgmWHl1qkVspfj8ctd4+li8CNnvqdfaTolXCOh6TLznURcPAvzatx9K/tLOB7zT6T8EA9w==",
-      "path": "skiasharp.nativeassets.win32/3.119.0",
-      "hashPath": "skiasharp.nativeassets.win32.3.119.0.nupkg.sha512"
+      "sha512": "sha512-8C4GSXVJqSr0y3Tyyv5jz6MJSTVUyYkMjeKrzK+VyZPGLo89MNoUEclVuYahzOCDdtbfXrd2HtxXfDuvoSXrUw==",
+      "path": "skiasharp.nativeassets.win32/3.119.1",
+      "hashPath": "skiasharp.nativeassets.win32.3.119.1.nupkg.sha512"
     },
     "SkiaSharp.Views.Desktop.Common/3.119.0": {
       "type": "package",
@@ -2329,12 +2117,12 @@
       "path": "sqlitepclraw.bundle_e_sqlcipher/2.1.11",
       "hashPath": "sqlitepclraw.bundle_e_sqlcipher.2.1.11.nupkg.sha512"
     },
-    "SQLitePCLRaw.bundle_e_sqlite3/2.1.10": {
+    "SQLitePCLRaw.bundle_e_sqlite3/2.1.11": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-UxWuisvZ3uVcVOLJQv7urM/JiQH+v3TmaJc1BLKl5Dxfm/nTzTUrqswCqg/INiYLi61AXnHo1M1JPmPqqLnAdg==",
-      "path": "sqlitepclraw.bundle_e_sqlite3/2.1.10",
-      "hashPath": "sqlitepclraw.bundle_e_sqlite3.2.1.10.nupkg.sha512"
+      "sha512": "sha512-DC4nA7yWnf4UZdgJDF+9Mus4/cb0Y3Sfgi3gDnAoKNAIBwzkskNAbNbyu+u4atT0ruVlZNJfwZmwiEwE5oz9LQ==",
+      "path": "sqlitepclraw.bundle_e_sqlite3/2.1.11",
+      "hashPath": "sqlitepclraw.bundle_e_sqlite3.2.1.11.nupkg.sha512"
     },
     "SQLitePCLRaw.core/2.1.11": {
       "type": "package",
@@ -2350,12 +2138,12 @@
       "path": "sqlitepclraw.lib.e_sqlcipher/2.1.11",
       "hashPath": "sqlitepclraw.lib.e_sqlcipher.2.1.11.nupkg.sha512"
     },
-    "SQLitePCLRaw.lib.e_sqlite3/2.1.10": {
+    "SQLitePCLRaw.lib.e_sqlite3/2.1.11": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-mAr69tDbnf3QJpRy2nJz8Qdpebdil00fvycyByR58Cn9eARvR+UiG2Vzsp+4q1tV3ikwiYIjlXCQFc12GfebbA==",
-      "path": "sqlitepclraw.lib.e_sqlite3/2.1.10",
-      "hashPath": "sqlitepclraw.lib.e_sqlite3.2.1.10.nupkg.sha512"
+      "sha512": "sha512-Ev2ytaXiOlWZ4b3R67GZBsemTINslLD1DCJr2xiacpn4tbapu0Q4dHEzSvZSMnVWeE5nlObU3VZN2p81q3XOYQ==",
+      "path": "sqlitepclraw.lib.e_sqlite3/2.1.11",
+      "hashPath": "sqlitepclraw.lib.e_sqlite3.2.1.11.nupkg.sha512"
     },
     "SQLitePCLRaw.provider.e_sqlcipher/2.1.11": {
       "type": "package",
@@ -2364,19 +2152,19 @@
       "path": "sqlitepclraw.provider.e_sqlcipher/2.1.11",
       "hashPath": "sqlitepclraw.provider.e_sqlcipher.2.1.11.nupkg.sha512"
     },
-    "SQLitePCLRaw.provider.e_sqlite3/2.1.10": {
+    "SQLitePCLRaw.provider.e_sqlite3/2.1.11": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-uZVTi02C1SxqzgT0HqTWatIbWGb40iIkfc3FpFCpE/r7g6K0PqzDUeefL6P6HPhDtc6BacN3yQysfzP7ks+wSQ==",
-      "path": "sqlitepclraw.provider.e_sqlite3/2.1.10",
-      "hashPath": "sqlitepclraw.provider.e_sqlite3.2.1.10.nupkg.sha512"
+      "sha512": "sha512-Y/0ZkR+r0Cg3DQFuCl1RBnv/tmxpIZRU3HUvelPw6MVaKHwYYR8YNvgs0vuNuXCMvlyJ+Fh88U1D4tah1tt6qw==",
+      "path": "sqlitepclraw.provider.e_sqlite3/2.1.11",
+      "hashPath": "sqlitepclraw.provider.e_sqlite3.2.1.11.nupkg.sha512"
     },
-    "SqlSugarCore/5.1.4.214": {
+    "SqlSugarCore/5.1.4.216": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-Jm1PbcEKGosLRx6gNqhbSNU8B2aFLCRD5vLXPvfJBPLUA/eROWpy9dnauLtt+E3BNHbPiSjrLTih7G06eR1Dbw==",
-      "path": "sqlsugarcore/5.1.4.214",
-      "hashPath": "sqlsugarcore.5.1.4.214.nupkg.sha512"
+      "sha512": "sha512-OCfOzFZwW0gVXt1PTlnJUfepvO/1bjTjCrDghZMqF9r4rlLZhPfhHrjXQbh2kvo5sq5jPCGa7ummgZd0wJPGmQ==",
+      "path": "sqlsugarcore/5.1.4.216",
+      "hashPath": "sqlsugarcore.5.1.4.216.nupkg.sha512"
     },
     "SqlSugarCore.Dm/8.8.1": {
       "type": "package",
@@ -2385,12 +2173,12 @@
       "path": "sqlsugarcore.dm/8.8.1",
       "hashPath": "sqlsugarcore.dm.8.8.1.nupkg.sha512"
     },
-    "SqlSugarCore.Kdbndp/9.3.8.122": {
+    "SqlSugarCore.Kdbndp/9.3.8.413": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-cK5ntiTwT+JShuFvBvWLrE0YMA1LtajZxtwSUBtqUzJeslWDiXX1k9nshGAhCiPPIUy1hXbKKnTU8mCVFHHDeg==",
-      "path": "sqlsugarcore.kdbndp/9.3.8.122",
-      "hashPath": "sqlsugarcore.kdbndp.9.3.8.122.nupkg.sha512"
+      "sha512": "sha512-8Xuz2bu2t8IYbLY/NBd5tQ1RZa4KHN29JgR0hiyX6Kl/ynC7/ZgPGcNFdN84/d7L6U+NNSZSr2YnUrwbjgGe+g==",
+      "path": "sqlsugarcore.kdbndp/9.3.8.413",
+      "hashPath": "sqlsugarcore.kdbndp.9.3.8.413.nupkg.sha512"
     },
     "Stimulsoft.Reports.Engine/2026.2.4": {
       "type": "package",
@@ -2413,6 +2201,34 @@
       "path": "stimulsoft.svg/2026.2.4",
       "hashPath": "stimulsoft.svg.2026.2.4.nupkg.sha512"
     },
+    "Syncfusion.Compression.Net.Core/34.1.31": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-XC50xNOakL95lmrhBAwS7u5OVeYXhWXkzxwBMt7Id2G8fJF2jvguivSj0SYLVTGcJB8Y77AQkr9Rlg/KcAo8Ig==",
+      "path": "syncfusion.compression.net.core/34.1.31",
+      "hashPath": "syncfusion.compression.net.core.34.1.31.nupkg.sha512"
+    },
+    "Syncfusion.Licensing/34.1.31": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-G4AZRl6ouImRKwmbnCp2JYsbHX03cgADZwTnFKFhjY7hp6KDJGbSlPChm73kR4ZNkavtV1ZlXTlaPYblsLmIkw==",
+      "path": "syncfusion.licensing/34.1.31",
+      "hashPath": "syncfusion.licensing.34.1.31.nupkg.sha512"
+    },
+    "Syncfusion.Pdf.Net.Core/34.1.31": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-uOoY6joHGOCNBsgFOVShLCvEZPiIvwBn8nk9N7kI3zanCbOIbIusi/0N5B/yKKCbiG/Nv2jdkMjfzMZ3fgJv6g==",
+      "path": "syncfusion.pdf.net.core/34.1.31",
+      "hashPath": "syncfusion.pdf.net.core.34.1.31.nupkg.sha512"
+    },
+    "Syncfusion.Telemetry/34.1.31": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-woKkSgcUPkgbVIvyUaL/0ytS+UMwUQdzmtb1rEUtuZ5gGcBcmoGAGniYuOUTeTFyVx4rCzjHgSVsUpggjSfgew==",
+      "path": "syncfusion.telemetry/34.1.31",
+      "hashPath": "syncfusion.telemetry.34.1.31.nupkg.sha512"
+    },
     "System.ClientModel/1.0.0": {
       "type": "package",
       "serviceable": true,
@@ -2420,12 +2236,12 @@
       "path": "system.clientmodel/1.0.0",
       "hashPath": "system.clientmodel.1.0.0.nupkg.sha512"
     },
-    "System.CodeDom/10.0.9": {
+    "System.CodeDom/10.0.10": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-scH7O8oAuOMyZKOEiOQB3ZVz6x9XkrZNKNeWVCxdvkJHSy4SYXyinGK0o2Rn5LiGh+ovezziT2WCdqWKa7WMKA==",
-      "path": "system.codedom/10.0.9",
-      "hashPath": "system.codedom.10.0.9.nupkg.sha512"
+      "sha512": "sha512-lru5igKxs4OgWKfMeOpMAYpfB1tNSSXHk2zyiSDO/h0u8RVAhN6KqW9d3ANybDB+ePIHg6HM/NlE8HlpOk4k5A==",
+      "path": "system.codedom/10.0.10",
+      "hashPath": "system.codedom.10.0.10.nupkg.sha512"
     },
     "System.Configuration.ConfigurationManager/8.0.1": {
       "type": "package",
@@ -2490,19 +2306,26 @@
       "path": "system.identitymodel.tokens.jwt/6.35.0",
       "hashPath": "system.identitymodel.tokens.jwt.6.35.0.nupkg.sha512"
     },
-    "System.Linq.Dynamic.Core/1.7.2": {
+    "System.IO.Pipelines/10.0.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-11SGBy8DCywOVElSs2J+Cd4WFHruFrBnaaQ86q2HWHBGcCAQDLnbA0ivpFvMeXGPqcEPE+Q3HZtXaXN4F8JLQg==",
-      "path": "system.linq.dynamic.core/1.7.2",
-      "hashPath": "system.linq.dynamic.core.1.7.2.nupkg.sha512"
+      "sha512": "sha512-EqMsn9r18ABvTDxrDce4OWDhBE3y+rR23ilG7Y3BudDKrDKrLG/hkD/JmeFZbctAPxSkCjyJ/Ddwbn/g7ufRJA==",
+      "path": "system.io.pipelines/10.0.2",
+      "hashPath": "system.io.pipelines.10.0.2.nupkg.sha512"
     },
-    "System.Management/10.0.9": {
+    "System.Linq.Dynamic.Core/1.7.3": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-8mfTzHLlMHCqFE1+iFGzxRCeCb2gDqvRQtZthuksYB+z546QZaFCiagbJ2KXHe7dy5ZpCUg/usaIqc2DxiemPw==",
-      "path": "system.management/10.0.9",
-      "hashPath": "system.management.10.0.9.nupkg.sha512"
+      "sha512": "sha512-0m52+B4Jce/9AXLXPZnnFW7NeLotHBuYvbsVF3D/DTvvbCGJZdskPn5xjr5sjnnFI3XekNdPqG2djyJE3UU7SA==",
+      "path": "system.linq.dynamic.core/1.7.3",
+      "hashPath": "system.linq.dynamic.core.1.7.3.nupkg.sha512"
+    },
+    "System.Management/10.0.10": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-U13ksdXfQlF2WDdu3S4ZPVpikFs2HgV3dbJJZLeZpBIQ4z/xCmQnwEf6LsEEIC2zSamVVa1acA9RdVhZwnWKeA==",
+      "path": "system.management/10.0.10",
+      "hashPath": "system.management.10.0.10.nupkg.sha512"
     },
     "System.Memory.Data/1.0.2": {
       "type": "package",
@@ -2532,6 +2355,20 @@
       "path": "system.security.cryptography.xml/8.0.3",
       "hashPath": "system.security.cryptography.xml.8.0.3.nupkg.sha512"
     },
+    "System.Text.Encodings.Web/10.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Ro4cLT4qpRy64crfLAy3ekihtXckeXrD5eI6qb6NDSEVyHcHsmH7KgN4dbnIuiBmXIoaCslx4SynLYxag1SLSQ==",
+      "path": "system.text.encodings.web/10.0.2",
+      "hashPath": "system.text.encodings.web.10.0.2.nupkg.sha512"
+    },
+    "System.Text.Json/10.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-zy8ey7I16G9neZ6uzxrnYwS7pidElzN8XarsBjGu7lE2m7afTKMEe18KbY3ZSmh/z/bR40oxjd6hlUcmOEaMHw==",
+      "path": "system.text.json/10.0.2",
+      "hashPath": "system.text.json.10.0.2.nupkg.sha512"
+    },
     "TinyIpc/3.0.1": {
       "type": "package",
       "serviceable": true,
@@ -2553,17 +2390,22 @@
       "path": "wpf-ui.abstractions/4.3.0",
       "hashPath": "wpf-ui.abstractions.4.3.0.nupkg.sha512"
     },
-    "Microsoft.Web.WebView2.Core/1.0.3967.48": {
+    "caiwu-core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.Web.WebView2.Core/1.0.4078.44": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
     },
-    "Microsoft.Web.WebView2.WinForms/1.0.3967.48": {
+    "Microsoft.Web.WebView2.WinForms/1.0.4078.44": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
     },
-    "Microsoft.Web.WebView2.Wpf/1.0.3967.48": {
+    "Microsoft.Web.WebView2.Wpf/1.0.4078.44": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
