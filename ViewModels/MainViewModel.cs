@@ -320,7 +320,7 @@ public sealed class MainViewModel : ObservableObject
             "姓名" or "户名" or "客户姓名" or "账户名称" or "户口名称" or "客户名称" or "公司名称" or "单位名称" or "账户名" or "客户户名" or "存款人名称" => (nameof(BankUser.AccountName), "Text"),
             "身份证" or "身份证号" or "证件号" or "证件号码" or "证件编号" => (nameof(BankUser.IdNumber), "Text"),
             "编号" or "序号" => (nameof(BankUser.UserCode), "Text"),
-            "开户行" or "开户机构" or "开户网点" => (nameof(BankUser.OpenBranch), "Text"),
+            "开户行" or "开户银行" or "开户机构" or "开户网点" => (nameof(BankUser.OpenBranch), "Text"),
             "余额" => (nameof(BankUser.Balance), "Money"),
             "交易类型" => (nameof(BankUser.TransactionType), "Text"),
             "币种" or "货币" or "币别" => (nameof(BankUser.Currency), "Text"),

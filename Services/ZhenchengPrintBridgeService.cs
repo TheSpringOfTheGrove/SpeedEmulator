@@ -4537,6 +4537,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (!string.IsNullOrWhiteSpace(openBranch))
         {
             Set(target, "OpenBranch", openBranch);
+            // The vendor CMB corporate electronic templates bind the label
+            // "开户银行" to BankUser.OperationArea. The paper template uses
+            // OpenBranch, so both properties must stay aligned.
+            Set(target, "OperationArea", openBranch);
             Set(target, "PrintBranch", openBranch);
             Set(target, "PrintAgency", openBranch);
             Set(target, "PrintOrg", openBranch);

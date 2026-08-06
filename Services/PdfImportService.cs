@@ -444,6 +444,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "交行对公" => true,
             "民生对公" => true,
             "农行对公" => true,
+            "招行对公" => true,
             _ => false
         };
     }
@@ -2604,19 +2605,36 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         var parsedUser = false;
         var lines = document.Lines.ToList();
-        foreach (var line in lines.Take(120))
+        foreach (var line in lines.Where(item => item.PageNumber == 1).Take(120))
         {
             var text = CleanPdfValue(line.Text);
-            var branchMatch = Regex.Match(text, @"开户银行:\s*(?<branch>.+?)\s+账单所属期间:\s*(?<start>\d{8})\s+(?<end>\d{8})");
+            var standaloneBranchMatch = Regex.Match(text, @"^开户银行[:：]\s*(?<branch>.+)$");
+            if (standaloneBranchMatch.Success)
+            {
+                SetUserNamed(user, bank, "开户银行", standaloneBranchMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "网点名称", standaloneBranchMatch.Groups["branch"].Value);
+                parsedUser = true;
+            }
+
+            var periodMatch = Regex.Match(text, @"^账单所属期间[:：]\s*(?<start>\d{8})\s+(?<end>\d{8})$");
+            if (periodMatch.Success)
+            {
+                SetUserNamed(user, bank, "起始日期", FormatCompactDate(periodMatch.Groups["start"].Value));
+                SetUserNamed(user, bank, "截止日期", FormatCompactDate(periodMatch.Groups["end"].Value));
+                parsedUser = true;
+            }
+
+            var branchMatch = Regex.Match(text, @"开户银行[:：]\s*(?<branch>.+?)\s+账单所属期间[:：]\s*(?<start>\d{8})\s+(?<end>\d{8})");
             if (branchMatch.Success)
             {
+                SetUserNamed(user, bank, "开户银行", branchMatch.Groups["branch"].Value);
                 SetUserNamed(user, bank, "网点名称", branchMatch.Groups["branch"].Value);
                 SetUserNamed(user, bank, "起始日期", FormatCompactDate(branchMatch.Groups["start"].Value));
                 SetUserNamed(user, bank, "截止日期", FormatCompactDate(branchMatch.Groups["end"].Value));
                 parsedUser = true;
             }
 
-            var accountMatch = Regex.Match(text, @"账号:\s*(?<account>\d+)\s+货币:\s*(?<currency>\S+)");
+            var accountMatch = Regex.Match(text, @"账号[:：]\s*(?<account>\d+)\s+货币[:：]\s*(?<currency>\S+)");
             if (accountMatch.Success)
             {
                 SetUserNamed(user, bank, "户口号", accountMatch.Groups["account"].Value);
@@ -2625,7 +2643,22 @@ public sealed partial class PdfImportService : IPdfImportService
                 parsedUser = true;
             }
 
-            var nameMatch = Regex.Match(text, @"账户名称:\s*(?<name>.+?)\s+上页余额:\s*(?<balance>[+-]?\d[\d,]*\.\d{2})");
+            var standaloneAccountMatch = Regex.Match(text, @"^账号[:：]\s*(?<account>\d+)$");
+            if (standaloneAccountMatch.Success)
+            {
+                SetUserNamed(user, bank, "户口号", standaloneAccountMatch.Groups["account"].Value);
+                SetUserNamed(user, bank, "账号序号", standaloneAccountMatch.Groups["account"].Value);
+                parsedUser = true;
+            }
+
+            var currencyMatch = Regex.Match(text, @"^货币[:：]\s*(?<currency>\S+)$");
+            if (currencyMatch.Success)
+            {
+                SetUserNamed(user, bank, "币种", NormalizeCurrencyText(currencyMatch.Groups["currency"].Value));
+                parsedUser = true;
+            }
+
+            var nameMatch = Regex.Match(text, @"账户名称[:：]\s*(?<name>.+?)\s+上页余额[:：]\s*(?<balance>[+-]?\d[\d,]*\.\d{2})");
             if (nameMatch.Success)
             {
                 SetUserNamed(user, bank, "户口名称", nameMatch.Groups["name"].Value);
@@ -2636,6 +2669,35 @@ public sealed partial class PdfImportService : IPdfImportService
 
                 parsedUser = true;
             }
+
+            var standaloneNameMatch = Regex.Match(text, @"^账户名称[:：]\s*(?<name>.+)$");
+            if (standaloneNameMatch.Success)
+            {
+                SetUserNamed(user, bank, "户口名称", standaloneNameMatch.Groups["name"].Value);
+                parsedUser = true;
+            }
+
+            var standaloneBalanceMatch = Regex.Match(text, @"^上页余额[:：]\s*(?<balance>[+-]?\d[\d,]*\.\d{2})$");
+            if (standaloneBalanceMatch.Success
+                && decimal.TryParse(standaloneBalanceMatch.Groups["balance"].Value.Replace(",", string.Empty, StringComparison.Ordinal), NumberStyles.Number, CultureInfo.InvariantCulture, out var standaloneOpeningBalance))
+            {
+                user.OpeningBalance = standaloneOpeningBalance;
+                parsedUser = true;
+            }
+        }
+
+        var positionedRows = BuildCmbCorporatePositionedRows(document.Words);
+        foreach (var row in positionedRows)
+        {
+            if (TryParseCmbCorporatePositionedRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        if (result.FlowRecords.Count > 0)
+        {
+            return parsedUser;
         }
 
         foreach (var group in GroupCmbCorporateRecords(lines))
@@ -4858,6 +4920,100 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "\u4e1a\u52a1\u7f16\u53f7", businessNumber);
         SetFlowRaw(record, "\u7528\u9014", usage);
         SetFlowRaw(record, "\u6458\u8981", summary);
+        return true;
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildCmbCorporatePositionedRows(IReadOnlyList<PdfTextWord> words)
+    {
+        var columns = new[]
+        {
+            new PdfPositionedColumnSpec("Date", 20, 52),
+            new PdfPositionedColumnSpec("BusinessType", 52, 94),
+            new PdfPositionedColumnSpec("BillNo", 94, 140),
+            new PdfPositionedColumnSpec("Description", 140, 260),
+            new PdfPositionedColumnSpec("Amount", 260, 345),
+            new PdfPositionedColumnSpec("Balance", 345, 425),
+            new PdfPositionedColumnSpec("Counterparty", 425, 575)
+        };
+
+        return BuildPositionedRowsWithTopLead(
+            words,
+            columns,
+            IsCmbCorporateHeaderWord,
+            IsCmbCorporateFooterWord,
+            @"^\d{8}$",
+            52,
+            125,
+            5);
+    }
+
+    private static bool IsCmbCorporateHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "日期" or "业务类型" or "票据号" or "摘要" or "借方/贷方金额" or "余额" or "对手户名"
+            or "Date" or "Business" or "Bill" or "Description" or "Debit/Credit" or "Balance" or "Counterparty";
+    }
+
+    private static bool IsCmbCorporateFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value.StartsWith("第", StringComparison.Ordinal)
+            || value.StartsWith("期末余额", StringComparison.Ordinal)
+            || value.StartsWith("特别提示", StringComparison.Ordinal)
+            || value.StartsWith("Special", StringComparison.Ordinal);
+    }
+
+    private static bool TryParseCmbCorporatePositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateText = GetPositionedCell(row, "Date");
+        var businessType = GetPositionedCell(row, "BusinessType");
+        var billNumber = GetPositionedCell(row, "BillNo");
+        var description = GetPositionedCell(row, "Description");
+        var amountText = GetPositionedCell(row, "Amount").Replace('−', '-');
+        var balanceText = GetPositionedCell(row, "Balance").Replace('−', '-');
+        var counterparty = GetPositionedCell(row, "Counterparty");
+        if (!Regex.IsMatch(dateText, @"^\d{8}$")
+            || !IsPdfMoneyToken(amountText)
+            || !IsPdfMoneyToken(balanceText))
+        {
+            return false;
+        }
+
+        var date = FormatCompactDate(dateText);
+        var amount = ParseDoubleOrNull(amountText);
+        var summary = FirstNotBlank(description, businessType);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(date);
+        record.ProductType = businessType;
+        record.ProductName = businessType;
+        record.ProductBrief = summary;
+        record.SerialNum = billNumber;
+        record.VoucherNum = billNumber;
+        record.TradeMoney = amount;
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.BalanceAmount = record.Balance;
+        record.OppositeUsername = counterparty;
+        record.Remark = string.Equals(summary, businessType, StringComparison.Ordinal) ? string.Empty : summary;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "记帐日期", date);
+        SetFlowRaw(record, "帐户代码", record.Account);
+        SetFlowRaw(record, "货币", record.Currency);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "联机余额", balanceText);
+        SetFlowRaw(record, "交易流水号", billNumber);
+        SetFlowRaw(record, "摘要代码", summary);
+        SetFlowRaw(record, "对手户名", counterparty);
+        SetFlowRaw(record, "记帐时间", date);
+        SetFlowRaw(record, "业务类型", businessType);
+        SetFlowRaw(record, "备注", record.Remark);
         return true;
     }
 
