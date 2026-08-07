@@ -240,12 +240,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Directory.CreateDirectory(directory);
         }
 
-        if (IsIndustrialPersonalElectronicVersion8Or13(context))
-        {
-            QuestPdfPrintService.ExportIndustrialPersonalElectronicVersion8Or13(context, path);
-            return;
-        }
-
         var forceVendorRenderer = ShouldForceVendorRenderer(context);
         if (fallbackService is not null
             && !forceVendorRenderer
@@ -291,13 +285,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static bool ShouldApplyLocalPdfConfig(PrintRenderContext context)
     {
         return !context.Template.IsSystem || context.Template.IsPageRowsOverride;
-    }
-
-    private static bool IsIndustrialPersonalElectronicVersion8Or13(PrintRenderContext context)
-    {
-        return IsIndustrialBank(context.Bank)
-            && (string.Equals(context.Template.Name, "兴业个人电子版8", StringComparison.Ordinal)
-                || string.Equals(context.Template.Name, "兴业个人电子版13", StringComparison.Ordinal));
     }
 
     private static void TryWritePrintFailureDiagnostic(
@@ -9413,7 +9400,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IEnumerable<string> BuildCandidateTemplateNames(string name)
     {
-        if (IsCcbPersonalBlackStampTemplateName(name))
+        if (IsCcbPersonalBlackStampTemplateName(name)
+            || string.Equals(name, "平安个人电子版", StringComparison.Ordinal)
+            || string.Equals(name, "平安个人电子版3", StringComparison.Ordinal)
+            || string.Equals(name, "招行个人电子版6", StringComparison.Ordinal)
+            || string.Equals(name, "兴业个人电子版", StringComparison.Ordinal)
+            || string.Equals(name, "兴业个人电子版8", StringComparison.Ordinal)
+            || string.Equals(name, "兴业个人电子版13", StringComparison.Ordinal)
+            || string.Equals(name, "兴业个人纸质版2", StringComparison.Ordinal))
         {
             yield return name;
         }
