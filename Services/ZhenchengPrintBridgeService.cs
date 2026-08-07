@@ -25,6 +25,7 @@ namespace SpeedEmulator.Services;
 public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 {
     private static readonly object SyncRoot = new();
+    private const string DefaultIcbcQrCodeValue = "https://www.gjxxbankk.com/check.html";
     private const string PrintDiagnosticsWrittenDataKey = "SpeedEmulator.PrintDiagnosticsWritten";
     private const string PrintDiagnosticPathDataKey = "SpeedEmulator.PrintDiagnosticPath";
     private const string PrintDiagnosticSummaryDataKey = "SpeedEmulator.PrintDiagnosticSummary";
@@ -1185,12 +1186,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                     try
                     {
-                        if (string.Equals(context.Template.Name, "\u5FAE\u4FE1\u8F6C\u8D26\u7535\u5B50\u51ED\u8BC1", StringComparison.Ordinal))
-                        {
-                            QuestPdfPrintService.ExportWeChatTransferCertificate(context, path);
-                            return File.Exists(path) && new FileInfo(path).Length > 0;
-                        }
-
                         if (DefaultStimulsoftExporter.ExportOrThrow(
                                 vendorDir,
                                 CreateRenderContext(context, resolvedTemplate),
@@ -4408,6 +4403,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyWechatPersonalStatementBankUserFields(context, target, values);
         }
 
+        if (IsWechatTransferCertificatePrintContext(context))
+        {
+            // The vendor certificate binds “申请方微信号” to UserNum. The local
+            // WeChat import stores that id in AccountNo; UserCode is a statement id.
+            Set(target, "UserNum", NormalizeSingleLinePrintText(FirstNotBlank(
+                context.BankUser.AccountNo,
+                GetBankUserColumnValue(context, values, "微信号"),
+                GetValue(values, "UserNum"))));
+        }
+
         if (IsAlipayPrintContext(context))
         {
             ApplyAlipayPersonalStatementBankUserFields(context, target, values);
@@ -4693,6 +4698,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Set(target, "BankAccount", accountNumber);
                 Set(target, "BankAccountNo", accountNumber);
             }
+        }
+
+        if (IsIcbcPersonalStatementTemplate(context))
+        {
+            var qrCode = NormalizeSingleLinePrintText(FirstNotBlank(
+                GetBankUserColumnValue(context, values, "二维码"),
+                GetValue(values, "QrCode"),
+                DefaultIcbcQrCodeValue));
+            Set(target, "QrCode", qrCode);
         }
 
         SetIcbcPrintTimeAliases(target, ResolveIcbcBankUserPrintTime(context, values));
@@ -6030,6 +6044,32 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 values,
                 productName,
                 IsWechatPersonalStatementPrintContext(context));
+
+            if (IsWechatTransferCertificatePrintContext(context))
+            {
+                // The Stimulsoft certificate reads direction, description and
+                // status from legacy properties with different local meanings.
+                Set(target, nameof(FlowRecord.Usage), FirstNotBlank(
+                    source.IncomeAttribute,
+                    GetValue(values, nameof(FlowRecord.IncomeAttribute)),
+                    source.IncomeFlag,
+                    GetValue(values, nameof(FlowRecord.IncomeFlag)),
+                    source.Usage,
+                    GetValue(values, nameof(FlowRecord.Usage))));
+                Set(target, nameof(FlowRecord.OppositeAccount), NormalizeSingleLinePrintText(FirstNotBlank(
+                    source.OppositeUsername,
+                    GetValue(values, nameof(FlowRecord.OppositeUsername)),
+                    source.Remark,
+                    GetValue(values, nameof(FlowRecord.Remark)),
+                    source.TradePlace,
+                    GetValue(values, nameof(FlowRecord.TradePlace)),
+                    source.OppositeAccount,
+                    GetValue(values, nameof(FlowRecord.OppositeAccount)))));
+                Set(target, nameof(FlowRecord.OppositeUsername), NormalizeSingleLinePrintText(FirstNotBlank(
+                    source.HandleStatus,
+                    GetValue(values, nameof(FlowRecord.HandleStatus)),
+                    GetValue(values, "交易状态"))));
+            }
         }
 
         if (IsAlipayBank(bank))
@@ -6074,6 +6114,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return IsWechatBank(context.Bank)
             && templateName.Contains("\u5FAE\u4FE1", StringComparison.Ordinal)
             && templateName.Contains("\u4E2A\u4EBA\u7248", StringComparison.Ordinal);
+    }
+
+    private static bool IsWechatTransferCertificatePrintContext(PrintRenderContext context)
+    {
+        return IsWechatBank(context.Bank)
+            && string.Equals(
+                context.Template.Name,
+                "\u5FAE\u4FE1\u8F6C\u8D26\u7535\u5B50\u51ED\u8BC1",
+                StringComparison.Ordinal);
     }
 
     private static bool IsIcbcBank(Bank bank)
