@@ -1053,6 +1053,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly MethodInfo configFactory;
         private readonly MethodInfo renderFactory;
         private readonly MethodInfo? vendorGeneratePdfFileMethod;
+        private readonly MethodInfo? vendorGeneratePdfDocumentMethod;
         private readonly MethodInfo? stimulsoftExportMethod;
         private readonly MethodInfo? stimulsoftImportTemplateDataMethod;
         private readonly MethodInfo? vendorApplicationExportMethod;
@@ -1131,6 +1132,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     "caiwu_core.utils.PdfUtil");
                 vendorGeneratePdfFileMethod = FindVendorGeneratePdfFileMethod(
                     pdfUtilType is null ? types : types.Prepend(pdfUtilType).ToList());
+                vendorGeneratePdfDocumentMethod = pdfUtilType?
+                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                    .FirstOrDefault(method => method.Name == "GeneratePDFDocument"
+                        && method.ReturnType.FullName == "QuestPDF.Infrastructure.IDocument"
+                        && method.GetParameters() is var parameters
+                        && parameters.Length == 3
+                        && parameters[0].ParameterType == bankUserType
+                        && parameters[1].ParameterType == flowListType
+                        && parameters[2].ParameterType == templateType);
                 var isolatedPdfEditorType = ResolveRuntimeTypeOrDefault(
                     runtimeAssemblies,
                     "MainEntry.utils.PdfEditorCoreUtil",
@@ -1235,6 +1245,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
                     if (!IsDefaultQuestPdfBridgeDisabled()
                         && !IsAgriculturalBankPersonalPaperTemplate(context)
+                        && !IsCcbPersonalBlackStampTemplate(context)
                         && !ShouldBypassDefaultQuestPdfBridge(context)
                         && !HasLocalPageRowsOverride(context, resolvedTemplate)
                         && !ShouldUseIcbcFallbackStampCode(context))
@@ -1735,7 +1746,26 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 try
                 {
-                    var template = CreateVendorTemplate(context, resolvedTemplate, pageRows);
+                    var template = IsCcbPersonalBlackStampTemplate(context) && resolvedTemplate.Template is not null
+                        ? resolvedTemplate.Template
+                        : CreateVendorTemplate(context, resolvedTemplate, pageRows);
+                    if (IsCcbPersonalBlackStampTemplate(context))
+                    {
+                        if (vendorGeneratePdfDocumentMethod is null)
+                        {
+                            throw new MissingMethodException("Vendor PDF document factory was not found.");
+                        }
+
+                        var nativeDocument = vendorGeneratePdfDocumentMethod.Invoke(null, [bankUser, records, template]);
+                        if (nativeDocument is null)
+                        {
+                            throw new InvalidOperationException("Vendor PDF document factory returned null.");
+                        }
+
+                        generatePdfMethod.Invoke(null, [nativeDocument, path]);
+                        return File.Exists(path) && new FileInfo(path).Length > 0;
+                    }
+
                     if (ShouldUseVendorCompletePdfPipeline(context)
                         && TryGenerateWithVendorCompletePdfPipeline(bankUser, records, template, path))
                     {
@@ -4183,6 +4213,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         var path = Path.Combine(ZhenchengRuntimeLocator.ResolveRequired(), "static", "bank", fileName);
         return File.Exists(path) ? path : string.Empty;
+    }
+
+    private static bool IsCcbPersonalBlackStampTemplate(PrintRenderContext context)
+        => IsCcbPersonalBlackStampTemplateName(context.Template.Name);
+
+    private static bool IsCcbPersonalBlackStampTemplateName(string name)
+    {
+        return name switch
+        {
+            "建行个人电子版23" or "建行个人电子版24" or "建行个人电子版25" or
+            "建行个人电子版26" or "建行个人电子版27" or "建行个人电子版28" or
+            "建行个人电子版29" or "建行个人电子版32" or "建行个人电子版33" or
+            "建行个人电子版34" or "建行个人电子版35" or "建行个人电子版36" => true,
+            _ => false
+        };
     }
 
     private static void SetIcbcStampCodeAliases(object target, string stampCode)
@@ -9368,6 +9413,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static IEnumerable<string> BuildCandidateTemplateNames(string name)
     {
+        if (IsCcbPersonalBlackStampTemplateName(name))
+        {
+            yield return name;
+        }
+
         if (TryRemoveDerivedTemplateSuffix(name, out var derivedSourceName))
         {
             foreach (var candidate in BuildCandidateTemplateNames(derivedSourceName))
