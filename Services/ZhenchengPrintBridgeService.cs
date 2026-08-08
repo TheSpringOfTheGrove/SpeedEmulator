@@ -4922,6 +4922,19 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         object target,
         IReadOnlyDictionary<string, object?> values)
     {
+        var branchTitle = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetValue(values, "UserField_98AAFDC02E92"),
+            context.BankUser.ExtraFields.TryGetValue("UserField_98AAFDC02E92", out var configuredBranchTitle)
+                ? configuredBranchTitle
+                : string.Empty,
+            context.BankUser.OpenBranch));
+        if (!string.IsNullOrWhiteSpace(branchTitle))
+        {
+            // The native BOCOM corporate electronic document prefixes its title
+            // with BankUser.VoucherType (for example, "北京支行明细对账单").
+            Set(target, "VoucherType", branchTitle);
+        }
+
         var accountName = NormalizeSingleLinePrintText(FirstNotBlank(
             context.BankUser.AccountName,
             GetBankUserColumnValue(context, values, "存款人名称", "单位名称", "户名", "账户名称"),
@@ -6512,6 +6525,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyIcbcFlowRecordAccountFields(context, target);
         }
 
+        if (IsCcbCorporatePaperDirectionTemplate(context))
+        {
+            Set(target, nameof(FlowRecord.ProductType), ResolveCcbDebitCreditMarker(source, values));
+        }
+
+        if (IsBankOfChina(context.Bank)
+            && string.Equals(context.Template.Name, "中行对公纸质版", StringComparison.Ordinal))
+        {
+            Set(target, nameof(FlowRecord.VoucherType), NormalizeSingleLinePrintText(source.VoucherType));
+            Set(target, nameof(FlowRecord.VoucherNum), NormalizeSingleLinePrintText(source.VoucherNum));
+            Set(target, nameof(FlowRecord.Remark), string.Empty);
+            Set(target, nameof(FlowRecord.OppositeUsername), string.Empty);
+            Set(target, nameof(FlowRecord.OppositeBank), string.Empty);
+        }
+
         if (IsGuangfaPersonalElectronicPrintContext(context))
         {
             ApplyGuangfaPersonalElectronicFlowFields(context, source, values, target);
@@ -6572,6 +6600,55 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         TrimTextProperty(target, nameof(FlowRecord.SequenceNum), 10);
         TrimTextProperty(target, nameof(FlowRecord.LogNum), 10);
         TrimTextProperty(target, nameof(FlowRecord.OppositeBank), 8);
+    }
+
+    private static bool IsCcbCorporatePaperDirectionTemplate(PrintRenderContext context)
+    {
+        return (context.Bank.Name.Contains("建行", StringComparison.Ordinal)
+                || context.Bank.Name.Contains("建设", StringComparison.Ordinal))
+            && context.Template.Name is "建行对公纸质版3" or "建行对公纸质版7" or "建行对公纸质版10";
+    }
+
+    private static string ResolveCcbDebitCreditMarker(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var debitAmount = source.DebitAmount ?? ParseNullableDouble(GetValue(values, nameof(FlowRecord.DebitAmount)));
+        var creditAmount = source.CreditAmount ?? ParseNullableDouble(GetValue(values, nameof(FlowRecord.CreditAmount)));
+        if (debitAmount > 0)
+        {
+            return "借";
+        }
+
+        if (creditAmount > 0)
+        {
+            return "贷";
+        }
+
+        var tradeMoney = source.TradeMoney ?? ParseNullableDouble(GetValue(values, nameof(FlowRecord.TradeMoney)));
+        if (tradeMoney < 0)
+        {
+            return "借";
+        }
+
+        if (tradeMoney > 0)
+        {
+            return "贷";
+        }
+
+        var direction = FirstNotBlank(
+            source.IncomeAttribute,
+            GetValue(values, nameof(FlowRecord.IncomeAttribute)),
+            source.IncomeFlag,
+            GetValue(values, nameof(FlowRecord.IncomeFlag)));
+        return direction.Contains("支", StringComparison.Ordinal)
+                || direction.Contains("借", StringComparison.Ordinal)
+            ? "借"
+            : direction.Contains("收", StringComparison.Ordinal)
+                || direction.Contains("入", StringComparison.Ordinal)
+                || direction.Contains("贷", StringComparison.Ordinal)
+                ? "贷"
+                : string.Empty;
     }
 
     private static bool IsGuangfaPersonalElectronicPrintContext(PrintRenderContext context)
@@ -9404,6 +9481,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             || string.Equals(name, "平安个人电子版", StringComparison.Ordinal)
             || string.Equals(name, "平安个人电子版3", StringComparison.Ordinal)
             || string.Equals(name, "招行个人电子版6", StringComparison.Ordinal)
+            || string.Equals(name, "中行对公电子版", StringComparison.Ordinal)
+            || string.Equals(name, "中行对公电子版2", StringComparison.Ordinal)
+            || string.Equals(name, "中行对公电子版3", StringComparison.Ordinal)
+            || string.Equals(name, "中行对公纸质版", StringComparison.Ordinal)
+            || string.Equals(name, "交行对公电子版", StringComparison.Ordinal)
+            || string.Equals(name, "邮政对公电子版", StringComparison.Ordinal)
+            || string.Equals(name, "邮政对公电子版2", StringComparison.Ordinal)
+            || string.Equals(name, "农行对公电子版", StringComparison.Ordinal)
+            || string.Equals(name, "农行对公电子版2", StringComparison.Ordinal)
+            || string.Equals(name, "农行对公电子版3", StringComparison.Ordinal)
+            || string.Equals(name, "农行对公电子版4", StringComparison.Ordinal)
             || string.Equals(name, "兴业个人电子版", StringComparison.Ordinal)
             || string.Equals(name, "兴业个人电子版8", StringComparison.Ordinal)
             || string.Equals(name, "兴业个人电子版13", StringComparison.Ordinal)
@@ -9833,6 +9921,24 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         string generatedFallback)
     {
+        if (source.IsDocumentImported && IsCcbCorporatePaperSerialNumberTemplate(context))
+        {
+            var importedSerialNumber = NormalizeDocumentImportSerialNumber(FirstNotBlank(
+                source.SerialNum,
+                GetValue(values, "SerialNum"),
+                source.SequenceNum,
+                GetValue(values, "SequenceNum"),
+                source.LogNum,
+                GetValue(values, "LogNum")));
+
+            // These two native vendor documents split SerialNum at fixed positions.
+            // Their 8-14 character branch is invalid and throws from String.Substring;
+            // malformed imported footer text must therefore remain an empty serial cell.
+            return importedSerialNumber.Length is >= 8 and < 15
+                ? string.Empty
+                : importedSerialNumber;
+        }
+
         if (source.IsDocumentImported && IsConstructionBank(context.Bank))
         {
             // Passing the PDF row number (1, 2, 3...) to the vendor CCB renderer
@@ -9866,6 +9972,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         return NormalizePrintNumber(context, FirstNotBlank(serialNumber, generatedFallback));
+    }
+
+    private static bool IsCcbCorporatePaperSerialNumberTemplate(PrintRenderContext context)
+    {
+        return IsConstructionBank(context.Bank)
+            && context.Bank.Type == BankTypes.Corporate
+            && context.Template.Name is "建行对公纸质版8" or "建行对公纸质版9";
     }
 
     private static string NormalizeDocumentImportSerialNumber(string value)
