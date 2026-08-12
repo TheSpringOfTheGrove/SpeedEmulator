@@ -1687,13 +1687,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     Set(target, "LogNum", logNumber);
                 }
-                var oppositeAccount = FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"));
-                Set(
-                    target,
-                    "OppositeAccount",
-                    source.IsDocumentImported || IsAgriculturalBankPersonalPaperTemplate(context)
-                        ? NormalizeSingleLinePrintText(oppositeAccount)
-                        : NormalizePrintNumber(context, oppositeAccount));
+                Set(target, "OppositeAccount", ResolveVendorOppositeAccount(context, source, values));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -2900,9 +2894,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     Set(target, "LogNum", logNumber);
                 }
-                Set(target, "OppositeAccount", source.IsDocumentImported
-                    ? NormalizeSingleLinePrintText(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount")))
-                    : NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", ResolveVendorOppositeAccount(context, source, values));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -3827,9 +3819,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     Set(target, "LogNum", logNumber);
                 }
-                Set(target, "OppositeAccount", source.IsDocumentImported
-                    ? NormalizeSingleLinePrintText(FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount")))
-                    : NormalizePrintNumber(context, FirstNotBlank(source.OppositeAccount, GetValue(values, "OppositeAccount"))));
+                Set(target, "OppositeAccount", ResolveVendorOppositeAccount(context, source, values));
                 Set(target, "AccountTime", source.AccountTime);
                 Set(target, "TradeMoney", tradeMoney);
                 Set(target, "Balance", source.Balance);
@@ -4164,6 +4154,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "ChapterCode", stampCode);
         Set(target, "ChapterBranch", stampBranch);
         Set(target, "ZhangCode", stampCode);
+        if (IsCcbPersonalBlackStampTemplate(context))
+        {
+            // The vendor CCB black-stamp documents use these strings directly in
+            // their QuestPDF column composition. Their properties default to null,
+            // and an empty local value is otherwise converted back to null by the
+            // generic bridge. Keep blank stamp text visually blank but non-null.
+            SetVendorStringNotNull(target, "StampBranch", stampBranch);
+            SetVendorStringNotNull(target, "ChapterBranch", stampBranch);
+        }
         var resolvedPrintBranch = FirstNotBlank(printBranch, IsAgriculturalBankPersonalPaperTemplate(context) ? string.Empty : stampBranch);
         Set(target, "PrintBranch", resolvedPrintBranch);
         Set(target, "PrintAgency", resolvedPrintBranch);
@@ -8056,6 +8055,32 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return builder.ToString().Trim();
     }
 
+    private static string ResolveVendorOppositeAccount(
+        PrintRenderContext context,
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var value = FirstNotBlank(source.OppositeAccount, GetValue(values, nameof(FlowRecord.OppositeAccount)));
+        if (source.IsDocumentImported && IsBankOfChina(context.Bank))
+        {
+            return PreserveHorizontalPrintSpacing(value);
+        }
+
+        return source.IsDocumentImported || IsAgriculturalBankPersonalPaperTemplate(context)
+            ? NormalizeSingleLinePrintText(value)
+            : NormalizePrintNumber(context, value);
+    }
+
+    private static string PreserveHorizontalPrintSpacing(string text)
+    {
+        return (text ?? string.Empty)
+            .Normalize(NormalizationForm.FormKC)
+            .Replace("\r\n", " ", StringComparison.Ordinal)
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+    }
+
     private static string GetFlowExtraFieldValue(Bank bank, FlowRecord source, IReadOnlyDictionary<string, object?> values, params string[] columnNames)
     {
         foreach (var columnName in columnNames)
@@ -8169,6 +8194,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         Set(target, property, value);
+    }
+
+    private static void SetVendorStringNotNull(object target, string propertyName, string? value)
+    {
+        try
+        {
+            var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+            if (property?.CanWrite == true && property.PropertyType == typeof(string))
+            {
+                property.SetValue(target, value ?? string.Empty);
+            }
+        }
+        catch
+        {
+            // Vendor models differ by release; an absent optional alias is harmless.
+        }
     }
 
     private static void SetPrintFieldAlias(object target, string fieldName, string value)

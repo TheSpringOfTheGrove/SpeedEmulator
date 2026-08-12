@@ -623,6 +623,7 @@ public partial class BankUsersWindow : Window
         {
             var culture = CultureInfo.GetCultureInfo("zh-CN");
             return DateTime.TryParseExact(value, ParseFormats, culture, DateTimeStyles.None, out parsed)
+                || DateTime.TryParseExact(value, "yyyy-MM-ddHH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out parsed)
                 || DateTime.TryParse(value, culture, DateTimeStyles.None, out parsed);
         }
     }

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -706,7 +707,7 @@ public sealed partial class PdfImportService : IPdfImportService
                 SetUserNamed(user, bank, "账号", accountMatch.Groups["account"].Value);
                 SetUserNamed(user, bank, "按收支筛选", accountMatch.Groups["income"].Value);
                 SetUserNamed(user, bank, "按货币筛选", accountMatch.Groups["currency"].Value);
-                SetUserNamed(user, bank, "打印日期", accountMatch.Groups["print"].Value.Trim());
+                SetUserNamed(user, bank, "打印日期", NormalizePdfPrintTime(accountMatch.Groups["print"].Value));
                 parsedUser = true;
             }
         }
@@ -810,7 +811,7 @@ public sealed partial class PdfImportService : IPdfImportService
         var printMatch = Regex.Match(headerText, @"打印时间[：:]\s*(?<print>\d{4}/\d{2}/\d{2}\s*\d{2}:\d{2}:\d{2})");
         if (printMatch.Success)
         {
-            SetUserNamed(user, bank, "打印日期", printMatch.Groups["print"].Value);
+            SetUserNamed(user, bank, "打印日期", NormalizePdfPrintTime(printMatch.Groups["print"].Value));
             matched = true;
         }
 
@@ -899,12 +900,24 @@ public sealed partial class PdfImportService : IPdfImportService
 
         foreach (var line in lines.TakeLast(160))
         {
-            var printMatch = Regex.Match(line.Text, @"生成时间：\s*(?<time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+            var printMatch = Regex.Match(line.Text, @"生成时间[：:]\s*(?<time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
             if (printMatch.Success)
             {
-                SetUserNamed(user, bank, "打印时间", printMatch.Groups["time"].Value);
+                SetUserNamed(user, bank, "打印时间", NormalizePdfPrintTime(printMatch.Groups["time"].Value));
                 break;
             }
+        }
+
+        var stampCode = lines
+            .Where(line => line.LineNumber == 1)
+            .Select(line => CleanPdfValue(line.Text))
+            .Where(text => Regex.IsMatch(text, @"^[A-Za-z0-9]{8,32}$"))
+            .GroupBy(text => text, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Count())
+            .FirstOrDefault(group => group.Count() > 1)?.Key;
+        if (!string.IsNullOrWhiteSpace(stampCode))
+        {
+            SetUserNamed(user, bank, "章内编码", stampCode);
         }
 
         foreach (var group in GroupCcbRecords(lines))
@@ -3727,7 +3740,8 @@ public sealed partial class PdfImportService : IPdfImportService
         double defaultHeaderBottom,
         double rowTopLead,
         Func<PdfTextWord, IReadOnlyList<PdfTextWord>, bool>? isRowStartWord = null,
-        Func<IEnumerable<PdfTextWord>, string>? joinCellWords = null)
+        Func<IEnumerable<PdfTextWord>, string>? joinCellWords = null,
+        Func<string, string>? cleanWordText = null)
     {
         if (words.Count == 0)
         {
@@ -3738,7 +3752,7 @@ public sealed partial class PdfImportService : IPdfImportService
         foreach (var pageGroup in words.GroupBy(item => item.PageNumber).OrderBy(group => group.Key))
         {
             var pageWords = pageGroup
-                .Select(item => item with { Text = CleanPdfValue(item.Text) })
+                .Select(item => item with { Text = (cleanWordText ?? CleanPdfValue)(item.Text) })
                 .Where(item => !string.IsNullOrWhiteSpace(item.Text))
                 .OrderBy(item => item.Top)
                 .ThenBy(item => item.Left)
@@ -5110,7 +5124,7 @@ public sealed partial class PdfImportService : IPdfImportService
         record.TradePlace = NormalizeBocPositionedCell(GetPositionedCell(row, "TradePlace"));
         record.Remark = remark;
         record.OppositeUsername = oppositeName;
-        record.OppositeAccount = NormalizeBocPositionedCell(GetPositionedCell(row, "OppositeAccount"));
+        record.OppositeAccount = NormalizeBocOppositeAccount(GetPositionedCell(row, "OppositeAccount"));
         record.OppositeBank = NormalizeBocPositionedCell(GetPositionedCell(row, "OppositeBank"));
 
         SetFlowRaw(record, "记账日期", date);
@@ -5156,6 +5170,12 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         var normalized = CleanPdfValue(value);
         return Regex.IsMatch(normalized, @"^-+$") ? string.Empty : normalized;
+    }
+
+    private static string NormalizeBocOppositeAccount(string value)
+    {
+        var normalized = NormalizeBocPositionedCell(value);
+        return Regex.Replace(normalized, @"^(?<account>\d{8})N$", "${account}      N");
     }
 
     private static bool TrySplitRepeatedBocValue(string value, out string first, out string second)
@@ -6322,7 +6342,8 @@ public sealed partial class PdfImportService : IPdfImportService
             0d,
             2d,
             IsWechatPositionedRowStart,
-            JoinWechatPositionedCellWords);
+            JoinWechatPositionedCellWords,
+            CleanWechatPositionedWordText);
     }
 
     private static IReadOnlyList<PdfTextWord> SplitWechatWordsAtColumnBoundaries(
@@ -6380,9 +6401,12 @@ public sealed partial class PdfImportService : IPdfImportService
     {
         const double lineTolerance = 2d;
         var lines = new List<List<PdfTextWord>>();
-        foreach (var word in words.OrderBy(item => item.Top).ThenBy(item => item.Left))
+        // Punctuation glyphs such as Chinese full stops share a baseline with the
+        // surrounding text but have a much lower glyph top. Grouping by Top moves
+        // them to the end of a wrapped cell; Bottom is stable for the visual line.
+        foreach (var word in words.OrderBy(item => item.Bottom).ThenBy(item => item.Left))
         {
-            if (lines.Count == 0 || Math.Abs(lines[^1].Average(item => item.Top) - word.Top) > lineTolerance)
+            if (lines.Count == 0 || Math.Abs(lines[^1].Average(item => item.Bottom) - word.Bottom) > lineTolerance)
             {
                 lines.Add([word]);
             }
@@ -6392,8 +6416,30 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
-        return CleanPdfValue(string.Concat(lines.SelectMany(line =>
-            line.OrderBy(item => item.Left).Select(item => item.Text))));
+        return CleanPdfValue(string.Concat(lines.Select(line =>
+            NormalizeWechatInlineSeparators(string.Concat(
+                line.OrderBy(item => item.Left).Select(item => item.Text))))));
+    }
+
+    private static string NormalizeWechatInlineSeparators(string value)
+    {
+        // PdfPig exposes spaces around WeChat's semantic pipe separator through
+        // content-order text, but GetWords() drops them. Restore only this explicit
+        // separator instead of inserting spaces between every positioned word.
+        return value.Contains('|', StringComparison.Ordinal)
+            ? Regex.Replace(value, @"\s*\|\s*", " | ")
+            : value;
+    }
+
+    private static string CleanWechatPositionedWordText(string value)
+    {
+        var text = value?.Trim() ?? string.Empty;
+        if (text.Length is 1 or 2 && text.All(character => character is '-' or '‐' or '‑' or '‒' or '–' or '—' or '−'))
+        {
+            return text;
+        }
+
+        return CleanPdfValue(value);
     }
 
     private static bool IsWechatPositionedRowStart(
@@ -7798,8 +7844,18 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static IReadOnlyList<IReadOnlyList<PdfTextLine>> GroupCcbRecords(IReadOnlyList<PdfTextLine> lines)
     {
+        var repeatedPageSignatureLines = lines
+            .Where(line => line.LineNumber == 1)
+            .Select(line => CleanPdfValue(line.Text))
+            .Where(text => Regex.IsMatch(text, @"^[A-Za-z0-9]{8,32}$"))
+            .GroupBy(text => text, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
         var filtered = lines
-            .Where(line => !IsCcbIgnoredLine(line.Text.Trim()))
+            .Where(line => !IsCcbIgnoredLine(line.Text.Trim())
+                && !(line.LineNumber == 1
+                    && repeatedPageSignatureLines.Contains(CleanPdfValue(line.Text))))
             .ToList();
         var result = new List<IReadOnlyList<PdfTextLine>>();
         var current = new List<PdfTextLine>();
@@ -8182,7 +8238,7 @@ public sealed partial class PdfImportService : IPdfImportService
             || text.Contains("卡号/账号:", StringComparison.Ordinal)
             || text.Contains("当前时间段收支金额合计", StringComparison.Ordinal)
             || text.Contains("序号 摘要", StringComparison.Ordinal)
-            || text.Contains("生成时间：", StringComparison.Ordinal)
+            || Regex.IsMatch(text, @"生成时间\s*[：:]")
             || text.Contains("温馨提示", StringComparison.Ordinal);
     }
 
@@ -8548,6 +8604,19 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         return false;
+    }
+
+    private static string NormalizePdfPrintTime(string value)
+    {
+        var compact = Regex.Replace(CleanPdfValue(value), @"\s+", string.Empty);
+        return DateTime.TryParseExact(
+            compact,
+            ["yyyy-MM-ddHH:mm:ss", "yyyy/MM/ddHH:mm:ss"],
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var parsed)
+            ? parsed.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+            : CleanPdfValue(value);
     }
 
     private static DateTime? ParseDateTimeOrNull(string value)
@@ -10071,6 +10140,33 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         user[columnName] = cleaned;
+        SetConfiguredBankUserColumnValue(user, bank, columnName, cleaned);
+    }
+
+    private static void SetConfiguredBankUserColumnValue(
+        BankUser user,
+        Bank bank,
+        string columnName,
+        string value)
+    {
+        if (!BankUserColumnCatalog.TryGetColumns(bank.Name, out var configuredColumns))
+        {
+            return;
+        }
+
+        var normalizedName = PdfImportTabularMapper.NormalizeHeader(columnName);
+        var columnIndex = Enumerable.Range(0, configuredColumns.Count)
+            .FirstOrDefault(index =>
+                PdfImportTabularMapper.NormalizeHeader(configuredColumns[index]) == normalizedName,
+                -1);
+        if (columnIndex < 0)
+        {
+            return;
+        }
+
+        var raw = $"{bank.Name}|{columnIndex}|{configuredColumns[columnIndex]}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        user[$"UserField_{Convert.ToHexString(hash)[..12]}"] = value;
     }
 
     private static void SetFlowRaw(FlowRecord record, string columnName, string value)

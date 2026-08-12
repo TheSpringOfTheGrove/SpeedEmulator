@@ -335,8 +335,18 @@ public sealed class PrintPreviewViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            await EnsureQuestPdfLayoutAsync(SelectedTemplate);
-            await printPdfService.ExportAsync(CreateContext(SelectedTemplate), dialog.FileName);
+            var existingPreviewPath = PreviewPath;
+            if (!string.IsNullOrWhiteSpace(existingPreviewPath) && File.Exists(existingPreviewPath))
+            {
+                await CopyPreviewPdfAsync(existingPreviewPath, dialog.FileName);
+            }
+            else
+            {
+                await EnsureQuestPdfLayoutAsync(SelectedTemplate);
+                var context = CreateContext(SelectedTemplate);
+                await Task.Run(() => printPdfService.ExportAsync(context, dialog.FileName));
+            }
+
             PreviewPath = dialog.FileName;
             StatusMessage = $"导出成功：{dialog.FileName}";
             MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -350,6 +360,32 @@ public sealed class PrintPreviewViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private static async Task CopyPreviewPdfAsync(string sourcePath, string destinationPath)
+    {
+        var sourceFullPath = Path.GetFullPath(sourcePath);
+        var destinationFullPath = Path.GetFullPath(destinationPath);
+        if (string.Equals(sourceFullPath, destinationFullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await using var source = new FileStream(
+            sourceFullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await using var destination = new FileStream(
+            destinationFullPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            useAsync: true);
+        await source.CopyToAsync(destination);
     }
 
     private async Task NewTemplateAsync()

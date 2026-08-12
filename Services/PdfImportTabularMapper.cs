@@ -325,6 +325,10 @@ internal static class PdfImportTabularMapper
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
         NormalizeImportedTextFields(record, ImportedFlowTextProperties);
+        if (string.Equals(bank.Name, "中行", StringComparison.Ordinal))
+        {
+            RestoreBocOppositeAccountSpacing(record);
+        }
         // Alipay's 商品说明 can legitimately be a numeric value such as "002".
         // Treating it as a generic numeric transaction type replaces it with 收/支.
         if (!bank.Name.Contains("支付宝", StringComparison.Ordinal))
@@ -419,8 +423,44 @@ internal static class PdfImportTabularMapper
     {
         foreach (var fieldName in fields.Keys.ToList())
         {
-            fields[fieldName] = NormalizeWrappedPdfText(fields[fieldName]);
+            var value = fields[fieldName];
+            fields[fieldName] = TryNormalizeIsoDateTime(value, out var dateTime)
+                ? dateTime
+                : NormalizeWrappedPdfText(value);
         }
+    }
+
+    private static void RestoreBocOppositeAccountSpacing(FlowRecord record)
+    {
+        static string Restore(string value)
+        {
+            return Regex.Replace(value ?? string.Empty, @"^(?<account>\d{8})\s*N$", "${account}      N");
+        }
+
+        record.OppositeAccount = Restore(record.OppositeAccount);
+        foreach (var fieldName in record.ExtraFields.Keys.ToList())
+        {
+            record.ExtraFields[fieldName] = Restore(record.ExtraFields[fieldName]);
+        }
+    }
+
+    private static bool TryNormalizeIsoDateTime(string? value, out string normalized)
+    {
+        var text = value?.Trim() ?? string.Empty;
+        if (Regex.IsMatch(text, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$")
+            && DateTime.TryParseExact(
+                Regex.Replace(text, @"\s+", " "),
+                "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsed))
+        {
+            normalized = parsed.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        normalized = string.Empty;
+        return false;
     }
 
     private static void NormalizeImportedTransactionType(FlowRecord record)
