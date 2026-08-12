@@ -1472,7 +1472,7 @@ public sealed partial class PdfImportService : IPdfImportService
             var dateMatch = Regex.Match(text, @"下载日期：(?<print>\d{8}\s+\d{2}:\d{2}:\d{2})\s+对账日期：(?<start>\d{8})-(?<end>\d{8})");
             if (dateMatch.Success)
             {
-                SetUserNamed(user, bank, "打印日期", dateMatch.Groups["print"].Value);
+                SetUserNamed(user, bank, "打印日期", NormalizePdfPrintTime(dateMatch.Groups["print"].Value));
                 SetUserNamed(user, bank, "开始对账日期", dateMatch.Groups["start"].Value);
                 SetUserNamed(user, bank, "结束对账日期", dateMatch.Groups["end"].Value);
                 parsedUser = true;
@@ -8611,7 +8611,7 @@ public sealed partial class PdfImportService : IPdfImportService
         var compact = Regex.Replace(CleanPdfValue(value), @"\s+", string.Empty);
         return DateTime.TryParseExact(
             compact,
-            ["yyyy-MM-ddHH:mm:ss", "yyyy/MM/ddHH:mm:ss"],
+            ["yyyy-MM-ddHH:mm:ss", "yyyy/MM/ddHH:mm:ss", "yyyyMMddHH:mm:ss"],
             CultureInfo.InvariantCulture,
             DateTimeStyles.None,
             out var parsed)
