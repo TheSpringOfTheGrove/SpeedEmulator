@@ -1,5 +1,6 @@
 using System.IO;
 using System.Globalization;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -625,6 +626,8 @@ public sealed partial class PdfImportService : IPdfImportService
             _ => false
         };
 
+        TryImportChapterCode(bankUser, bank, document, result.FlowRecords);
+
         NormalizeImportedUser(bankUser, bank);
         if (parsedUser && HasUsefulUserData(bankUser))
         {
@@ -676,6 +679,118 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         return result;
+    }
+
+    private static void TryImportChapterCode(
+        BankUser user,
+        Bank bank,
+        PdfExtractedDocument document,
+        IReadOnlyList<FlowRecord> records)
+    {
+        if (!string.IsNullOrWhiteSpace(user.ChapterCode))
+        {
+            return;
+        }
+
+        var excludedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddExcludedUserValues(user, excludedValues);
+        foreach (var record in records)
+        {
+            AddChapterCodeExclusion(excludedValues, record.Account);
+            AddChapterCodeExclusion(excludedValues, record.OppositeAccount);
+            AddChapterCodeExclusion(excludedValues, record.SerialNum);
+            AddChapterCodeExclusion(excludedValues, record.VoucherNum);
+            AddChapterCodeExclusion(excludedValues, record.OperatorNum);
+        }
+
+        var candidates = document.Lines
+            .Select(line => new
+            {
+                Line = line,
+                Value = Regex.Replace(CleanPdfValue(line.Text), @"\s+", string.Empty)
+            })
+            .Where(item => Regex.IsMatch(item.Value, @"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{6,20}$"))
+            .Where(item => !item.Value.StartsWith("JYLS", StringComparison.OrdinalIgnoreCase))
+            .Where(item => !excludedValues.Contains(item.Value))
+            .ToList();
+
+        var scoredCandidates = candidates
+            .GroupBy(item => item.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Value = group.First().Value,
+                Score = ScoreChapterCodeCandidate(group.Select(item => item.Line).ToList(), document.Lines)
+            })
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Value.Length)
+            .ToList();
+        var selected = scoredCandidates.FirstOrDefault(item => item.Score >= 100);
+        if (selected is null
+            && scoredCandidates.Count == 1
+            && AllowsStandaloneChapterCode(bank.Name))
+        {
+            selected = scoredCandidates[0];
+        }
+
+        if (selected is not null)
+        {
+            SetUserNamed(user, bank, "章内编码", selected.Value);
+        }
+    }
+
+    private static bool AllowsStandaloneChapterCode(string bankName)
+    {
+        return bankName is not ("建行" or "农行" or "广发" or "微信" or "支付宝" or "浦发对公");
+    }
+
+    private static int ScoreChapterCodeCandidate(
+        IReadOnlyList<PdfTextLine> occurrences,
+        IReadOnlyList<PdfTextLine> lines)
+    {
+        var first = occurrences[0];
+        var distinctPages = occurrences
+            .Select(item => item.PageNumber)
+            .Distinct()
+            .Count();
+        var score = distinctPages > 1 || occurrences.Count > 1 ? 40 : 0;
+        var nearSealLabel = lines.Any(line =>
+            line.PageNumber == first.PageNumber
+            && Math.Abs(line.LineNumber - first.LineNumber) <= 4
+            && Regex.IsMatch(line.Text, "印章|专用章|业务章|回单章"));
+        if (nearSealLabel)
+        {
+            score += 100;
+        }
+
+        return score;
+    }
+
+    private static void AddExcludedUserValues(BankUser user, ISet<string> excludedValues)
+    {
+        foreach (var property in typeof(BankUser).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.PropertyType != typeof(string)
+                || property.GetIndexParameters().Length != 0
+                || property.Name == nameof(BankUser.ChapterCode))
+            {
+                continue;
+            }
+
+            AddChapterCodeExclusion(excludedValues, property.GetValue(user) as string);
+        }
+
+        foreach (var value in user.ExtraFields.Values)
+        {
+            AddChapterCodeExclusion(excludedValues, value);
+        }
+    }
+
+    private static void AddChapterCodeExclusion(ISet<string> excludedValues, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            excludedValues.Add(Regex.Replace(CleanPdfValue(value), @"\s+", string.Empty));
+        }
     }
 
     private static bool ParseBocPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
