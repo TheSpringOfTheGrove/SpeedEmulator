@@ -329,6 +329,10 @@ internal static class PdfImportTabularMapper
         {
             RestoreBocOppositeAccountSpacing(record);
         }
+        if (string.Equals(bank.Name, "中信", StringComparison.Ordinal))
+        {
+            RestoreCiticAtmSummarySpacing(record);
+        }
         // Alipay's 商品说明 can legitimately be a numeric value such as "002".
         // Treating it as a generic numeric transaction type replaces it with 收/支.
         if (!bank.Name.Contains("支付宝", StringComparison.Ordinal))
@@ -438,6 +442,21 @@ internal static class PdfImportTabularMapper
         }
 
         record.OppositeAccount = Restore(record.OppositeAccount);
+        foreach (var fieldName in record.ExtraFields.Keys.ToList())
+        {
+            record.ExtraFields[fieldName] = Restore(record.ExtraFields[fieldName]);
+        }
+    }
+
+    private static void RestoreCiticAtmSummarySpacing(FlowRecord record)
+    {
+        static string Restore(string value)
+        {
+            return Regex.Replace(value ?? string.Empty, @"\bATM(?=[\u4e00-\u9fff])", "ATM ", RegexOptions.IgnoreCase);
+        }
+
+        record.ProductBrief = Restore(record.ProductBrief);
+        record.ProductName = Restore(record.ProductName);
         foreach (var fieldName in record.ExtraFields.Keys.ToList())
         {
             record.ExtraFields[fieldName] = Restore(record.ExtraFields[fieldName]);
