@@ -5836,6 +5836,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
+        if (bank.Type == BankTypes.Personal)
+        {
+            // CCB personal templates bind their location/comment column to different
+            // vendor properties, but its sole source is the local
+            // "Merchant outlet number and name" column (TradePlace). An empty source
+            // cell must remain empty; never borrow summary or counterparty text.
+            var merchantBranch = FirstNotBlank(
+                source.TradePlace,
+                GetFlowExtraFieldValue(bank, source, values, "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D\u79F0"));
+            values[nameof(FlowRecord.TradePlace)] = merchantBranch;
+            values[nameof(FlowRecord.NetNum)] = merchantBranch;
+            values[nameof(FlowRecord.Remark)] = merchantBranch;
+            return;
+        }
+
         var importedTradePlace = FirstNotBlank(
             GetValue(values, nameof(FlowRecord.TradePlace)),
             GetValue(values, nameof(FlowRecord.NetNum)),
@@ -5907,7 +5922,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             areaNum,
             branchNum);
 
-        if (bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
+        if ((bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
+                || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
+            && bank.Type == BankTypes.Personal)
+        {
+            // Vendor CCB personal layouts variously read TradePlace, NetNum or Remark
+            // for the location/comment column. Bridge the same local field to all
+            // three properties without any fallback.
+            var merchantBranch = FirstNotBlank(
+                source.TradePlace,
+                GetFlowExtraFieldValue(bank, source, values, "\u5546\u6237\u7F51\u70B9\u53F7\u53CA\u540D\u79F0"));
+            tradePlace = merchantBranch;
+            netNum = merchantBranch;
+            remark = merchantBranch;
+        }
+        else if (bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
             || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
         {
             if (source.IsDocumentImported)
