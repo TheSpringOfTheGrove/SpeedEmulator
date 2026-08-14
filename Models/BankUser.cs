@@ -29,7 +29,7 @@ public sealed class BankUser : ObservableObject
     private string chapterBranch = string.Empty;
     private bool shouldPrintSeal;
     private decimal openingBalance;
-    private bool autoCalculateInterest;
+    private bool autoCalculateInterest = true;
     private string sealImagePath = string.Empty;
     private Dictionary<string, string> extraFields = [];
     private DateTime createdAt = DateTime.Now;

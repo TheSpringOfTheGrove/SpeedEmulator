@@ -35,6 +35,7 @@ public sealed class TableExcelService : ITableExcelService
     private const int TextCellStyleIndex = 2;
     private const int MoneyCellStyleIndex = 3;
     private const string ExportDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
+    private const string InvalidExcelFormatMessage = "Excel 文件格式不正确，请使用当前银行固定格式的 Excel 文件。";
     private static readonly string[] DateColumnMarkers = ["\u65e5\u671f", "\u65f6\u95f4", "date", "time"];
 
     private enum FlowMoneyDirection
@@ -49,7 +50,7 @@ public sealed class TableExcelService : ITableExcelService
         var dialog = new OpenFileDialog
         {
             Title = "导入EXCEL",
-            Filter = "Excel 文件 (*.xlsx)|*.xlsx|所有文件 (*.*)|*.*",
+            Filter = "Excel 文件 (*.xlsx)|*.xlsx",
             Multiselect = false,
             CheckFileExists = true
         };
@@ -74,13 +75,14 @@ public sealed class TableExcelService : ITableExcelService
 
     public IReadOnlyList<BankUser> ImportBankUsers(string path, Bank bank)
     {
-        var sheet = ReadFirstSheet(path);
+        var sheet = ReadFirstSheetForImport(path);
         if (sheet.Count == 0)
         {
-            return [];
+            throw new InvalidDataException(InvalidExcelFormatMessage);
         }
 
         var columns = GetBankUserColumns(bank, includeOnlyVisible: false).ToList();
+        ValidateExactHeaderLayout(sheet[0], columns);
         var headerMap = CreateHeaderMap(sheet[0], columns, ignoreIdColumn: true);
         var result = new List<BankUser>();
 
@@ -131,21 +133,23 @@ public sealed class TableExcelService : ITableExcelService
 
     public IReadOnlyList<FlowRecord> ImportFlowRecords(string path, Bank bank, BankUser bankUser)
     {
-        var sheet = ReadFirstSheet(path);
+        var sheet = ReadFirstSheetForImport(path);
         if (sheet.Count == 0)
         {
-            return [];
+            throw new InvalidDataException(InvalidExcelFormatMessage);
         }
 
         var columns = GetFlowExportColumns(bank).ToList();
-        var flowHeaderRowIndex = FindHeaderRow(sheet, columns);
+        var flowHeaderRowIndex = FindExactHeaderRow(sheet, columns);
         if (flowHeaderRowIndex < 0)
         {
-            throw new InvalidDataException("未找到流水明细表头。");
+            throw new InvalidDataException(InvalidExcelFormatMessage);
         }
 
         if (flowHeaderRowIndex >= 2)
         {
+            var userColumns = GetFlowExportUserColumns(bank).ToList();
+            ValidateExactHeaderLayout(sheet[0], userColumns);
             ApplyBankUserInfo(sheet[0], sheet[1], bank, bankUser);
         }
 
@@ -363,32 +367,59 @@ public sealed class TableExcelService : ITableExcelService
         }
     }
 
-    private static int FindHeaderRow(
+    private static int FindExactHeaderRow(
         IReadOnlyList<Dictionary<int, string>> sheet,
         IReadOnlyList<ColumnDefinition> columns)
     {
-        if (sheet.Count >= 3)
+        if (sheet.Count >= 3 && HasExactHeaderLayout(sheet[2], columns))
         {
-            var thirdRowMap = CreateHeaderMap(sheet[2], columns, ignoreIdColumn: true);
-            if (thirdRowMap.Count >= 2)
+            return 2;
+        }
+
+        return HasExactHeaderLayout(sheet[0], columns) ? 0 : -1;
+    }
+
+    private static void ValidateExactHeaderLayout(
+        IReadOnlyDictionary<int, string> headerRow,
+        IReadOnlyList<ColumnDefinition> columns)
+    {
+        if (!HasExactHeaderLayout(headerRow, columns))
+        {
+            throw new InvalidDataException(InvalidExcelFormatMessage);
+        }
+    }
+
+    private static bool HasExactHeaderLayout(
+        IReadOnlyDictionary<int, string> headerRow,
+        IReadOnlyList<ColumnDefinition> columns)
+    {
+        var expectedHeaders = columns
+            .Where(column => !IsIdColumn(column))
+            .Select(column => NormalizeHeader(column.Name ?? string.Empty))
+            .ToList();
+        var actualHeaders = headerRow
+            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+            .OrderBy(item => item.Key)
+            .ToList();
+
+        if (expectedHeaders.Count == 0 || actualHeaders.Count != expectedHeaders.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < expectedHeaders.Count; index++)
+        {
+            if (actualHeaders[index].Key != index + 1
+                || !string.Equals(
+                    NormalizeHeader(actualHeaders[index].Value),
+                    expectedHeaders[index],
+                    StringComparison.OrdinalIgnoreCase))
             {
-                return 2;
+                return false;
             }
         }
 
-        var bestIndex = -1;
-        var bestScore = 0;
-        for (var index = 0; index < Math.Min(sheet.Count, 8); index++)
-        {
-            var score = CreateHeaderMap(sheet[index], columns, ignoreIdColumn: true).Count;
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestIndex = index;
-            }
-        }
-
-        return bestScore > 0 ? bestIndex : -1;
+        return true;
     }
 
     private static Dictionary<int, ColumnDefinition> CreateHeaderMap(
@@ -541,7 +572,11 @@ public sealed class TableExcelService : ITableExcelService
     {
         if (field == nameof(FlowRecord.TradeMoney))
         {
-            return record.TradeMoney.HasValue ? Math.Abs(record.TradeMoney.Value) : null;
+            return record.TradeMoney.HasValue
+                ? IsPostalPersonalBank(bank)
+                    ? record.TradeMoney.Value
+                    : Math.Abs(record.TradeMoney.Value)
+                : null;
         }
 
         if (field == nameof(FlowRecord.CreditAmount))
@@ -746,6 +781,13 @@ public sealed class TableExcelService : ITableExcelService
             && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
     }
 
+    private static bool IsPostalPersonalBank(Bank? bank)
+    {
+        return bank is not null
+            && string.Equals(bank.Name, "\u90ae\u653f", StringComparison.Ordinal)
+            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
+    }
+
     private static double ApplyFlowMoneyDirection(double amount, FlowMoneyDirection direction)
     {
         return direction switch
@@ -935,6 +977,28 @@ public sealed class TableExcelService : ITableExcelService
                 .GroupBy(item => item.ColumnIndex)
                 .ToDictionary(group => group.Key, group => group.First().Value))
             .ToList();
+    }
+
+    private static IReadOnlyList<Dictionary<int, string>> ReadFirstSheetForImport(string path)
+    {
+        if (!File.Exists(path)
+            || !string.Equals(Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(InvalidExcelFormatMessage);
+        }
+
+        try
+        {
+            return ReadFirstSheet(path);
+        }
+        catch (InvalidDataException ex) when (!string.Equals(ex.Message, InvalidExcelFormatMessage, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(InvalidExcelFormatMessage, ex);
+        }
+        catch (System.Xml.XmlException ex)
+        {
+            throw new InvalidDataException(InvalidExcelFormatMessage, ex);
+        }
     }
 
     private static List<string> ReadSharedStrings(ZipArchive archive)
