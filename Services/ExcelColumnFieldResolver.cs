@@ -7,6 +7,12 @@ public static class ExcelColumnFieldResolver
     public static (string? Field, string Type) ResolveFlowRecordField(string bankName, string columnName)
     {
         var normalizedName = NormalizeColumnName(columnName);
+        if (string.Equals(bankName, "\u5de5\u884c", StringComparison.Ordinal)
+            && normalizedName is "\u501f\u8d37" or "\u501f/\u8d37" or "\u501f\u8d37\u6807\u5fd7")
+        {
+            return (nameof(FlowRecord.CreditType), "Text");
+        }
+
         if (IsWechatBankName(bankName)
             && normalizedName is "收支其他" or "收支其它" or "收入支出其他" or "收/支/其他")
         {

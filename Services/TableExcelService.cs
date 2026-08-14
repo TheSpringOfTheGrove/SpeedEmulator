@@ -195,7 +195,7 @@ public sealed class TableExcelService : ITableExcelService
         var rowIndex = 1;
         foreach (var row in rows)
         {
-            table.Add(flowColumns.Select(column => GetEntityValue(row, column, rowIndex)).ToList());
+            table.Add(flowColumns.Select(column => GetEntityValue(row, column, rowIndex, bank)).ToList());
             rowIndex++;
         }
 
@@ -507,7 +507,7 @@ public sealed class TableExcelService : ITableExcelService
         }
     }
 
-    private static object? GetEntityValue(object entity, ColumnDefinition column, int rowIndex)
+    private static object? GetEntityValue(object entity, ColumnDefinition column, int rowIndex, Bank? bank = null)
     {
         if (string.IsNullOrWhiteSpace(column.Field))
         {
@@ -526,7 +526,7 @@ public sealed class TableExcelService : ITableExcelService
 
         if (entity is FlowRecord record)
         {
-            var derived = GetDerivedFlowValue(record, column.Field);
+            var derived = GetDerivedFlowValue(record, column.Field, bank);
             if (derived is not null)
             {
                 return FormatCellValue(derived, column);
@@ -537,7 +537,7 @@ public sealed class TableExcelService : ITableExcelService
         return FormatCellValue(property?.GetValue(entity), column);
     }
 
-    private static object? GetDerivedFlowValue(FlowRecord record, string field)
+    private static object? GetDerivedFlowValue(FlowRecord record, string field, Bank? bank)
     {
         if (field == nameof(FlowRecord.TradeMoney))
         {
@@ -566,6 +566,22 @@ public sealed class TableExcelService : ITableExcelService
             if (record.TradeMoney.Value < 0)
             {
                 return "支出";
+            }
+        }
+
+        if (field == nameof(FlowRecord.CreditType)
+            && bank is not null
+            && IsIcbcPersonalBank(bank)
+            && record.TradeMoney.HasValue)
+        {
+            if (record.TradeMoney.Value < 0)
+            {
+                return "\u501f";
+            }
+
+            if (record.TradeMoney.Value > 0)
+            {
+                return "\u8d37";
             }
         }
 
@@ -621,7 +637,22 @@ public sealed class TableExcelService : ITableExcelService
     {
         record.BankId = bank.Id;
         record.BankUserId = bankUser.Id;
-        var direction = ResolveFlowMoneyDirection(record.IncomeAttribute);
+        var direction = IsIcbcPersonalBank(bank)
+            ? ResolveIcbcFlowMoneyDirection(record.CreditType)
+            : ResolveFlowMoneyDirection(record.IncomeAttribute);
+
+        if (!record.TradeMoney.HasValue && IsAgriculturalBankPersonal(bank))
+        {
+            // ABC personal Excel statements use two independent amount columns.
+            // Empty sides are exported as numeric zero, so HasValue alone cannot
+            // determine the direction. Credit is income and debit is expense.
+            var credit = Math.Abs(record.CreditAmount.GetValueOrDefault());
+            var debit = Math.Abs(record.DebitAmount.GetValueOrDefault());
+            if (record.CreditAmount.HasValue || record.DebitAmount.HasValue)
+            {
+                record.TradeMoney = credit - debit;
+            }
+        }
 
         if (!record.TradeMoney.HasValue)
         {
@@ -690,6 +721,29 @@ public sealed class TableExcelService : ITableExcelService
         }
 
         return FlowMoneyDirection.Unknown;
+    }
+
+    private static FlowMoneyDirection ResolveIcbcFlowMoneyDirection(string? value)
+    {
+        var normalized = NormalizeHeader(value ?? string.Empty);
+        return normalized switch
+        {
+            "\u501f" or "\u501f\u65b9" => FlowMoneyDirection.Expense,
+            "\u8d37" or "\u8d37\u65b9" => FlowMoneyDirection.Income,
+            _ => FlowMoneyDirection.Unknown
+        };
+    }
+
+    private static bool IsIcbcPersonalBank(Bank bank)
+    {
+        return string.Equals(bank.Name, "\u5de5\u884c", StringComparison.Ordinal)
+            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
+    }
+
+    private static bool IsAgriculturalBankPersonal(Bank bank)
+    {
+        return string.Equals(bank.Name, "\u519c\u884c", StringComparison.Ordinal)
+            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
     }
 
     private static double ApplyFlowMoneyDirection(double amount, FlowMoneyDirection direction)
