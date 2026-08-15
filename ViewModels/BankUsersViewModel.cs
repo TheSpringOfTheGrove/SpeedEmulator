@@ -340,7 +340,7 @@ public sealed class BankUsersViewModel : ObservableObject
 
     private void OpenPrintPreview()
     {
-        if (SelectedUser is null || SelectedUser.Id <= 0)
+        if (SelectedUser is null)
         {
             StatusMessage = "请选择用户";
             MessageBox.Show("请选择用户", "提示", MessageBoxButton.OK, MessageBoxImage.Information);

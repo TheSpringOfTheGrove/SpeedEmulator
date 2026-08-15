@@ -4593,57 +4593,37 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         var statementNumber = NormalizeSingleLinePrintText(FirstNotBlank(
             GetBankUserColumnValue(context, values, "\u7F16\u53F7", "\u7535\u5B50\u6D41\u6C34\u53F7", "\u8BC1\u660E\u7F16\u53F7"),
-            context.BankUser.UserCode,
-            GetValue(values, nameof(BankUser.UserCode)),
-            GetValue(values, "UserNum"),
-            GetValue(values, "CustomerNo"),
-            GetValue(values, "PrintNo"),
-            GetValue(values, "SerialNum")));
+            context.BankUser.UserCode));
         var idNumber = NormalizeSingleLinePrintText(FirstNotBlank(
             GetBankUserColumnValue(context, values, "\u8EAB\u4EFD\u8BC1", "\u8EAB\u4EFD\u8BC1\u53F7", "\u8BC1\u4EF6\u53F7\u7801", "\u8BC1\u4EF6\u53F7", "\u8BC1\u4EF6\u7F16\u53F7"),
-            context.BankUser.IdNumber,
-            GetValue(values, nameof(BankUser.IdNumber)),
-            GetValue(values, "IdNum"),
-            GetValue(values, "IdCardNo"),
-            GetValue(values, "IdentityNo"),
-            GetValue(values, "CertNo"),
-            GetValue(values, "CertificateNo")));
+            context.BankUser.IdNumber));
         var alipayAccount = NormalizeSingleLinePrintText(FirstNotBlank(
-            GetBankUserColumnValue(context, values, "\u652F\u4ED8\u5B9D\u8D26\u6237", "\u652F\u4ED8\u5B9D\u8D26\u53F7", "\u8D26\u53F7", "\u8D26\u6237\u8D26\u53F7"),
-            context.BankUser.AccountNo,
-            GetValue(values, nameof(BankUser.AccountNo)),
-            GetValue(values, "AccountNo"),
-            GetValue(values, "Account"),
-            GetValue(values, "AccountNum"),
-            GetValue(values, "CardNum")));
+            GetBankUserColumnValue(context, values, "\u652F\u4ED8\u5B9D\u8D26\u6237", "\u652F\u4ED8\u5B9D\u8D26\u53F7"),
+            context.BankUser.AccountNo));
 
-        if (!string.IsNullOrWhiteSpace(statementNumber))
+        foreach (var propertyName in new[]
         {
-            Set(target, "IdNum", statementNumber);
-            Set(target, "IdNumber", statementNumber);
-            Set(target, "IdCardNo", statementNumber);
-            Set(target, "IdentityNo", statementNumber);
-            Set(target, "CertNo", statementNumber);
-            Set(target, "CertificateNo", statementNumber);
+            "IdNum", "IdNumber", "IdCardNo", "IdentityNo", "CertNo", "CertificateNo"
+        })
+        {
+            Set(target, propertyName, statementNumber);
         }
 
-        if (!string.IsNullOrWhiteSpace(idNumber))
+        foreach (var propertyName in new[]
         {
-            Set(target, "UserNum", idNumber);
-            Set(target, "CustomerNo", idNumber);
-            Set(target, "PrintNo", idNumber);
-            Set(target, "UserCode", idNumber);
+            "UserNum", "CustomerNo", "PrintNo", "UserCode"
+        })
+        {
+            Set(target, propertyName, idNumber);
         }
 
-        if (!string.IsNullOrWhiteSpace(alipayAccount))
+        foreach (var propertyName in new[]
         {
-            Set(target, "AccountNum", alipayAccount);
-            Set(target, "Account", alipayAccount);
-            Set(target, "AccountNo", alipayAccount);
-            Set(target, "CardNum", alipayAccount);
-            Set(target, "CardNo", alipayAccount);
-            Set(target, "AlipayAccount", alipayAccount);
-            Set(target, "AliPayAccount", alipayAccount);
+            "AccountNum", "Account", "AccountNo", "CardNum", "CardNo",
+            "BankAccount", "BankAccountNo", "AlipayAccount", "AliPayAccount"
+        })
+        {
+            Set(target, propertyName, alipayAccount);
         }
     }
 
@@ -6415,6 +6395,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, "交易方式"),
             GetValue(values, nameof(FlowRecord.CashCheck)),
             GetValue(values, nameof(FlowRecord.TradeChannel)));
+        if (usePersonalStatementAliases)
+        {
+            paymentMethod = AddWechatPaymentMethodBreakOpportunities(paymentMethod);
+        }
         var serialNumber = NormalizePrintNumber(FirstNotBlank(
             source.SerialNum,
             GetValue(values, nameof(FlowRecord.SerialNum)),
@@ -6540,6 +6524,34 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         var match = Regex.Match(text, @"^(?:/|[A-Za-z0-9][A-Za-z0-9_./-]*)");
         return match.Success ? match.Value : text;
+    }
+
+    private static string AddWechatPaymentMethodBreakOpportunities(string value)
+    {
+        var text = NormalizeSingleLinePrintText(value);
+        if (text.Length < 2)
+        {
+            return text;
+        }
+
+        // QuestPDF treats a consecutive ASCII digit run as one word. In the narrow
+        // WeChat payment-method column that moves the whole card suffix to the next
+        // line even when the current line still has room. Zero-width break points
+        // keep the visible value unchanged and let the native template fill each line.
+        var builder = new StringBuilder(text.Length);
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (index > 0
+                && text[index - 1] is >= '0' and <= '9'
+                && text[index] is >= '0' and <= '9')
+            {
+                builder.Append('\u200B');
+            }
+
+            builder.Append(text[index]);
+        }
+
+        return builder.ToString();
     }
 
     private static void ApplyTemplateSpecificFlowTextLimits(
@@ -9959,7 +9971,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return string.Empty;
         }
 
-        return IsBankOfChina(context.Bank)
+        return IsAlipayPrintContext(context)
+            || IsBankOfChina(context.Bank)
             || IsSpdbCorporatePrintContext(context)
             || IsChinaMerchantsCorporatePrintContext(context)
             || IsCiticCorporatePrintContext(context)
