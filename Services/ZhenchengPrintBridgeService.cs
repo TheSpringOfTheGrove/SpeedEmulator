@@ -7051,7 +7051,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         var safeWideDetail = NormalizeSingleLinePrintText(rawWideDetail);
         SetAgriculturalPaperWideDetail(target, safeWideDetail);
-        RestoreAgriculturalPaperMainRowRemark(source, values, target, rawWideDetail);
+        RestoreAgriculturalPaperMainRowRemark(source, values, target);
         RestoreAgriculturalPaperCounterpartyFields(source, values, target);
 
         ClearAgriculturalPaperNarrowDetailFields(target);
@@ -7110,7 +7110,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     string.IsNullOrWhiteSpace(accountToken) ? oppositeAccount : accountToken));
         }
 
-        RestoreAgriculturalPaperMainRowRemark(source, values, target, longDetail ?? string.Empty);
+        RestoreAgriculturalPaperMainRowRemark(source, values, target);
 
         ClearAgriculturalPaperNarrowDetailFields(target);
         ClearAgriculturalPaperUnsafeLongTextFields(target, longDetail ?? string.Empty);
@@ -7390,32 +7390,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static void RestoreAgriculturalPaperMainRowRemark(
         FlowRecord source,
         IReadOnlyDictionary<string, object?> values,
-        object target,
-        string rawWideDetail)
+        object target)
     {
-        var currentRemark = NormalizeSingleLinePrintText(ReadStringProperty(target, nameof(FlowRecord.Remark), string.Empty));
-        if (string.IsNullOrWhiteSpace(currentRemark))
-        {
-            return;
-        }
-
-        var normalizedRawDetail = NormalizeSingleLinePrintText(rawWideDetail);
-        if (!string.Equals(currentRemark, normalizedRawDetail, StringComparison.Ordinal)
-            && !LooksLikeLongPaperDetail(currentRemark))
-        {
-            return;
-        }
-
-        var shortRemark = NormalizeSingleLinePrintText(FirstNotBlank(
-            source.TradeExplain,
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
-            source.Usage,
-            GetValue(values, nameof(FlowRecord.Usage)),
-            source.MerchantName,
-            GetValue(values, nameof(FlowRecord.MerchantName)),
-            source.ProductBrief,
-            GetValue(values, nameof(FlowRecord.ProductBrief))));
-        Set(target, nameof(FlowRecord.Remark), LooksLikeLongPaperDetail(shortRemark) ? string.Empty : shortRemark);
+        var remark = NormalizeSingleLinePrintText(FirstNotBlank(
+            source.Remark,
+            GetValue(values, nameof(FlowRecord.Remark))));
+        Set(target, nameof(FlowRecord.Remark), remark);
     }
 
     private static void RestoreAgriculturalPaperCounterpartyFields(
