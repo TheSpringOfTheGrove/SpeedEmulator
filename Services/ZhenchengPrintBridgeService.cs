@@ -6366,7 +6366,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsAgriculturalBankPersonalElectronicTemplate(context))
         {
-            NormalizeAgriculturalElectronicFlowFields(target);
+            NormalizeAgriculturalElectronicFlowFields(source, values, target);
             return;
         }
 
@@ -7126,8 +7126,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             "BankAccountNo",
             "BankCardNo");
 
-        var tradeChannel = NormalizeAgriculturalPaperTradeChannel(
-            ReadStringProperty(target, nameof(FlowRecord.TradeChannel), string.Empty));
+        var tradeChannel = NormalizeAgriculturalPaperTradeChannel(FirstNotBlank(
+            source.TradeChannelEn,
+            GetValue(values, nameof(FlowRecord.TradeChannelEn))));
         Set(target, nameof(FlowRecord.TradeChannel), tradeChannel);
         Set(target, nameof(FlowRecord.TradeChannelEn), tradeChannel);
     }
@@ -7593,13 +7594,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return isAgriculturalBank && isPersonalElectronic;
     }
 
-    private static void NormalizeAgriculturalElectronicFlowFields(object target)
+    private static void NormalizeAgriculturalElectronicFlowFields(
+        FlowRecord source,
+        IReadOnlyDictionary<string, object?> values,
+        object target)
     {
         var counterpartyName = LimitSingleLinePrintText(
             ReadStringProperty(target, nameof(FlowRecord.OppositeUsername), string.Empty),
             10);
-        var channel = NormalizeAgriculturalElectronicTradeChannel(
-            ReadStringProperty(target, nameof(FlowRecord.TradeChannel), string.Empty));
+        var channel = NormalizeAgriculturalElectronicTradeChannel(FirstNotBlank(
+            source.TradeChannel,
+            GetValue(values, nameof(FlowRecord.TradeChannel))));
         Set(target, nameof(FlowRecord.OppositeUsername), counterpartyName);
         Set(target, nameof(FlowRecord.TradeChannel), channel);
         Set(target, nameof(FlowRecord.TradeChannelEn), channel);
