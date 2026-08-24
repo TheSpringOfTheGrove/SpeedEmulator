@@ -3960,19 +3960,18 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         };
     }
 
-    private static void SetIcbcStampCodeAliases(object target, string stampCode)
-    {
-        Set(target, "StampCode", stampCode);
-        Set(target, "ChapterCode", stampCode);
-        Set(target, "ZhangCode", stampCode);
-        Set(target, "VerificationCode", stampCode);
-    }
-
     private static string ResolveBankUserStampCode(
         PrintRenderContext context,
         BankUser bankUser,
         IReadOnlyDictionary<string, object?> values)
     {
+        if (IsIcbcPersonalElectronicTemplate(context))
+        {
+            // The genuine ICBC electronic statements generate their stamp code
+            // per page and do not consume the user-configured stamp code.
+            return string.Empty;
+        }
+
         var configured = ResolveConfiguredBankUserStampCode(context, bankUser, values);
 
         if (!IsIcbcPrintContext(context))
@@ -4626,18 +4625,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "VerificationCode", verificationCode);
         }
 
-        if (IsIcbcPrintContext(context))
-        {
-            var stampCode = FirstNotBlank(
-                Convert.ToString(GetPropertyValue(target, "StampCode"), CultureInfo.CurrentCulture),
-                Convert.ToString(GetPropertyValue(target, "ChapterCode"), CultureInfo.CurrentCulture),
-                Convert.ToString(GetPropertyValue(target, "ZhangCode"), CultureInfo.CurrentCulture),
-                ResolveBankUserStampCode(context, context.BankUser, values));
-            if (!string.IsNullOrWhiteSpace(stampCode))
-            {
-                Set(target, "VerificationCode", stampCode);
-            }
-        }
     }
 
     private static void ApplyBocomCorporateBankUserFields(
@@ -5952,6 +5939,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             && templateName.Contains("\u4E2A\u4EBA", StringComparison.Ordinal)
             && (templateName.Contains("\u7535\u5B50\u7248", StringComparison.Ordinal)
                 || templateName.Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal));
+    }
+
+    private static bool IsIcbcPersonalElectronicTemplate(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        return IsIcbcPersonalStatementTemplate(context)
+            && templateName.Contains("\u7535\u5B50\u7248", StringComparison.Ordinal);
     }
 
     private static bool IsAgriculturalBank(Bank bank)
