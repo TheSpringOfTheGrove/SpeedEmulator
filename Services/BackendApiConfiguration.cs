@@ -5,7 +5,7 @@ namespace SpeedEmulator.Services;
 
 public sealed class BackendApiOptions
 {
-    public const string DefaultBaseAddress = "http://159.75.125.68:8088";
+    public const string DefaultBaseAddress = "https://financial-api.930i.xyz";
 
     public string BaseAddress { get; set; } = DefaultBaseAddress;
 
