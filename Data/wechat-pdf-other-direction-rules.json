@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "tradeType": "零钱提现",
+      "direction": "支出"
+    },
+    {
+      "tradeType": "信用卡还款",
+      "direction": "支出"
+    },
+    {
+      "tradeType": "转入零钱通-来自零钱",
+      "direction": "支出"
+    },
+    {
+      "tradeType": "零钱充值",
+      "direction": "收入"
+    },
+    {
+      "tradeType": "零钱通转出-到零钱",
+      "direction": "收入"
+    }
+  ]
+}

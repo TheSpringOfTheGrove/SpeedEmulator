@@ -1,4 +1,7 @@
+using System.Globalization;
 using System.Windows;
+using System.Windows.Data;
+using SpeedEmulator.Services;
 using SpeedEmulator.ViewModels;
 
 namespace SpeedEmulator.Views;
@@ -25,5 +28,21 @@ public partial class PdfImportPreviewWindow : Window
     {
         DialogResult = e.DialogResult;
         Close();
+    }
+}
+
+public sealed class WechatDirectionPendingVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var isPending = value is IReadOnlyDictionary<string, string> fields
+            && fields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField);
+        var showPending = !string.Equals(System.Convert.ToString(parameter, culture), "Resolved", StringComparison.Ordinal);
+        return isPending == showPending ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
     }
 }

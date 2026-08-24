@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Globalization;
@@ -17,6 +18,8 @@ public interface IFrontApiClient
         CancellationToken cancellationToken = default);
 
     Task<FrontSession> ValidateSessionAsync(CancellationToken cancellationToken = default);
+
+    Task SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default);
 
     Task<FrontAnnouncement> GetAnnouncementAsync(CancellationToken cancellationToken = default);
 
@@ -92,6 +95,13 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
         return session;
     }
 
+    public async Task SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "api/front/online");
+        using var response = await SendAsync(() => httpClient.SendAsync(request, cancellationToken), cancellationToken);
+        _ = await ReadPayloadAsync<FrontOnlineData>(response, "在线状态刷新失败", cancellationToken);
+    }
+
     public async Task<FrontAnnouncement> GetAnnouncementAsync(CancellationToken cancellationToken = default)
     {
         using var request = CreateAuthorizedRequest(HttpMethod.Get, "api/front/announcement");
@@ -164,18 +174,29 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
         }
         catch (JsonException ex)
         {
-            throw new FrontApiException($"{fallbackMessage}：后台返回格式无法解析。", ex);
+            var message = response.StatusCode == HttpStatusCode.Unauthorized
+                ? "登录状态已失效，请重新登录。"
+                : $"{fallbackMessage}：后台返回格式无法解析。";
+            throw new FrontApiException(message, ex, response.StatusCode);
         }
 
         if (body is null)
         {
-            throw new FrontApiException($"{fallbackMessage}：后台没有返回数据。");
+            var message = response.StatusCode == HttpStatusCode.Unauthorized
+                ? "登录状态已失效，请重新登录。"
+                : $"{fallbackMessage}：后台没有返回数据。";
+            throw new FrontApiException(
+                message,
+                response.StatusCode);
         }
 
         if (!response.IsSuccessStatusCode || !body.Success || body.Data is null)
         {
             var message = string.IsNullOrWhiteSpace(body.Message) ? fallbackMessage : body.Message;
-            throw new FrontApiException(message);
+            throw new FrontApiException(
+                message,
+                response.StatusCode,
+                apiRejected: !body.Success);
         }
 
         return body.Data;
@@ -308,6 +329,21 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
         string MachineCode,
         string NetworkIp,
         string LoginRegion);
+
+    private sealed class FrontOnlineData
+    {
+        public long AccountId { get; set; }
+
+        public string? Account { get; set; }
+
+        public bool Online { get; set; }
+
+        public DateTime? LastHeartbeatAt { get; set; }
+
+        public DateTime? AccountExpiresAt { get; set; }
+
+        public int OfflineAfterSeconds { get; set; }
+    }
 
     private static FrontBankUserRequestDto CreateBankUserRequest(Bank bank, BankUser user)
     {
@@ -498,6 +534,12 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
 
 public sealed class FrontApiException : Exception
 {
+    public HttpStatusCode? StatusCode { get; }
+
+    public bool ApiRejected { get; }
+
+    public bool InvalidatesSession => StatusCode == HttpStatusCode.Unauthorized || ApiRejected;
+
     public FrontApiException(string message)
         : base(message)
     {
@@ -506,5 +548,19 @@ public sealed class FrontApiException : Exception
     public FrontApiException(string message, Exception innerException)
         : base(message, innerException)
     {
+    }
+
+    public FrontApiException(string message, HttpStatusCode? statusCode, bool apiRejected = false)
+        : base(message)
+    {
+        StatusCode = statusCode;
+        ApiRejected = apiRejected;
+    }
+
+    public FrontApiException(string message, Exception innerException, HttpStatusCode? statusCode, bool apiRejected = false)
+        : base(message, innerException)
+    {
+        StatusCode = statusCode;
+        ApiRejected = apiRejected;
     }
 }

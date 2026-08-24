@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
+using SpeedEmulator.Services;
 
 namespace SpeedEmulator.ViewModels;
 
@@ -11,9 +13,7 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
     public PdfImportPreviewViewModel(PdfImportResult result)
     {
         Result = result;
-        statusMessage = result.HasBlockingErrors
-            ? "存在阻断错误，请检查问题列表。"
-            : "请核对预览数据，确认无误后导入。";
+        statusMessage = string.Empty;
 
         IEnumerable<BankUser> previewUsers = result.Users.Count > 0
             ? result.Users
@@ -26,6 +26,7 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
         foreach (var record in result.FlowRecords)
         {
             FlowRecords.Add(record);
+            record.PropertyChanged += FlowRecord_PropertyChanged;
         }
 
         foreach (var issue in result.Issues)
@@ -35,6 +36,7 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
 
         ConfirmCommand = new RelayCommand(Confirm, () => CanImport);
         CancelCommand = new RelayCommand(() => RequestClose?.Invoke(this, new DialogCloseRequestedEventArgs(false)));
+        UpdateDirectionConfirmationState();
     }
 
     public event EventHandler<DialogCloseRequestedEventArgs>? RequestClose;
@@ -55,7 +57,14 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
 
     public bool HasIssues => Issues.Count > 0;
 
-    public bool CanImport => Result.ImportedCount > 0 && !Result.HasBlockingErrors;
+    public bool CanImport => Result.ImportedCount > 0
+        && !Result.HasBlockingErrors
+        && PendingIncomeDirectionCount == 0;
+
+    public IReadOnlyList<string> IncomeDirectionOptions { get; } = ["收入", "支出"];
+
+    public int PendingIncomeDirectionCount => FlowRecords.Count(record =>
+        record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField));
 
     public ObservableCollection<BankUser> Users { get; } = [];
 
@@ -82,5 +91,59 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
         }
 
         RequestClose?.Invoke(this, new DialogCloseRequestedEventArgs(true));
+    }
+
+    private void FlowRecord_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not FlowRecord record
+            || e.PropertyName != nameof(FlowRecord.IncomeFlag)
+            || !record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField)
+            || record.IncomeFlag is not ("收入" or "支出"))
+        {
+            return;
+        }
+
+        if (!PdfImportTabularMapper.TryParseDouble(record["金额"], out var rawAmount))
+        {
+            StatusMessage = $"预览第 {record.Index} 行的原始金额无法解析，暂时不能确认收支方向。";
+            return;
+        }
+
+        var amount = Math.Abs(rawAmount);
+        var isIncome = record.IncomeFlag == "收入";
+        record.TradeMoney = isIncome ? amount : 0 - amount;
+        record.CreditAmount = isIncome ? amount : null;
+        record.DebitAmount = isIncome ? null : amount;
+
+        var fields = new Dictionary<string, string>(record.ExtraFields);
+        fields.Remove(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField);
+        record.ExtraFields = fields;
+
+        var resolvedIssues = Result.Issues
+            .Where(issue => issue.LineNumber == record.Index
+                && issue.Message.Contains("无法确认收支方向", StringComparison.Ordinal))
+            .ToList();
+        foreach (var issue in resolvedIssues)
+        {
+            Result.Issues.Remove(issue);
+            Issues.Remove(issue);
+        }
+
+        UpdateDirectionConfirmationState();
+    }
+
+    private void UpdateDirectionConfirmationState()
+    {
+        var pendingCount = PendingIncomeDirectionCount;
+        StatusMessage = Result.HasBlockingErrors
+            ? "存在阻断错误，请检查问题列表。"
+            : pendingCount > 0
+                ? $"还有 {pendingCount} 条流水无法自动确认收支方向，请在“收支”列手动选择。"
+                : "请核对预览数据，确认无误后导入。";
+        OnPropertyChanged(nameof(PendingIncomeDirectionCount));
+        OnPropertyChanged(nameof(CanImport));
+        OnPropertyChanged(nameof(HasIssues));
+        OnPropertyChanged(nameof(Summary));
+        ConfirmCommand.RaiseCanExecuteChanged();
     }
 }

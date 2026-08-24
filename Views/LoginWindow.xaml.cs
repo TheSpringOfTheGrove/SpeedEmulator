@@ -10,6 +10,7 @@ public partial class LoginWindow : Window
 {
     private readonly FrontSession session;
     private readonly IFrontApiClient frontApiClient;
+    private readonly IFrontTokenStore tokenStore;
     private readonly LoginViewModel viewModel;
     private bool handedOffClient;
 
@@ -17,14 +18,18 @@ public partial class LoginWindow : Window
     {
         InitializeComponent();
         session = new FrontSession();
+        tokenStore = new FrontTokenStore();
         frontApiClient = new FrontApiClient(session);
         viewModel = new LoginViewModel(
             () => PasswordInput.Password,
             OpenMainWindow,
+            session,
             frontApiClient,
             new MachineIdService(),
             new NetworkLocationService(),
-            new LoginCredentialStore());
+            new LoginCredentialStore(),
+            tokenStore,
+            ShowAuthenticationMessage);
         DataContext = viewModel;
         PasswordInput.Password = viewModel.InitialPassword;
     }
@@ -44,6 +49,11 @@ public partial class LoginWindow : Window
         Application.Current.MainWindow = mainWindow;
         mainWindow.Show();
         Close();
+    }
+
+    private void ShowAuthenticationMessage(string message)
+    {
+        MessageBox.Show(this, message, "登录提示", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     protected override void OnClosed(EventArgs e)

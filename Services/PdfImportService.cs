@@ -660,6 +660,10 @@ public sealed partial class PdfImportService : IPdfImportService
         EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
         FlowRecordChronologicalOrder.SortInPlace(result.FlowRecords);
         ReindexFlowRecords(result.FlowRecords);
+        if (bank.Name == "微信")
+        {
+            AddWechatUnresolvedDirectionIssues(result);
+        }
         if (target == PdfImportTarget.BankUsers && result.Users.Count == 0 && !result.HasBlockingErrors)
         {
             result.Issues.Add(new PdfImportIssue
@@ -2097,12 +2101,22 @@ public sealed partial class PdfImportService : IPdfImportService
             AddWechatUserHeaderWarning(result, lines);
         }
 
+        var directionRules = WechatPdfDirectionRuleCatalog.Load();
+        if (!string.IsNullOrWhiteSpace(directionRules.ErrorMessage))
+        {
+            result.Issues.Add(new PdfImportIssue
+            {
+                Severity = PdfImportIssueSeverity.Warning,
+                Message = directionRules.ErrorMessage
+            });
+        }
+
         var positionedRows = BuildWechatPositionedRows(document.Words);
         var positionedRecords = new List<FlowRecord>(positionedRows.Count);
         var failedPositionedRows = new List<PdfPositionedRow>();
         foreach (var row in positionedRows)
         {
-            if (TryParseWechatPositionedRecord(row, bank, user, out var record))
+            if (TryParseWechatPositionedRecord(row, bank, user, directionRules, out var record))
             {
                 positionedRecords.Add(record);
             }
@@ -2121,7 +2135,7 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             foreach (var group in GroupWechatRecords(lines))
             {
-                if (TryParseWechatRecord(group, bank, user, out var record))
+                if (TryParseWechatRecord(group, bank, user, directionRules, out var record))
                 {
                     result.FlowRecords.Add(record);
                 }
@@ -6603,6 +6617,32 @@ public sealed partial class PdfImportService : IPdfImportService
         });
     }
 
+    private static void AddWechatUnresolvedDirectionIssues(PdfImportResult result)
+    {
+        var unresolved = result.FlowRecords
+            .Where(record => record.ExtraFields.TryGetValue(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField, out _))
+            .ToList();
+        foreach (var record in unresolved)
+        {
+            var pageNumber = record.ExtraFields.TryGetValue(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField, out var pageText)
+                && int.TryParse(pageText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var page)
+                    ? (int?)page
+                    : null;
+            var sourceDirection = FirstNotBlank(
+                record["收/支/其他"],
+                record["收支其他"],
+                record["收支其它"]);
+            result.Issues.Add(new PdfImportIssue
+            {
+                Severity = PdfImportIssueSeverity.Warning,
+                PageNumber = pageNumber,
+                LineNumber = record.Index,
+                Message = $"预览第 {record.Index} 行无法确认收支方向，请在流水明细的“收支”列手动选择收入或支出。",
+                RawText = $"交易类型：{record.ProductBrief}；原分类：{sourceDirection}；金额：{record["金额"]}"
+            });
+        }
+    }
+
     private static string DescribeWechatPositionedRow(PdfPositionedRow row)
     {
         return string.Join(
@@ -6636,6 +6676,7 @@ public sealed partial class PdfImportService : IPdfImportService
         PdfPositionedRow row,
         Bank bank,
         BankUser user,
+        WechatPdfDirectionRuleSet directionRules,
         out FlowRecord record)
     {
         record = new FlowRecord();
@@ -6649,20 +6690,21 @@ public sealed partial class PdfImportService : IPdfImportService
             GetPositionedCell(row, "Amount"));
         var accountTime = ParseWechatPositionedDateTime(rowText);
         var tradeType = CollapseChineseSeparatedWords(GetPositionedCell(row, "TradeType"));
-        var direction = Regex.Match(CleanPdfValue(GetPositionedCell(row, "Direction")), @"收入|支出|其他|不计收支").Value;
+        var sourceDirection = Regex.Match(CleanPdfValue(GetPositionedCell(row, "Direction")), @"收入|支出|其他|其它|不计收支").Value;
+        var directionResolved = TryResolveWechatMoneyDirection(directionRules, tradeType, sourceDirection, out var direction);
         var paymentMethod = CollapseChineseSeparatedWords(GetPositionedCell(row, "PaymentMethod"));
         var amountText = GetPositionedCell(row, "Amount");
         var amount = ParseDoubleOrNull(amountText);
 
         if (string.IsNullOrWhiteSpace(tradeOrder)
             || !accountTime.HasValue
-            || string.IsNullOrWhiteSpace(direction)
+            || string.IsNullOrWhiteSpace(sourceDirection)
             || !amount.HasValue)
         {
             return false;
         }
 
-        var signedAmount = ApplyPaymentDirection(amount, direction);
+        var signedAmount = directionResolved ? ApplyPaymentDirection(amount, direction) : null;
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
         record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
@@ -6670,24 +6712,30 @@ public sealed partial class PdfImportService : IPdfImportService
         record.AccountTime = accountTime;
         record.ProductBrief = tradeType;
         record.ProductName = tradeType;
-        record.IncomeAttribute = direction;
-        record.IncomeFlag = direction;
         record.CashCheck = paymentMethod;
         record.TradeChannel = paymentMethod;
         record.TradeMoney = signedAmount;
         record.OppositeUsername = CleanPdfValue(GetPositionedCell(row, "Counterparty"));
         record.MerchantName = CleanPdfValue(GetPositionedCell(row, "MerchantOrder"));
         ApplySignedAmountColumns(record, signedAmount);
+        // ApplySignedAmountColumns fills the debit/credit columns and also assigns a generic
+        // income/expense label. WeChat's 收/支/其他 column must retain the exact PDF value.
+        record.IncomeAttribute = sourceDirection;
+        record.IncomeFlag = directionResolved ? direction : string.Empty;
+        if (!directionResolved)
+        {
+            record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedDirectionField] = row.PageNumber.ToString(CultureInfo.InvariantCulture);
+        }
 
         SetFlowRaw(record, "交易单号", record.SerialNum);
         SetFlowRaw(record, "流水号", record.SerialNum);
         SetFlowRaw(record, "交易时间", accountTime.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
         SetFlowRaw(record, "交易类型", record.ProductBrief);
-        SetFlowRaw(record, "收/支/其他", direction);
-        SetFlowRaw(record, "收支其他", direction);
-        SetFlowRaw(record, "收支其它", direction);
-        SetFlowRaw(record, "收入支出其他", direction);
-        SetFlowRaw(record, "收入支出", direction);
+        SetFlowRaw(record, "收/支/其他", sourceDirection);
+        SetFlowRaw(record, "收支其他", sourceDirection);
+        SetFlowRaw(record, "收支其它", sourceDirection);
+        SetFlowRaw(record, "收入支出其他", sourceDirection);
+        SetFlowRaw(record, "收入支出", sourceDirection);
         SetFlowRaw(record, "交易方式", record.CashCheck);
         SetFlowRaw(record, "金额", amountText);
         SetFlowRaw(record, "交易对方", record.OppositeUsername);
@@ -6823,6 +6871,7 @@ public sealed partial class PdfImportService : IPdfImportService
         IReadOnlyList<PdfTextLine> group,
         Bank bank,
         BankUser user,
+        WechatPdfDirectionRuleSet directionRules,
         out FlowRecord record)
     {
         record = new FlowRecord();
@@ -6849,7 +6898,8 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         var type = CollapseChineseSeparatedWords(string.Join(' ', tokens.Take(directionIndex)));
-        var direction = CleanPdfValue(tokens[directionIndex]);
+        var sourceDirection = CleanPdfValue(tokens[directionIndex]);
+        var directionResolved = TryResolveWechatMoneyDirection(directionRules, type, sourceDirection, out var direction);
         var afterDirection = tokens.Skip(directionIndex + 1).ToList();
         var amountIndex = afterDirection.FindIndex(item => ParseDoubleOrNull(item).HasValue);
         if (amountIndex < 0)
@@ -6862,7 +6912,7 @@ public sealed partial class PdfImportService : IPdfImportService
         var afterAmount = afterDirection.Skip(amountIndex + 1).ToList();
         var (counterparty, merchantOrder) = SplitWechatCounterpartyAndMerchant(afterAmount);
         var parsedAmount = ParseDoubleOrNull(rawAmount);
-        var signedAmount = ApplyPaymentDirection(parsedAmount, direction);
+        var signedAmount = directionResolved ? ApplyPaymentDirection(parsedAmount, direction) : null;
 
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
@@ -6871,24 +6921,30 @@ public sealed partial class PdfImportService : IPdfImportService
         record.AccountTime = ParseDateTimeOrNull($"{date} {time}");
         record.ProductBrief = type;
         record.ProductName = type;
-        record.IncomeAttribute = direction;
-        record.IncomeFlag = direction;
         record.CashCheck = paymentMethod;
         record.TradeChannel = paymentMethod;
         record.TradeMoney = signedAmount;
         record.OppositeUsername = counterparty;
         record.MerchantName = merchantOrder;
         ApplySignedAmountColumns(record, signedAmount);
+        // ApplySignedAmountColumns fills the debit/credit columns and also assigns a generic
+        // income/expense label. WeChat's 收/支/其他 column must retain the exact PDF value.
+        record.IncomeAttribute = sourceDirection;
+        record.IncomeFlag = directionResolved ? direction : string.Empty;
+        if (!directionResolved)
+        {
+            record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedDirectionField] = group[0].PageNumber.ToString(CultureInfo.InvariantCulture);
+        }
 
         SetFlowRaw(record, "交易单号", record.SerialNum);
         SetFlowRaw(record, "流水号", record.SerialNum);
         SetFlowRaw(record, "交易时间", record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? $"{date} {time}");
         SetFlowRaw(record, "交易类型", record.ProductBrief);
-        SetFlowRaw(record, "收/支/其他", direction);
-        SetFlowRaw(record, "收支其他", direction);
-        SetFlowRaw(record, "收支其它", direction);
-        SetFlowRaw(record, "收入支出其他", direction);
-        SetFlowRaw(record, "收入支出", direction);
+        SetFlowRaw(record, "收/支/其他", sourceDirection);
+        SetFlowRaw(record, "收支其他", sourceDirection);
+        SetFlowRaw(record, "收支其它", sourceDirection);
+        SetFlowRaw(record, "收入支出其他", sourceDirection);
+        SetFlowRaw(record, "收入支出", sourceDirection);
         SetFlowRaw(record, "交易方式", record.CashCheck);
         SetFlowRaw(record, "金额", rawAmount);
         SetFlowRaw(record, "交易对方", record.OppositeUsername);
@@ -9567,7 +9623,23 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool IsWechatDirectionToken(string value)
     {
-        return value is "收入" or "支出" or "其他" or "不计收支";
+        return value is "收入" or "支出" or "其他" or "其它" or "不计收支";
+    }
+
+    private static bool TryResolveWechatMoneyDirection(
+        WechatPdfDirectionRuleSet directionRules,
+        string tradeType,
+        string sourceDirection,
+        out string direction)
+    {
+        direction = CleanPdfValue(sourceDirection);
+        if (direction is "收入" or "支出")
+        {
+            return true;
+        }
+
+        return direction is "其他" or "其它" or "不计收支"
+            && directionRules.TryResolve(tradeType, out direction);
     }
 
     private static (string Counterparty, string MerchantOrder) SplitWechatCounterpartyAndMerchant(IReadOnlyList<string> tokens)

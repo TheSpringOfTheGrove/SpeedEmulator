@@ -24,6 +24,18 @@ public sealed class FrontSession
 
     public string AuthorizationHeader => $"{TokenType} {Token}".Trim();
 
+    public void Clear()
+    {
+        Token = string.Empty;
+        TokenType = "Bearer";
+        ExpiresAt = default;
+        AccountId = 0;
+        Account = string.Empty;
+        DisplayName = string.Empty;
+        MachineCode = string.Empty;
+        authorizedBanks.Clear();
+    }
+
     public void Apply(FrontLoginData data)
     {
         Token = data.Token ?? string.Empty;
