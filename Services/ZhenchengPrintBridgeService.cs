@@ -2992,15 +2992,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             bankUserType = exportParameters[0].ParameterType;
             flowListType = exportParameters[1].ParameterType;
             flowType = flowListType.GetGenericArguments()[0];
-            templateDesignerMethod = exportMethod.DeclaringType?
-                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-                .FirstOrDefault(method =>
-                {
-                    var parameters = method.GetParameters();
-                    return method.ReturnType == typeof(void)
-                        && parameters.Length == 1
-                        && string.Equals(parameters[0].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal);
-                });
+            templateDesignerMethod = ResolveStimulsoftTemplateDesignerMethod(types, exportMethod);
             templateType = templateDesignerMethod?.GetParameters()[0].ParameterType
                 ?? (typeof(Stream).IsAssignableFrom(exportParameters[2].ParameterType)
                     ? typeof(object)
@@ -3029,6 +3021,49 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return method.DeclaringType?.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
                 .Any(candidate => candidate.ReturnType == typeof(void)
                     && candidate.GetParameters() is [{ ParameterType.Name: "PDFTemplate" }]) == true;
+        }
+
+        internal static bool IsStimulsoftTemplateDesignerMethod(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            return method.ReturnType == typeof(void)
+                && parameters.Length == 1
+                && string.Equals(parameters[0].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal);
+        }
+
+        private static bool IsStimulsoftTemplateExportSignature(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            return method.ReturnType == typeof(void)
+                && parameters.Length == 4
+                && string.Equals(parameters[0].ParameterType.Name, "BankUser", StringComparison.Ordinal)
+                && parameters[1].ParameterType.FullName?.Contains("GenerateFlowRecord", StringComparison.Ordinal) == true
+                && string.Equals(parameters[2].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal)
+                && parameters[3].ParameterType == typeof(string);
+        }
+
+        private static MethodInfo? ResolveStimulsoftTemplateDesignerMethod(
+            IReadOnlyCollection<Type> runtimeTypes,
+            MethodInfo exportMethod)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+            var directMethod = exportMethod.DeclaringType?
+                .GetMethods(flags)
+                .FirstOrDefault(IsStimulsoftTemplateDesignerMethod);
+            if (directMethod is not null)
+            {
+                return directMethod;
+            }
+
+            // Newer vendor runtimes keep the stable export facade in caiwu-core,
+            // while the native Stimulsoft designer entry remains on an obfuscated
+            // wrapper in the main application assembly. Pair the one-argument
+            // PDFTemplate method with its four-argument export sibling so that a
+            // repository delete method with the same signature is never selected.
+            return runtimeTypes
+                .Where(type => type.GetMethods(flags).Any(IsStimulsoftTemplateExportSignature))
+                .SelectMany(type => type.GetMethods(flags))
+                .FirstOrDefault(IsStimulsoftTemplateDesignerMethod);
         }
 
         public static bool TryExport(string vendorDir, PrintRenderContext context, string path)
