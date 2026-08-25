@@ -170,7 +170,6 @@ public sealed class ZhenchengFlowGenerationAdapter
     {
         private const string VendorInterestMarkerColumnName = "__CodexInterestProductBrief";
         private const string AmountUnitField = "__GeneratedAmountUnit";
-        private const string SystemRowKindField = "__GeneratedSystemRowKind";
         private const string InterestRowKind = "Interest";
         private const string InterestText = "\u7ed3\u606f";
         private const string InterestTaxText = "\u5229\u606f\u7a0e";
@@ -5266,7 +5265,7 @@ public sealed class ZhenchengFlowGenerationAdapter
 
             var isIcbc = IsIcbcBank(request.Bank);
             record.ExtraFields[AmountUnitField] = "0.01";
-            record.ExtraFields[SystemRowKindField] = InterestRowKind;
+            FlowGeneratedRowKinds.SetKind(record, InterestRowKind);
 
             var flowAccount = ResolveFlowAccountValue(request);
             if (!string.IsNullOrWhiteSpace(flowAccount)

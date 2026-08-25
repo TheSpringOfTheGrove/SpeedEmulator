@@ -8,6 +8,7 @@
     "startTime": "0",
     "endTime": "1",
     "ratePercent": "0.15",
+    "generateInterestTaxRow": true,
     "fields": [
       {
         "name": "\u65E5\u5FD7\u53F7",

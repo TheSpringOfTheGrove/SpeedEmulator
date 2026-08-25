@@ -119,7 +119,7 @@ public partial class BankUsersWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this

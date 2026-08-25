@@ -61,6 +61,7 @@ public sealed class FlowRecord : ObservableObject
     private double? balanceAmount;
     private string receiptNum = string.Empty;
     private string incomeFlag = string.Empty;
+    private string generatedRowKind = string.Empty;
     private Dictionary<string, string> extraFields = new(16);
 
     public int Index { get => index; set => SetProperty(ref index, value); }
@@ -119,6 +120,16 @@ public sealed class FlowRecord : ObservableObject
     public double? BalanceAmount { get => balanceAmount; set => SetProperty(ref balanceAmount, value); }
     public string ReceiptNum { get => receiptNum; set => SetProperty(ref receiptNum, value); }
     public string IncomeFlag { get => incomeFlag; set => SetProperty(ref incomeFlag, value); }
+
+    /// <summary>
+    /// Identifies persisted system-generated rows such as settlement interest and interest tax.
+    /// Unlike temporary generation metadata in <see cref="ExtraFields"/>, this value survives saving.
+    /// </summary>
+    public string GeneratedRowKind
+    {
+        get => generatedRowKind;
+        set => SetProperty(ref generatedRowKind, value ?? string.Empty);
+    }
 
     public Dictionary<string, string> ExtraFields
     {

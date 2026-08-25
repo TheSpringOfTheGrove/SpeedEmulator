@@ -127,6 +127,19 @@
                              Style="{StaticResource ValueTextBoxStyle}" />
                 </Grid>
 
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="106" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="利息税行" Style="{StaticResource FieldLabelStyle}" />
+                    <CheckBox Grid.Column="1"
+                              Content="结息后生成配套的利息税流水"
+                              IsChecked="{Binding Setting.GenerateInterestTaxRow, UpdateSourceTrigger=PropertyChanged}"
+                              VerticalAlignment="Center"
+                              Foreground="#111111" />
+                </Grid>
+
                 <Border Height="1"
                         Background="#DCDCDC"
                         Margin="0,0,0,12" />
