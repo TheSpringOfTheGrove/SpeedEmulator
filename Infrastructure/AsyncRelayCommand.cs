@@ -4,11 +4,17 @@ namespace SpeedEmulator.Infrastructure;
 
 public sealed class AsyncRelayCommand : ICommand
 {
-    private readonly Func<Task> execute;
-    private readonly Func<bool>? canExecute;
+    private readonly Func<object?, Task> execute;
+    private readonly Predicate<object?>? canExecute;
     private bool isRunning;
 
     public AsyncRelayCommand(Func<Task> execute, Func<bool>? canExecute = null)
+    {
+        this.execute = _ => execute();
+        this.canExecute = canExecute is null ? null : _ => canExecute();
+    }
+
+    public AsyncRelayCommand(Func<object?, Task> execute, Predicate<object?>? canExecute = null)
     {
         this.execute = execute;
         this.canExecute = canExecute;
@@ -18,7 +24,7 @@ public sealed class AsyncRelayCommand : ICommand
 
     public bool CanExecute(object? parameter)
     {
-        return !isRunning && (canExecute?.Invoke() ?? true);
+        return !isRunning && (canExecute?.Invoke(parameter) ?? true);
     }
 
     public async void Execute(object? parameter)
@@ -32,7 +38,7 @@ public sealed class AsyncRelayCommand : ICommand
         {
             isRunning = true;
             RaiseCanExecuteChanged();
-            await execute();
+            await execute(parameter);
         }
         finally
         {

@@ -11,6 +11,7 @@ namespace SpeedEmulator;
 
 public partial class MainWindow : Window
 {
+    private const string AccountExpiredMessage = "账号已过期，请联系系统管理员";
     private readonly IBankUserRepository bankUserRepository = new JsonBankUserRepository();
     private readonly IBankUserColumnSettingsRepository bankUserColumnSettingsRepository = new JsonBankUserColumnSettingsRepository();
     private readonly IBankInterestSettingsRepository bankInterestSettingsRepository = new JsonBankInterestSettingsRepository();
@@ -20,18 +21,29 @@ public partial class MainWindow : Window
     private readonly IPdfImportService pdfImportService = new PdfImportService();
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService = new PdfImportPreviewDialogService();
     private readonly IFrontApiClient frontApiClient;
+    private readonly FrontSession session;
+    private readonly IFrontTokenStore tokenStore = new FrontTokenStore();
     private readonly DispatcherTimer onlineTimer;
+    private readonly DispatcherTimer accountExpirationTimer;
+    private DateTime? scheduledAccountExpiresAt;
     private bool heartbeatRequestRunning;
+    private bool sessionInvalidated;
 
     public MainWindow(FrontSession session, IFrontApiClient frontApiClient)
     {
         InitializeComponent();
+        this.session = session;
         this.frontApiClient = frontApiClient;
         onlineTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMinutes(1)
+            Interval = TimeSpan.FromSeconds(5)
         };
         onlineTimer.Tick += OnlineTimer_Tick;
+        accountExpirationTimer = new DispatcherTimer(DispatcherPriority.Send)
+        {
+            Interval = TimeSpan.FromMinutes(1)
+        };
+        accountExpirationTimer.Tick += AccountExpirationTimer_Tick;
         Loaded += MainWindow_Loaded;
         DataContext = new MainViewModel(session, OpenBankUsersWindow, frontApiClient);
     }
@@ -40,11 +52,17 @@ public partial class MainWindow : Window
     {
         Loaded -= MainWindow_Loaded;
         onlineTimer.Start();
+        _ = RefreshOnlineStatusAsync();
     }
 
     private async void OnlineTimer_Tick(object? sender, EventArgs e)
     {
-        if (heartbeatRequestRunning)
+        await RefreshOnlineStatusAsync();
+    }
+
+    private async Task RefreshOnlineStatusAsync()
+    {
+        if (heartbeatRequestRunning || sessionInvalidated)
         {
             return;
         }
@@ -52,7 +70,12 @@ public partial class MainWindow : Window
         heartbeatRequestRunning = true;
         try
         {
-            await frontApiClient.SendOnlineHeartbeatAsync();
+            var accountExpiresAt = await frontApiClient.SendOnlineHeartbeatAsync();
+            ScheduleAccountExpiration(accountExpiresAt);
+        }
+        catch (FrontApiException ex) when (ex.InvalidatesSession)
+        {
+            InvalidateSession(ex.Message);
         }
         catch (Exception ex)
         {
@@ -62,6 +85,60 @@ public partial class MainWindow : Window
         {
             heartbeatRequestRunning = false;
         }
+    }
+
+    private void ScheduleAccountExpiration(DateTime? accountExpiresAt)
+    {
+        accountExpirationTimer.Stop();
+        scheduledAccountExpiresAt = accountExpiresAt;
+        if (!accountExpiresAt.HasValue || sessionInvalidated)
+        {
+            return;
+        }
+
+        var remaining = accountExpiresAt.Value - DateTime.Now;
+        if (remaining <= TimeSpan.Zero)
+        {
+            InvalidateSession(AccountExpiredMessage);
+            return;
+        }
+
+        accountExpirationTimer.Interval = remaining < TimeSpan.FromMinutes(1)
+            ? remaining
+            : TimeSpan.FromMinutes(1);
+        accountExpirationTimer.Start();
+    }
+
+    private void AccountExpirationTimer_Tick(object? sender, EventArgs e)
+    {
+        accountExpirationTimer.Stop();
+        ScheduleAccountExpiration(scheduledAccountExpiresAt);
+    }
+
+    private void InvalidateSession(string message)
+    {
+        if (sessionInvalidated)
+        {
+            return;
+        }
+
+        sessionInvalidated = true;
+        onlineTimer.Stop();
+        accountExpirationTimer.Stop();
+        tokenStore.Clear();
+        session.Clear();
+
+        var loginWindow = new LoginWindow();
+        Application.Current.MainWindow = loginWindow;
+        loginWindow.Show();
+        Close();
+
+        MessageBox.Show(
+            loginWindow,
+            string.IsNullOrWhiteSpace(message) ? "登录状态已失效，请重新登录。" : message,
+            "登录提示",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     private void OpenBankUsersWindow(Bank bank)
@@ -88,6 +165,8 @@ public partial class MainWindow : Window
     {
         onlineTimer.Stop();
         onlineTimer.Tick -= OnlineTimer_Tick;
+        accountExpirationTimer.Stop();
+        accountExpirationTimer.Tick -= AccountExpirationTimer_Tick;
         if (frontApiClient is IDisposable disposable)
         {
             disposable.Dispose();

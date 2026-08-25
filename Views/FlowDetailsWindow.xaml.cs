@@ -20,6 +20,7 @@ public partial class FlowDetailsWindow : Window
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IPrintTemplateRepository printTemplateRepository = new JsonPrintTemplateRepository();
     private readonly IPrintPdfService printPdfService = new ZhenchengPrintBridgeService();
+    private readonly DataGridRangeSelectionController rangeSelectionController = new();
     private FlowStatisticsWindow? statisticsWindow;
     private FlowFilterWindow? filterWindow;
 
@@ -267,7 +268,13 @@ public partial class FlowDetailsWindow : Window
             return;
         }
 
-        if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
+        var rowItem = FindVisualParent<DataGridRow>(cell)?.Item;
+        if (rowItem is null)
+        {
+            return;
+        }
+
+        if (rangeSelectionController.HandleModifierSelection(FlowGrid, cell, rowItem, e))
         {
             return;
         }
@@ -277,7 +284,7 @@ public partial class FlowDetailsWindow : Window
             cell.Focus();
         }
 
-        if (FindVisualParent<DataGridRow>(cell)?.Item is { } rowItem && cell.Column is not null)
+        if (cell.Column is not null)
         {
             FlowGrid.SelectedItem = rowItem;
             FlowGrid.CurrentCell = new DataGridCellInfo(rowItem, cell.Column);
@@ -290,6 +297,11 @@ public partial class FlowDetailsWindow : Window
 
         FlowGrid.BeginEdit(e);
         SelectEditingTextBoxAsync(cell);
+    }
+
+    private void FlowGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        rangeSelectionController.SynchronizeAnchor(FlowGrid);
     }
 
     private void FlowGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)

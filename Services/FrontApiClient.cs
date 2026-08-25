@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Security.Authentication;
 using System.Globalization;
 using System.Text.Json;
 using SpeedEmulator.Models;
@@ -19,7 +20,7 @@ public interface IFrontApiClient
 
     Task<FrontSession> ValidateSessionAsync(CancellationToken cancellationToken = default);
 
-    Task SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default);
+    Task<DateTime?> SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default);
 
     Task<FrontAnnouncement> GetAnnouncementAsync(CancellationToken cancellationToken = default);
 
@@ -30,6 +31,11 @@ public interface IFrontApiClient
 
 public sealed class FrontApiClient : IFrontApiClient, IDisposable
 {
+    private const string LoginEndpoint = "/api/front/login";
+    private const string SessionEndpoint = "/api/front/session";
+    private const string OnlineEndpoint = "/api/front/online";
+    private const string AnnouncementEndpoint = "/api/front/announcement";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -60,8 +66,19 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
     public FrontApiClient(FrontSession session, BackendApiOptions? apiOptions = null)
     {
         this.session = session;
-        this.apiOptions = apiOptions ?? BackendApiConfiguration.Load();
-        httpClient = new HttpClient
+        var configuredOptions = apiOptions ?? BackendApiConfiguration.Load();
+        this.apiOptions = new BackendApiOptions
+        {
+            BaseAddress = BackendApiOptions.DefaultBaseAddress,
+            TimeoutSeconds = Math.Clamp(configuredOptions.TimeoutSeconds, 3, 60)
+        };
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        var handler = new HttpClientHandler
+        {
+            UseProxy = false,
+            SslProtocols = SslProtocols.Tls12
+        };
+        httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri(this.apiOptions.BaseAddress),
             Timeout = TimeSpan.FromSeconds(this.apiOptions.TimeoutSeconds)
@@ -78,35 +95,69 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
     {
         var request = new FrontLoginRequestDto(account, password, machineCode, networkIp, loginRegion);
         using var response = await SendAsync(
-            () => httpClient.PostAsJsonAsync("api/front/login", request, JsonOptions, cancellationToken),
+            HttpMethod.Post,
+            LoginEndpoint,
+            () => httpClient.PostAsJsonAsync(LoginEndpoint, request, JsonOptions, cancellationToken),
             cancellationToken);
 
-        var payload = await ReadPayloadAsync<FrontLoginData>(response, "登录失败", cancellationToken);
+        var payload = await ReadPayloadAsync<FrontLoginData>(
+            response,
+            "登录失败",
+            HttpMethod.Post,
+            LoginEndpoint,
+            cancellationToken);
         session.Apply(payload);
         return session;
     }
 
     public async Task<FrontSession> ValidateSessionAsync(CancellationToken cancellationToken = default)
     {
-        using var request = CreateAuthorizedRequest(HttpMethod.Get, "api/front/session");
-        using var response = await SendAsync(() => httpClient.SendAsync(request, cancellationToken), cancellationToken);
-        var payload = await ReadPayloadAsync<FrontLoginData>(response, "会话验证失败", cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, SessionEndpoint);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            SessionEndpoint,
+            () => httpClient.SendAsync(request, cancellationToken),
+            cancellationToken);
+        var payload = await ReadPayloadAsync<FrontLoginData>(
+            response,
+            "会话验证失败",
+            HttpMethod.Get,
+            SessionEndpoint,
+            cancellationToken);
         session.Apply(payload);
         return session;
     }
 
-    public async Task SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default)
+    public async Task<DateTime?> SendOnlineHeartbeatAsync(CancellationToken cancellationToken = default)
     {
-        using var request = CreateAuthorizedRequest(HttpMethod.Post, "api/front/online");
-        using var response = await SendAsync(() => httpClient.SendAsync(request, cancellationToken), cancellationToken);
-        _ = await ReadPayloadAsync<FrontOnlineData>(response, "在线状态刷新失败", cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, OnlineEndpoint);
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            OnlineEndpoint,
+            () => httpClient.SendAsync(request, cancellationToken),
+            cancellationToken);
+        var status = await ReadPayloadAsync<FrontOnlineData>(
+            response,
+            "在线状态刷新失败",
+            HttpMethod.Post,
+            OnlineEndpoint,
+            cancellationToken);
+        return status.AccountExpiresAt;
     }
 
     public async Task<FrontAnnouncement> GetAnnouncementAsync(CancellationToken cancellationToken = default)
     {
-        using var request = CreateAuthorizedRequest(HttpMethod.Get, "api/front/announcement");
-        using var response = await SendAsync(() => httpClient.SendAsync(request, cancellationToken), cancellationToken);
-        return await ReadAnnouncementAsync(response, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, AnnouncementEndpoint);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            AnnouncementEndpoint,
+            () => httpClient.SendAsync(request, cancellationToken),
+            cancellationToken);
+        return await ReadAnnouncementAsync(
+            response,
+            HttpMethod.Get,
+            AnnouncementEndpoint,
+            cancellationToken);
     }
 
     public async Task<BankUser> SaveBankUserAsync(Bank bank, BankUser user, CancellationToken cancellationToken = default)
@@ -122,10 +173,16 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
         using var request = CreateAuthorizedRequest(method, requestUri);
         request.Content = JsonContent.Create(CreateBankUserRequest(bank, user), options: JsonOptions);
 
-        using var response = await SendAsync(() => httpClient.SendAsync(request, cancellationToken), cancellationToken);
+        using var response = await SendAsync(
+            method,
+            requestUri,
+            () => httpClient.SendAsync(request, cancellationToken),
+            cancellationToken);
         var payload = await ReadPayloadAsync<FrontBankUserResponseDto>(
             response,
             isUpdate ? "修改用户信息失败" : "保存用户信息失败",
+            method,
+            requestUri,
             cancellationToken);
 
         return ApplyBankUserResponse(bank, user, payload);
@@ -148,36 +205,64 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
     }
 
     private async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method,
+        string requestUri,
         Func<Task<HttpResponseMessage>> send,
         CancellationToken cancellationToken)
     {
+        var absoluteRequestUri = ResolveRequestUri(requestUri);
         try
         {
             return await send();
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new FrontApiException($"连接后台服务超时，请确认 {apiOptions.BaseAddress} 已启动。", ex);
+            var logPath = FrontApiDiagnosticLogger.WriteFailure(method, absoluteRequestUri, ex);
+            throw new FrontApiException(
+                $"连接后台服务超时。详细日志：{logPath}",
+                ex);
         }
         catch (HttpRequestException ex)
         {
-            throw new FrontApiException($"无法连接后台服务，请确认 {apiOptions.BaseAddress} 已启动。", ex);
+            var logPath = FrontApiDiagnosticLogger.WriteFailure(method, absoluteRequestUri, ex);
+            throw new FrontApiException(
+                $"无法连接后台服务。详细日志：{logPath}",
+                ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var logPath = FrontApiDiagnosticLogger.WriteFailure(method, absoluteRequestUri, ex);
+            throw new FrontApiException(
+                $"后台请求失败。详细日志：{logPath}",
+                ex);
         }
     }
 
-    private static async Task<T> ReadPayloadAsync<T>(HttpResponseMessage response, string fallbackMessage, CancellationToken cancellationToken)
+    private async Task<T> ReadPayloadAsync<T>(
+        HttpResponseMessage response,
+        string fallbackMessage,
+        HttpMethod method,
+        string requestUri,
+        CancellationToken cancellationToken)
     {
+        var responseBody = await ReadResponseBodyAsync(response, method, requestUri, cancellationToken);
         ApiResponseDto<T>? body;
         try
         {
-            body = await response.Content.ReadFromJsonAsync<ApiResponseDto<T>>(JsonOptions, cancellationToken);
+            body = JsonSerializer.Deserialize<ApiResponseDto<T>>(responseBody, JsonOptions);
         }
         catch (JsonException ex)
         {
             var message = response.StatusCode == HttpStatusCode.Unauthorized
                 ? "登录状态已失效，请重新登录。"
                 : $"{fallbackMessage}：后台返回格式无法解析。";
-            throw new FrontApiException(message, ex, response.StatusCode);
+            var exception = new FrontApiException(message, ex, response.StatusCode);
+            LogResponseFailure(method, requestUri, response, responseBody, exception);
+            throw exception;
         }
 
         if (body is null)
@@ -185,40 +270,37 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
             var message = response.StatusCode == HttpStatusCode.Unauthorized
                 ? "登录状态已失效，请重新登录。"
                 : $"{fallbackMessage}：后台没有返回数据。";
-            throw new FrontApiException(
+            var exception = new FrontApiException(
                 message,
                 response.StatusCode);
+            LogResponseFailure(method, requestUri, response, responseBody, exception);
+            throw exception;
         }
 
         if (!response.IsSuccessStatusCode || !body.Success || body.Data is null)
         {
             var message = string.IsNullOrWhiteSpace(body.Message) ? fallbackMessage : body.Message;
-            throw new FrontApiException(
+            var exception = new FrontApiException(
                 message,
                 response.StatusCode,
                 apiRejected: !body.Success);
+            LogResponseFailure(method, requestUri, response, responseBody, exception);
+            throw exception;
         }
 
         return body.Data;
     }
 
-    private static async Task<FrontAnnouncement> ReadAnnouncementAsync(
+    private async Task<FrontAnnouncement> ReadAnnouncementAsync(
         HttpResponseMessage response,
+        HttpMethod method,
+        string requestUri,
         CancellationToken cancellationToken)
     {
-        JsonDocument document;
+        var responseBody = await ReadResponseBodyAsync(response, method, requestUri, cancellationToken);
         try
         {
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        }
-        catch (JsonException ex)
-        {
-            throw new FrontApiException("读取公告配置失败：后台返回格式无法解析。", ex);
-        }
-
-        using (document)
-        {
+            using var document = JsonDocument.Parse(responseBody);
             var root = document.RootElement;
             var payload = root;
             string? responseMessage = null;
@@ -260,6 +342,65 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
             var announcementText = FindStringProperty(payload, AnnouncementFieldNames) ?? string.Empty;
             return new FrontAnnouncement(contactText, announcementText);
         }
+        catch (JsonException ex)
+        {
+            var exception = new FrontApiException(
+                "读取公告配置失败：后台返回格式无法解析。",
+                ex,
+                response.StatusCode);
+            LogResponseFailure(method, requestUri, response, responseBody, exception);
+            throw exception;
+        }
+        catch (FrontApiException ex)
+        {
+            LogResponseFailure(method, requestUri, response, responseBody, ex);
+            throw;
+        }
+    }
+
+    private async Task<string> ReadResponseBodyAsync(
+        HttpResponseMessage response,
+        HttpMethod method,
+        string requestUri,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await response.Content.ReadAsStringAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            var absoluteRequestUri = ResolveRequestUri(requestUri);
+            var logPath = FrontApiDiagnosticLogger.WriteFailure(
+                method,
+                absoluteRequestUri,
+                ex,
+                response.StatusCode);
+            throw new FrontApiException(
+                $"读取后台响应失败。HTTP 状态码：{(int)response.StatusCode}。详细日志：{logPath}",
+                ex,
+                response.StatusCode);
+        }
+    }
+
+    private void LogResponseFailure(
+        HttpMethod method,
+        string requestUri,
+        HttpResponseMessage response,
+        string responseBody,
+        Exception exception)
+    {
+        FrontApiDiagnosticLogger.WriteFailure(
+            method,
+            ResolveRequestUri(requestUri),
+            exception,
+            response.StatusCode,
+            responseBody);
+    }
+
+    private Uri ResolveRequestUri(string requestUri)
+    {
+        return new Uri(httpClient.BaseAddress!, requestUri);
     }
 
     private static string? FindStringProperty(JsonElement element, string[] names)
@@ -538,7 +679,7 @@ public sealed class FrontApiException : Exception
 
     public bool ApiRejected { get; }
 
-    public bool InvalidatesSession => StatusCode == HttpStatusCode.Unauthorized || ApiRejected;
+    public bool InvalidatesSession => StatusCode == HttpStatusCode.Unauthorized;
 
     public FrontApiException(string message)
         : base(message)

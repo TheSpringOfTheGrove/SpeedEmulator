@@ -5,7 +5,7 @@ param(
 
     [string]$LocalReleaseDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\hot-update\releases'),
 
-    [string]$PublicBaseUrl = 'https://financial-file.930i.xyz/speedemulator',
+    [string]$PublicBaseUrl = 'http://159.75.125.68/speedemulator',
 
     [ValidateRange(1, 20)]
     [int]$KeepFullReleases = 1,

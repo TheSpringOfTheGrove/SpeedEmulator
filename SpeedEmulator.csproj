@@ -21,9 +21,10 @@
     <Resource Include="Assets\jisu-theme-logo-vertical-with-year.png" />
     <Resource Include="Assets\jisu-theme-logo-vertical-year-blank.png" />
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="db.db" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="db2.db" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Data\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="db.db" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <Content Include="db2.db" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <Content Include="Data\*.json" Exclude="Data\bank-users-seed.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Data\bank-users-seed.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     <Content Include="VendorRuntime\Zhencheng\**\*" Exclude="VendorRuntime\Zhencheng\.gitkeep" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
     <!-- Vendor QuestPDF templates resolve bank logos and seals from AppContext.BaseDirectory/static. -->
     <Content Include="VendorRuntime\Zhencheng\static\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="static\%(RecursiveDir)%(Filename)%(Extension)" />

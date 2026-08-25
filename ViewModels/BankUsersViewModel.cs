@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
@@ -541,12 +542,18 @@ public sealed class BankUsersViewModel : ObservableObject
         return string.Concat((value ?? string.Empty).Where(character => !char.IsWhiteSpace(character)));
     }
 
-    private async Task DeleteAsync()
+    private async Task DeleteAsync(object? parameter)
     {
-        if (SelectedUser is null)
+        var selectedUsers = GetSelectedUsers(parameter);
+        if (selectedUsers.Count == 0 && SelectedUser is not null)
         {
-            StatusMessage = "请选择一个用户。";
-            MessageBox.Show("请选择一个用户", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            selectedUsers.Add(SelectedUser);
+        }
+
+        if (selectedUsers.Count == 0)
+        {
+            StatusMessage = "请选择要删除的用户。";
+            MessageBox.Show("请选择要删除的用户", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -558,10 +565,17 @@ public sealed class BankUsersViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var deletedName = SelectedUser.AccountName;
-            var removedIndex = Users.IndexOf(SelectedUser);
-            await repository.DeleteAsync(SelectedUser.Id);
-            Users.Remove(SelectedUser);
+            var removedIndex = selectedUsers
+                .Select(Users.IndexOf)
+                .Where(index => index >= 0)
+                .DefaultIfEmpty(0)
+                .Min();
+
+            foreach (var user in selectedUsers)
+            {
+                await repository.DeleteAsync(user.Id);
+                Users.Remove(user);
+            }
 
             if (Users.Count > 0)
             {
@@ -573,12 +587,27 @@ public sealed class BankUsersViewModel : ObservableObject
                 LoadEditor(BankUser.CreateDraft(Bank), true);
             }
 
-            StatusMessage = $"已删除 {deletedName}";
+            StatusMessage = selectedUsers.Count == 1
+                ? $"已删除 {selectedUsers[0].AccountName}"
+                : $"已删除选中用户 {selectedUsers.Count} 个";
         }
         finally
         {
             IsBusy = false;
         }
+    }
+
+    private static List<BankUser> GetSelectedUsers(object? parameter)
+    {
+        if (parameter is not IList selectedItems)
+        {
+            return [];
+        }
+
+        return selectedItems
+            .OfType<BankUser>()
+            .Distinct()
+            .ToList();
     }
 
     private void CopySelected()

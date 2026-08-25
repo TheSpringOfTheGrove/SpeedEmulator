@@ -348,7 +348,7 @@
                       CanUserAddRows="False"
                       CanUserDeleteRows="False"
                       IsReadOnly="False"
-                      SelectionMode="Single"
+                      SelectionMode="Extended"
                       SelectionUnit="FullRow"
                       HeadersVisibility="Column"
                       RowHeaderWidth="0"
@@ -366,6 +366,7 @@
                       FontSize="14"
                       SnapsToDevicePixels="True"
                       PreviewMouseLeftButtonDown="UsersGrid_PreviewMouseLeftButtonDown"
+                      SelectionChanged="UsersGrid_SelectionChanged"
                       CellEditEnding="UsersGrid_CellEditEnding"
                       RowEditEnding="UsersGrid_RowEditEnding"
                       HorizontalScrollBarVisibility="Auto"
@@ -377,7 +378,10 @@
                 <Button Content="新增" Command="{Binding NewCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="编辑" Command="{Binding EditCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="打印" Command="{Binding PrintCommand}" Style="{StaticResource SideButtonStyle}" />
-                <Button Content="删除" Command="{Binding DeleteCommand}" Style="{StaticResource SideButtonStyle}" />
+                <Button Content="删除"
+                        Command="{Binding DeleteCommand}"
+                        CommandParameter="{Binding SelectedItems, ElementName=UsersGrid}"
+                        Style="{StaticResource SideButtonStyle}" />
                 <Button Content="复制" Command="{Binding CopyCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="保存" Command="{Binding SaveCommand}" Style="{StaticResource SideButtonStyle}" />
                 <Button Content="导入xlsx" Command="{Binding ImportXlsxCommand}" Style="{StaticResource SideButtonStyle}" />

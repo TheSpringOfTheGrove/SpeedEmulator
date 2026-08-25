@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using Velopack;
 
 namespace SpeedEmulator;
@@ -8,6 +9,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+
         VelopackApp.Build()
             .SetArgs(args)
             .Run();

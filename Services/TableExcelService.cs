@@ -573,7 +573,7 @@ public sealed class TableExcelService : ITableExcelService
         if (field == nameof(FlowRecord.TradeMoney))
         {
             return record.TradeMoney.HasValue
-                ? (IsPostalPersonalBank(bank) || IsCcbPersonalBank(bank))
+                ? (IsPostalPersonalBank(bank) || IsCcbPersonalBank(bank) || IsMinshengPersonalBank(bank))
                     ? record.TradeMoney.Value
                     : Math.Abs(record.TradeMoney.Value)
                 : null;
@@ -792,6 +792,13 @@ public sealed class TableExcelService : ITableExcelService
     {
         return bank is not null
             && string.Equals(bank.Name, "\u5efa\u884c", StringComparison.Ordinal)
+            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
+    }
+
+    private static bool IsMinshengPersonalBank(Bank? bank)
+    {
+        return bank is not null
+            && string.Equals(bank.Name, "\u6c11\u751f", StringComparison.Ordinal)
             && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
     }
 

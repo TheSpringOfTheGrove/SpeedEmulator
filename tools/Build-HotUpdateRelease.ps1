@@ -107,6 +107,30 @@ dotnet publish $projectPath `
     /p:PublishSingleFile=false `
     /p:PublishReadyToRun=false
 
+$forbiddenPublishEntries = @(
+    'db.db',
+    'db2.db',
+    'bank-users-seed.json',
+    'bank-users.json',
+    'flow-records.json',
+    'flow-records',
+    'print-templates.json',
+    'bank-user-column-settings.json',
+    'bank-interest-settings.json',
+    'flow-generation-config.json',
+    'front-session.json',
+    'login-credentials.json',
+    'machine-id.txt',
+    'Data\bank-users-seed.json'
+)
+
+$publishedUserData = @($forbiddenPublishEntries |
+    ForEach-Object { Join-Path $publishDir $_ } |
+    Where-Object { Test-Path -LiteralPath $_ })
+if ($publishedUserData.Count -gt 0) {
+    throw "Refusing to package user data: $($publishedUserData -join ', ')"
+}
+
 dotnet tool restore
 
 dotnet vpk pack `

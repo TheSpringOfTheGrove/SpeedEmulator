@@ -3837,7 +3837,28 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return pdfData;
         }
 
-        return NormalizeStimulsoftTemplateSortDirection(pdfData, context.Template.Config.Descending);
+        var normalizedPdfData = NormalizeStimulsoftTemplateSortDirection(
+            pdfData,
+            context.Template.Config.Descending);
+        return NormalizeAgriculturalPersonalLatestBalanceFormat(context, normalizedPdfData);
+    }
+
+    private static string NormalizeAgriculturalPersonalLatestBalanceFormat(
+        PrintRenderContext context,
+        string pdfData)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        if (!IsAgriculturalBank(context.Bank)
+            || context.Bank.Type != BankTypes.Personal
+            || (!string.Equals(templateName, "农行个人电子版（最新）", StringComparison.Ordinal)
+                && !string.Equals(templateName, "农行个人电子版（最新版）", StringComparison.Ordinal)))
+        {
+            return pdfData;
+        }
+
+        const string balanceText = "<Text>{流水.Balance}</Text>";
+        const string formattedBalanceText = "<Text>{(流水.Balance).ToString(\"0.00\")}</Text>";
+        return pdfData.Replace(balanceText, formattedBalanceText, StringComparison.Ordinal);
     }
 
     private static string NormalizeStimulsoftTemplateSortDirection(string pdfData, bool descending)

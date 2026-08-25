@@ -5,7 +5,7 @@ namespace SpeedEmulator.Services;
 
 public sealed class BackendApiOptions
 {
-    public const string DefaultBaseAddress = "https://financial-api.930i.xyz";
+    public const string DefaultBaseAddress = "http://159.75.125.68";
 
     public string BaseAddress { get; set; } = DefaultBaseAddress;
 
@@ -14,9 +14,6 @@ public sealed class BackendApiOptions
 
 public static class BackendApiConfiguration
 {
-    private const string PrimaryBaseAddressEnvironmentVariable = "SPEEDEMULATOR_API_BASE_URL";
-    private const string LegacyBaseAddressEnvironmentVariable = "SPEEDEMULATOR_ADMIN_URL";
-
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -25,16 +22,7 @@ public static class BackendApiConfiguration
     public static BackendApiOptions Load()
     {
         var options = LoadFromAppSettings() ?? new BackendApiOptions();
-        var configuredBaseAddress = ReadConfiguredBaseAddress();
-        if (!string.IsNullOrWhiteSpace(configuredBaseAddress))
-        {
-            options.BaseAddress = configuredBaseAddress.Trim();
-        }
-
-        options.BaseAddress = EnsureTrailingSlash(
-            string.IsNullOrWhiteSpace(options.BaseAddress)
-                ? BackendApiOptions.DefaultBaseAddress
-                : options.BaseAddress.Trim());
+        options.BaseAddress = EnsureTrailingSlash(BackendApiOptions.DefaultBaseAddress);
         options.TimeoutSeconds = Math.Clamp(options.TimeoutSeconds, 3, 60);
         return options;
     }
@@ -60,17 +48,6 @@ public static class BackendApiConfiguration
         }
 
         return null;
-    }
-
-    private static string? ReadConfiguredBaseAddress()
-    {
-        var currentName = Environment.GetEnvironmentVariable(PrimaryBaseAddressEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(currentName))
-        {
-            return currentName;
-        }
-
-        return Environment.GetEnvironmentVariable(LegacyBaseAddressEnvironmentVariable);
     }
 
     private static string EnsureTrailingSlash(string value)

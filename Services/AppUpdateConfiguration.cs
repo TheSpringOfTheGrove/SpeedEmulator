@@ -5,7 +5,7 @@ namespace SpeedEmulator.Services;
 
 public sealed class AppUpdateOptions
 {
-    public const string DefaultFeedUrl = "https://financial-file.930i.xyz/speedemulator/updates/";
+    public const string DefaultFeedUrl = "http://159.75.125.68/speedemulator/updates/";
 
     public bool Enabled { get; set; } = true;
 

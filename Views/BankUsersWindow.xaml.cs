@@ -28,6 +28,7 @@ public partial class BankUsersWindow : Window
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private readonly IPrintTemplateRepository printTemplateRepository = new JsonPrintTemplateRepository();
     private readonly IPrintPdfService printPdfService = new ZhenchengPrintBridgeService();
+    private readonly DataGridRangeSelectionController rangeSelectionController = new();
 
     public BankUsersWindow(
         BankUsersViewModel viewModel,
@@ -376,16 +377,13 @@ public partial class BankUsersWindow : Window
 
         var row = FindVisualParent<DataGridRow>(cell);
         var rowItem = row?.Item;
-        if (rowItem is not null
-            && IsIdColumn(cell.Column)
-            && ReferenceEquals(UsersGrid.SelectedItem, rowItem))
+        if (rowItem is null)
         {
-            UsersGrid.CommitEdit(DataGridEditingUnit.Cell, true);
-            UsersGrid.CommitEdit(DataGridEditingUnit.Row, true);
-            UsersGrid.SelectedIndex = -1;
-            UsersGrid.CurrentCell = default;
-            viewModel.SelectedUser = null;
-            e.Handled = true;
+            return;
+        }
+
+        if (rangeSelectionController.HandleModifierSelection(UsersGrid, cell, rowItem, e))
+        {
             return;
         }
 
@@ -407,6 +405,11 @@ public partial class BankUsersWindow : Window
 
         UsersGrid.BeginEdit(e);
         SelectEditingTextBoxAsync(cell);
+    }
+
+    private void UsersGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        rangeSelectionController.SynchronizeAnchor(UsersGrid);
     }
 
     private void UsersGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
