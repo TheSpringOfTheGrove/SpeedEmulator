@@ -17,6 +17,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
     private readonly IFlowRecordRepository repository;
     private readonly ITableExcelService tableExcelService;
     private readonly IBankUserRepository? bankUserRepository;
+    private readonly IBankInterestSettingsRepository? interestSettingsRepository;
     private readonly IPdfImportService pdfImportService;
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private readonly List<FlowRecord> allRecords = [];
@@ -34,13 +35,15 @@ public sealed class FlowDetailsViewModel : ObservableObject
         ITableExcelService tableExcelService,
         IBankUserRepository? bankUserRepository = null,
         IPdfImportService? pdfImportService = null,
-        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null)
+        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null,
+        IBankInterestSettingsRepository? interestSettingsRepository = null)
     {
         Bank = bank;
         BankUser = bankUser;
         this.repository = repository;
         this.tableExcelService = tableExcelService;
         this.bankUserRepository = bankUserRepository;
+        this.interestSettingsRepository = interestSettingsRepository;
         this.pdfImportService = pdfImportService ?? new PdfImportService();
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         openingBalance = (double)bankUser.OpeningBalance;
@@ -349,6 +352,9 @@ public sealed class FlowDetailsViewModel : ObservableObject
             OpeningBalance = currentOpeningBalance;
             BankUser.OpeningBalance = (decimal)currentOpeningBalance;
 
+            FlowRecordChronologicalOrder.SortInPlace(allRecords);
+            var interestResult = await RecalculateInterestAsync(currentOpeningBalance);
+            FlowRecordChronologicalOrder.SortInPlace(allRecords);
             RecalculateRecordBalances(currentOpeningBalance);
             var negativeBalance = FindFirstNegativeBalance();
             NegativeBalanceRepairResult? repairResult = null;
@@ -366,6 +372,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 if (choice == MessageBoxResult.OK)
                 {
                     repairResult = RepairNegativeBalancesByAdjustingOutflows(currentOpeningBalance);
+                    interestResult = await RecalculateInterestAsync(currentOpeningBalance);
+                    FlowRecordChronologicalOrder.SortInPlace(allRecords);
                     RecalculateRecordBalances(currentOpeningBalance);
                 }
             }
@@ -391,7 +399,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
                 StatusMessage =
                     $"重新计算成功，期初余额保持 {currentOpeningBalance:N2}，" +
-                    $"已调整 {repairResult.Value.AdjustedCount} 条流出流水";
+                    $"已调整 {repairResult.Value.AdjustedCount} 条流出流水" +
+                    CreateInterestStatusSuffix(interestResult);
                 MessageBox.Show(
                     $"负余额已自动处理。\n\n" +
                     $"期初余额保持为 {currentOpeningBalance:N2}，未作修改。\n" +
@@ -409,12 +418,13 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 }
 
                 StatusMessage =
-                    $"重新计算完成，第 {negativeBalance.Value.Index + 1} 行负余额已保留";
+                    $"重新计算完成，第 {negativeBalance.Value.Index + 1} 行负余额已保留" +
+                    CreateInterestStatusSuffix(interestResult);
             }
             else
             {
-                StatusMessage = "重新计算成功";
-                MessageBox.Show("重新计算成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                StatusMessage = "重新计算成功" + CreateInterestStatusSuffix(interestResult);
+                MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
         catch (Exception ex)
@@ -426,6 +436,43 @@ public sealed class FlowDetailsViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private async Task<BankInterestCalculationResult> RecalculateInterestAsync(double currentOpeningBalance)
+    {
+        if (!AutoCalculateInterest)
+        {
+            return default;
+        }
+
+        var setting = interestSettingsRepository is null
+            ? null
+            : await interestSettingsRepository.LoadAsync(Bank.Id);
+        if (!BankInterestSettingDefaults.HasEffectiveConfig(setting))
+        {
+            setting = BankInterestSettingDefaults.CreateDefault(Bank);
+        }
+
+        return BankInterestCalculationService.Recalculate(
+            Bank,
+            BankUser,
+            setting,
+            allRecords,
+            currentOpeningBalance,
+            BankUser.StartDate,
+            BankUser.EndDate);
+    }
+
+    private string CreateInterestStatusSuffix(BankInterestCalculationResult result)
+    {
+        if (!AutoCalculateInterest)
+        {
+            return string.Empty;
+        }
+
+        return result.InterestRecordCount > 0
+            ? $"，已重算 {result.InterestRecordCount} 笔结息，利息合计 {result.InterestTotal:N2}"
+            : "，当前期间没有结息日";
     }
 
     private NegativeBalanceRepairResult RepairNegativeBalancesByAdjustingOutflows(double openingBalance)
@@ -546,7 +593,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private static bool IsInterestRecord(FlowRecord record)
     {
-        return new[]
+        return FlowGeneratedRowKinds.IsSystemInterest(record)
+            || new[]
         {
             record.ProductBrief,
             record.Remark,

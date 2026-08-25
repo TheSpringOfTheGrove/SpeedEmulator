@@ -10,6 +10,7 @@ public sealed class BankInterestSetting : ObservableObject
     private string startTime = string.Empty;
     private string endTime = string.Empty;
     private string ratePercent = string.Empty;
+    private bool? generateInterestTaxRow;
 
     public long BankId { get; set; }
 
@@ -47,6 +48,12 @@ public sealed class BankInterestSetting : ObservableObject
         set => SetProperty(ref ratePercent, value ?? string.Empty);
     }
 
+    public bool? GenerateInterestTaxRow
+    {
+        get => generateInterestTaxRow;
+        set => SetProperty(ref generateInterestTaxRow, value);
+    }
+
     public ObservableCollection<BankInterestFieldValue> Fields { get; set; } = [];
 
     public BankInterestSetting Clone()
@@ -61,6 +68,7 @@ public sealed class BankInterestSetting : ObservableObject
             StartTime = StartTime,
             EndTime = EndTime,
             RatePercent = RatePercent,
+            GenerateInterestTaxRow = GenerateInterestTaxRow,
             Fields = new ObservableCollection<BankInterestFieldValue>(
                 Fields.Select(item => item.Clone()))
         };

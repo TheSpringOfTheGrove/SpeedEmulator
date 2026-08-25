@@ -11,9 +11,6 @@ namespace SpeedEmulator.ViewModels;
 public sealed class FlowGenerationViewModel : ObservableObject
 {
     private const double FinalBalanceTolerance = 1000.009d;
-    private const string SystemRowKindField = "__GeneratedSystemRowKind";
-    private const string InterestRowKind = "Interest";
-
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
@@ -974,9 +971,9 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     private static bool IsSettlementInterestRecord(FlowRecord record, string interestBrief)
     {
-        if (record.ExtraFields.TryGetValue(SystemRowKindField, out var rowKind))
+        if (FlowGeneratedRowKinds.IsSystemInterest(record))
         {
-            return rowKind == InterestRowKind;
+            return FlowGeneratedRowKinds.IsInterest(record);
         }
 
         var text = string.Join('|',

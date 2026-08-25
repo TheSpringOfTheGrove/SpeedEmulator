@@ -59,7 +59,6 @@ public sealed class FlowAutoGenerator
     private const string AvoidSyntheticFractionField = "__GeneratedAvoidSyntheticFraction";
     private const string ReferenceSourceKind = "Reference";
     private const string ConstSourceKind = "Const";
-    private const string SystemRowKindField = "__GeneratedSystemRowKind";
     private const string InterestRowKind = "Interest";
     private const string InterestTaxRowKind = "InterestTax";
     private const string InterestText = "\u7ed3\u606f";
@@ -110,6 +109,7 @@ public sealed class FlowAutoGenerator
         nameof(FlowRecord.BankId),
         nameof(FlowRecord.BankUserId),
         nameof(FlowRecord.MoveFlag),
+        nameof(FlowRecord.GeneratedRowKind),
         nameof(FlowRecord.AccountTime),
         nameof(FlowRecord.TradeMoney),
         nameof(FlowRecord.Balance),
@@ -263,8 +263,7 @@ public sealed class FlowAutoGenerator
 
         if (request.BankUser.AutoCalculateInterest)
         {
-            GenerateInterestRecords(request, openingBalance, start, end, random, records);
-            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
         perfTrace.Mark("interest", records);
 
@@ -290,7 +289,7 @@ public sealed class FlowAutoGenerator
         ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
         if (request.BankUser.AutoCalculateInterest)
         {
-            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
         }
         perfTrace.Mark("reconcile", records);
@@ -383,7 +382,7 @@ public sealed class FlowAutoGenerator
             NormalizeReferenceAmountDistribution(records, random);
             if (request.BankUser.AutoCalculateInterest)
             {
-                RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+                RecalculateInterestRecords(records, request, openingBalance, start, end, random);
                 NormalizeReferenceAmountDistribution(records, random);
                 RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
                 NormalizeReferenceAmountDistribution(records, random);
@@ -391,7 +390,7 @@ public sealed class FlowAutoGenerator
         }
         else if (request.BankUser.AutoCalculateInterest)
         {
-            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         }
         perfTrace.Mark("amount normalize 1", records);
@@ -928,8 +927,7 @@ public sealed class FlowAutoGenerator
 
         if (request.BankUser.AutoCalculateInterest)
         {
-            GenerateInterestRecords(request, openingBalance, start, end, random, records);
-            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
 
         PruneZeroAmountRecords(records);
@@ -939,7 +937,7 @@ public sealed class FlowAutoGenerator
 
         if (request.BankUser.AutoCalculateInterest)
         {
-            RecalculateInterestRecords(records, openingBalance, start, request.InterestSetting);
+            RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
 
         EnforceConfiguredTotals(records, request);
@@ -14747,65 +14745,31 @@ public sealed class FlowAutoGenerator
         }
     }
 
-    private static void GenerateInterestRecords(
+    private static BankInterestCalculationResult RecalculateInterestRecords(
+        List<FlowRecord> records,
         FlowAutoGenerationRequest request,
         double openingBalance,
         DateTime start,
         DateTime end,
-        Random random,
-        ICollection<FlowRecord> records)
+        Random random)
     {
-        var setting = request.InterestSetting;
-        if (setting is null)
-        {
-            return;
-        }
-
-        var day = ParseInt(setting.SettlementDay);
-        var ratePercent = ParseDouble(setting.RatePercent);
-        if (day is null || ratePercent is null || ratePercent <= 0)
-        {
-            return;
-        }
-
-        var months = ParseIntTokens(setting.Months)
-            .Where(item => item is >= 1 and <= 12)
-            .Distinct()
-            .ToHashSet();
-        if (months.Count == 0)
-        {
-            return;
-        }
-
-        var startHour = Math.Clamp(ParseInt(setting.StartTime) ?? 0, 0, 23);
-        var endHour = Math.Clamp(ParseInt(setting.EndTime) ?? 23, 0, 23);
-        if (endHour < startHour)
-        {
-            (startHour, endHour) = (endHour, startHour);
-        }
-
-        foreach (var month in EnumerateMonths(start, end))
-        {
-            if (!months.Contains(month.Start.Month))
-            {
-                continue;
-            }
-
-            var settlementDay = Math.Min(day.Value, DateTime.DaysInMonth(month.Start.Year, month.Start.Month));
-            var time = new DateTime(month.Start.Year, month.Start.Month, settlementDay, random.Next(startHour, endHour + 1), random.Next(0, 60), random.Next(0, 60));
-            if (time < start || time > end)
-            {
-                continue;
-            }
-
-            var interest = CalculateDailyProductInterest(records, openingBalance, start, time, ratePercent.Value);
-            records.Add(CreateInterestRecord(request, setting, time, interest, InterestRowKind, InterestText, records));
-
-            if (ShouldAppendInterestTaxRecord(request.Bank))
-            {
-                records.Add(CreateInterestRecord(request, setting, time, 0, InterestTaxRowKind, InterestTaxText, records));
-            }
-        }
+        return BankInterestCalculationService.Recalculate(
+            request.Bank,
+            request.BankUser,
+            request.InterestSetting,
+            records,
+            openingBalance,
+            start,
+            end,
+            (accountTime, rowKind) => CreateInterestRecord(
+                request,
+                request.InterestSetting!,
+                accountTime,
+                0,
+                rowKind,
+                rowKind == InterestTaxRowKind ? InterestTaxText : InterestText,
+                records),
+            random);
     }
 
     private static FlowRecord CreateInterestRecord(
@@ -14824,7 +14788,7 @@ public sealed class FlowAutoGenerator
         record.SerialNum = rowKind == InterestTaxRowKind ? "0000000002" : "0000000001";
         record.LogNum = "0000000001";
         record.ExtraFields[AmountUnitField] = "0.01";
-        record.ExtraFields[SystemRowKindField] = rowKind;
+        FlowGeneratedRowKinds.SetKind(record, rowKind);
 
         ApplyInterestRecordDefaults(request, record, rowKind, existingRecords);
         if (string.IsNullOrWhiteSpace(record.Remark) || record.Remark == InterestText)
@@ -14976,113 +14940,6 @@ public sealed class FlowAutoGenerator
             .ToList();
 
         return values.Count == 1 ? values[0] : string.Empty;
-    }
-
-    private static double CalculateDailyProductInterest(
-        IEnumerable<FlowRecord> records,
-        double openingBalance,
-        DateTime start,
-        DateTime settlementTime,
-        double ratePercent)
-    {
-        var startDate = start.Date;
-        var settlementDate = settlementTime.Date;
-        if (settlementDate <= startDate)
-        {
-            return 0;
-        }
-
-        var dayAmounts = records
-            .Where(item => item.AccountTime.HasValue)
-            .Where(item => item.AccountTime!.Value.Date >= startDate && item.AccountTime.Value.Date <= settlementDate)
-            .GroupBy(item => item.AccountTime!.Value.Date)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Sum(item => item.TradeMoney ?? 0));
-
-        var orderedDays = dayAmounts
-            .OrderBy(item => item.Key)
-            .ToList();
-
-        var previousDate = startDate;
-        var balance = openingBalance;
-        var dailyProduct = 0d;
-        foreach (var current in orderedDays)
-        {
-            if (current.Key > previousDate)
-            {
-                dailyProduct += Math.Max(0, balance) * (current.Key - previousDate).Days;
-            }
-
-            balance += current.Value;
-            previousDate = current.Key;
-        }
-
-        if (settlementDate > previousDate)
-        {
-            dailyProduct += Math.Max(0, balance) * (settlementDate - previousDate).Days;
-        }
-
-        return RoundMoney(dailyProduct * ratePercent / 36500d);
-    }
-
-    private static void RecalculateInterestRecords(
-        List<FlowRecord> records,
-        double openingBalance,
-        DateTime start,
-        BankInterestSetting? setting)
-    {
-        var ratePercent = ParseDouble(setting?.RatePercent);
-        if (ratePercent is null || ratePercent <= 0)
-        {
-            return;
-        }
-
-        var interestRows = records
-            .Where(item => item.ExtraFields.TryGetValue(SystemRowKindField, out var value) && value == InterestRowKind)
-            .OrderBy(item => item.AccountTime ?? DateTime.MinValue)
-            .ToList();
-        if (interestRows.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var systemRow in records.Where(IsSystemInterestRecord))
-        {
-            SetSystemInterestAmount(systemRow, 0);
-        }
-
-        foreach (var interestRow in interestRows)
-        {
-            if (!interestRow.AccountTime.HasValue)
-            {
-                continue;
-            }
-
-            var interest = CalculateDailyProductInterest(records, openingBalance, start, interestRow.AccountTime.Value, ratePercent.Value);
-            SetSystemInterestAmount(interestRow, interest);
-        }
-    }
-
-    private static void SetSystemInterestAmount(FlowRecord record, double amount)
-    {
-        amount = RoundMoney(Math.Max(0, amount));
-        record.TradeMoney = amount;
-        record.CreditAmount = amount > 0 ? amount : null;
-        record.DebitAmount = null;
-        record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
-        record.IncomeFlag = amount >= 0 ? "C" : "D";
-    }
-
-    private static bool ShouldAppendInterestTaxRecord(Bank bank)
-    {
-        if (IsAgriculturalBank(bank))
-        {
-            return true;
-        }
-
-        return bank.Name.Contains("农行", StringComparison.Ordinal)
-            || bank.Name.Contains("农业", StringComparison.Ordinal);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -15442,20 +15299,17 @@ public sealed class FlowAutoGenerator
 
     private static bool IsSystemInterestRecord(FlowRecord record)
     {
-        return record.ExtraFields.TryGetValue(SystemRowKindField, out var value)
-            && (value == InterestRowKind || value == InterestTaxRowKind);
+        return FlowGeneratedRowKinds.IsSystemInterest(record);
     }
 
     private static bool IsInterestTaxRecord(FlowRecord record)
     {
-        return record.ExtraFields.TryGetValue(SystemRowKindField, out var value)
-            && value == InterestTaxRowKind;
+        return FlowGeneratedRowKinds.IsInterestTax(record);
     }
 
     private static bool IsInterestRecord(FlowRecord record)
     {
-        return record.ExtraFields.TryGetValue(SystemRowKindField, out var value)
-            && value == InterestRowKind;
+        return FlowGeneratedRowKinds.IsInterest(record);
     }
 
     private static void PruneZeroAmountRecords(List<FlowRecord> records)

@@ -88,6 +88,7 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
 
     private BankInterestSetting MergeWithCurrentFlowColumns(BankInterestSetting source)
     {
+        var defaults = BankInterestSettingDefaults.CreateDefault(bank);
         var valuesByField = source.Fields
             .Where(item => !string.IsNullOrWhiteSpace(item.Field))
             .GroupBy(item => item.Field, StringComparer.Ordinal)
@@ -103,6 +104,7 @@ public sealed class BankInterestSettingsViewModel : ObservableObject
             StartTime = source.StartTime,
             EndTime = source.EndTime,
             RatePercent = source.RatePercent,
+            GenerateInterestTaxRow = source.GenerateInterestTaxRow ?? defaults.GenerateInterestTaxRow,
             Fields = new ObservableCollection<BankInterestFieldValue>(
                 CreateConfigurableFlowFields()
                     .Select(item =>

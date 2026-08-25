@@ -19,7 +19,8 @@ public static class BankInterestSettingDefaults
             Months = DefaultMonths,
             StartTime = DefaultStartTime,
             EndTime = DefaultEndTime,
-            RatePercent = DefaultRatePercent
+            RatePercent = DefaultRatePercent,
+            GenerateInterestTaxRow = IsAgriculturalBank(bank)
         };
 
         setting.Fields.Add(new BankInterestFieldValue
@@ -38,5 +39,13 @@ public static class BankInterestSettingDefaults
             && !string.IsNullOrWhiteSpace(setting.SettlementDay)
             && !string.IsNullOrWhiteSpace(setting.Months)
             && !string.IsNullOrWhiteSpace(setting.RatePercent);
+    }
+
+    private static bool IsAgriculturalBank(Bank bank)
+    {
+        return bank.Name.Contains("农行", StringComparison.Ordinal)
+            || bank.Name.Contains("农业", StringComparison.Ordinal)
+            || bank.Type.Contains("农行", StringComparison.Ordinal)
+            || bank.Type.Contains("农业", StringComparison.Ordinal);
     }
 }
