@@ -6725,6 +6725,7 @@ public sealed partial class PdfImportService : IPdfImportService
         if (!directionResolved)
         {
             record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedDirectionField] = row.PageNumber.ToString(CultureInfo.InvariantCulture);
+            record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedAmountField] = amount.Value.ToString("R", CultureInfo.InvariantCulture);
         }
 
         SetFlowRaw(record, "交易单号", record.SerialNum);
@@ -6934,6 +6935,7 @@ public sealed partial class PdfImportService : IPdfImportService
         if (!directionResolved)
         {
             record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedDirectionField] = group[0].PageNumber.ToString(CultureInfo.InvariantCulture);
+            record.ExtraFields[WechatPdfDirectionRuleCatalog.UnresolvedAmountField] = parsedAmount!.Value.ToString("R", CultureInfo.InvariantCulture);
         }
 
         SetFlowRaw(record, "交易单号", record.SerialNum);
@@ -9638,7 +9640,7 @@ public sealed partial class PdfImportService : IPdfImportService
             return true;
         }
 
-        return direction is "其他" or "其它" or "不计收支"
+        return direction is "其他" or "其它"
             && directionRules.TryResolve(tradeType, out direction);
     }
 

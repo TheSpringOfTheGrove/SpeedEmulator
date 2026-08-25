@@ -10,6 +10,14 @@
       "direction": "支出"
     },
     {
+      "tradeType": "分付还款",
+      "direction": "支出"
+    },
+    {
+      "tradeType": "经营账户提现",
+      "direction": "支出"
+    },
+    {
       "tradeType": "转入零钱通-来自零钱",
       "direction": "支出"
     },

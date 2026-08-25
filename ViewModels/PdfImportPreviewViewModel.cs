@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using SpeedEmulator.Infrastructure;
 using SpeedEmulator.Models;
 using SpeedEmulator.Services;
@@ -23,10 +22,9 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
             Users.Add(user);
         }
 
-        foreach (var record in result.FlowRecords)
+        foreach (var record in result.FlowRecords.OrderBy(record => IsPendingIncomeDirection(record) ? 0 : 1))
         {
             FlowRecords.Add(record);
-            record.PropertyChanged += FlowRecord_PropertyChanged;
         }
 
         foreach (var issue in result.Issues)
@@ -61,8 +59,6 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
         && !Result.HasBlockingErrors
         && PendingIncomeDirectionCount == 0;
 
-    public IReadOnlyList<string> IncomeDirectionOptions { get; } = ["收入", "支出"];
-
     public int PendingIncomeDirectionCount => FlowRecords.Count(record =>
         record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField));
 
@@ -90,33 +86,36 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
             return;
         }
 
+        RemovePreviewDirectionMarkers();
         RequestClose?.Invoke(this, new DialogCloseRequestedEventArgs(true));
     }
 
-    private void FlowRecord_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    public bool ResolveIncomeDirection(FlowRecord? record, string? direction)
     {
-        if (sender is not FlowRecord record
-            || e.PropertyName != nameof(FlowRecord.IncomeFlag)
-            || !record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField)
-            || record.IncomeFlag is not ("收入" or "支出"))
+        if (record is null
+            || direction is not ("收入" or "支出")
+            || !IsPendingIncomeDirection(record))
         {
-            return;
+            return false;
         }
 
-        if (!PdfImportTabularMapper.TryParseDouble(record["金额"], out var rawAmount))
+        if (!TryGetPendingAmount(record, out var rawAmount))
         {
             StatusMessage = $"预览第 {record.Index} 行的原始金额无法解析，暂时不能确认收支方向。";
-            return;
+            return false;
         }
 
         var amount = Math.Abs(rawAmount);
-        var isIncome = record.IncomeFlag == "收入";
+        var isIncome = direction == "收入";
+        record.IncomeFlag = direction;
         record.TradeMoney = isIncome ? amount : 0 - amount;
         record.CreditAmount = isIncome ? amount : null;
         record.DebitAmount = isIncome ? null : amount;
 
         var fields = new Dictionary<string, string>(record.ExtraFields);
         fields.Remove(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField);
+        fields.Remove(WechatPdfDirectionRuleCatalog.UnresolvedAmountField);
+        fields[WechatPdfDirectionRuleCatalog.ManuallyResolvedDirectionField] = direction;
         record.ExtraFields = fields;
 
         var resolvedIssues = Result.Issues
@@ -130,6 +129,59 @@ public sealed class PdfImportPreviewViewModel : ObservableObject
         }
 
         UpdateDirectionConfirmationState();
+        return true;
+    }
+
+    private static bool IsPendingIncomeDirection(FlowRecord record)
+    {
+        return record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedDirectionField);
+    }
+
+    private static bool TryGetPendingAmount(FlowRecord record, out double amount)
+    {
+        var candidates = new[]
+        {
+            record[WechatPdfDirectionRuleCatalog.UnresolvedAmountField],
+            record["金额"],
+            record["金额(元)"],
+            record["交易金额"]
+        };
+        foreach (var candidate in candidates)
+        {
+            if (PdfImportTabularMapper.TryParseDouble(candidate, out amount))
+            {
+                return true;
+            }
+        }
+
+        var existingAmount = record.TradeMoney
+            ?? record.CreditAmount
+            ?? record.DebitAmount;
+        if (existingAmount.HasValue)
+        {
+            amount = existingAmount.Value;
+            return true;
+        }
+
+        amount = 0;
+        return false;
+    }
+
+    private void RemovePreviewDirectionMarkers()
+    {
+        foreach (var record in Result.FlowRecords)
+        {
+            if (!record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.ManuallyResolvedDirectionField)
+                && !record.ExtraFields.ContainsKey(WechatPdfDirectionRuleCatalog.UnresolvedAmountField))
+            {
+                continue;
+            }
+
+            var fields = new Dictionary<string, string>(record.ExtraFields);
+            fields.Remove(WechatPdfDirectionRuleCatalog.ManuallyResolvedDirectionField);
+            fields.Remove(WechatPdfDirectionRuleCatalog.UnresolvedAmountField);
+            record.ExtraFields = fields;
+        }
     }
 
     private void UpdateDirectionConfirmationState()

@@ -7,6 +7,8 @@ internal static class WechatPdfDirectionRuleCatalog
 {
     public const string FileName = "wechat-pdf-other-direction-rules.json";
     public const string UnresolvedDirectionField = "__WechatPdfUnresolvedDirection";
+    public const string UnresolvedAmountField = "__WechatPdfUnresolvedAmount";
+    public const string ManuallyResolvedDirectionField = "__WechatPdfManuallyResolvedDirection";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

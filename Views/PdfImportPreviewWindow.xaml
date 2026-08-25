@@ -13,6 +13,7 @@
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <local:WechatDirectionPendingVisibilityConverter x:Key="WechatDirectionPendingVisibilityConverter" />
+        <local:WechatDirectionStateConverter x:Key="WechatDirectionStateConverter" />
 
         <Style x:Key="DialogButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="88" />
@@ -42,6 +43,90 @@
             <Setter Property="BorderThickness" Value="0,0,1,1" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        </Style>
+
+        <Style x:Key="WechatDirectionFlowRowStyle" TargetType="DataGridRow">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ExtraFields, Converter={StaticResource WechatDirectionStateConverter}, ConverterParameter=Pending}"
+                             Value="True">
+                    <Setter Property="Background" Value="#FFFFC7CE" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ExtraFields, Converter={StaticResource WechatDirectionStateConverter}, ConverterParameter=Resolved}"
+                             Value="True">
+                    <Setter Property="Background" Value="#FFC6EFCE" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="WechatDirectionFlowCellStyle"
+               TargetType="DataGridCell"
+               BasedOn="{StaticResource PreviewGridCellStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ExtraFields, Converter={StaticResource WechatDirectionStateConverter}, ConverterParameter=Pending}"
+                             Value="True">
+                    <Setter Property="Background" Value="#FFFFC7CE" />
+                    <Setter Property="Foreground" Value="#FF9C0006" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ExtraFields, Converter={StaticResource WechatDirectionStateConverter}, ConverterParameter=Resolved}"
+                             Value="True">
+                    <Setter Property="Background" Value="#FFC6EFCE" />
+                    <Setter Property="Foreground" Value="#FF006100" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="DirectionConfirmButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="25" />
+            <Setter Property="MinWidth" Value="62" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Opacity" Value="0.90" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Opacity" Value="0.68" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ConfirmIncomeButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource DirectionConfirmButtonStyle}">
+            <Setter Property="Background" Value="#FF20A451" />
+            <Setter Property="BorderBrush" Value="#FF14813C" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <Style x:Key="ConfirmExpenseButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource DirectionConfirmButtonStyle}">
+            <Setter Property="Background" Value="#FFE34850" />
+            <Setter Property="BorderBrush" Value="#FFBE2732" />
+            <Setter Property="Foreground" Value="White" />
         </Style>
     </Window.Resources>
 
@@ -141,7 +226,8 @@
                           BorderBrush="#D8D8D8"
                           BorderThickness="1"
                           ColumnHeaderStyle="{StaticResource PreviewGridHeaderStyle}"
-                          CellStyle="{StaticResource PreviewGridCellStyle}"
+                          CellStyle="{StaticResource WechatDirectionFlowCellStyle}"
+                          RowStyle="{StaticResource WechatDirectionFlowRowStyle}"
                           RowHeight="34"
                           FontSize="13"
                           HorizontalScrollBarVisibility="Auto"
@@ -163,17 +249,26 @@
                         <DataGridTextColumn Header="交易时间" Binding="{Binding AccountTime, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="150" />
                         <DataGridTextColumn Header="交易金额" Binding="{Binding TradeMoney, StringFormat=0.00}" Width="100" />
                         <DataGridTextColumn Header="余额" Binding="{Binding Balance, StringFormat=0.00}" Width="100" />
-                        <DataGridTemplateColumn Header="收支" Width="96">
+                        <DataGridTemplateColumn Header="收支" Width="156">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <Grid>
                                         <TextBlock Text="{Binding IncomeAttribute}"
                                                    VerticalAlignment="Center"
                                                    Visibility="{Binding ExtraFields, Converter={StaticResource WechatDirectionPendingVisibilityConverter}, ConverterParameter=Resolved}" />
-                                        <ComboBox ItemsSource="{Binding DataContext.IncomeDirectionOptions, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                  SelectedItem="{Binding IncomeFlag, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  VerticalContentAlignment="Center"
-                                                  Visibility="{Binding ExtraFields, Converter={StaticResource WechatDirectionPendingVisibilityConverter}, ConverterParameter=Pending}" />
+                                        <StackPanel Orientation="Horizontal"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="{Binding ExtraFields, Converter={StaticResource WechatDirectionPendingVisibilityConverter}, ConverterParameter=Pending}">
+                                            <Button Content="确认收入"
+                                                    Tag="收入"
+                                                    Click="IncomeDirectionButton_Click"
+                                                    Style="{StaticResource ConfirmIncomeButtonStyle}"
+                                                    Margin="0,0,4,0" />
+                                            <Button Content="确认支出"
+                                                    Tag="支出"
+                                                    Click="IncomeDirectionButton_Click"
+                                                    Style="{StaticResource ConfirmExpenseButtonStyle}" />
+                                        </StackPanel>
                                     </Grid>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
