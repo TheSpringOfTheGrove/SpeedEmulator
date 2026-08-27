@@ -10,7 +10,7 @@ namespace SpeedEmulator.ViewModels;
 
 public sealed class FlowGenerationViewModel : ObservableObject
 {
-    private const double FinalBalanceTolerance = 0.009d;
+    private const double FinalBalanceTolerance = FlowAutoGenerator.AcceptedFinalBalanceTolerance;
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
@@ -816,21 +816,28 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
 
         var result = attempt.Result;
+        var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
+        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
+        {
+            StatusMessage = "期末余额超出允许范围，正在自动调整并重新计算利息";
+            result = await Task.Run(() => flowAutoGenerator.ApplyFinalBalanceCorrection(request, result));
+        }
+
         if (IsGenerationResultAccepted(result, bankUser, interestSetting, out var reason))
         {
             return result;
         }
 
-        var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
-        if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
-        {
-            throw new InvalidOperationException(
-                $"生成结果期末余额未能收口，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}，请重新生成。");
-        }
-
         if (!IsInterestResultAccepted(result, bankUser, interestSetting, out var interestReason))
         {
             throw new InvalidOperationException($"生成结果利息校验未通过：{interestReason}");
+        }
+
+        finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
+        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
+        {
+            StatusMessage = $"期末余额已自动调整，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
+            return result;
         }
 
         StatusMessage = $"生成结果需要处理：{reason}";
@@ -849,9 +856,9 @@ public sealed class FlowGenerationViewModel : ObservableObject
         out string reason)
     {
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
-        if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
+        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
         {
-            reason = $"最后余额未精确收口，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
+            reason = $"最后余额未进入允许范围，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
             return false;
         }
 
