@@ -81,6 +81,7 @@ public sealed class FlowAutoGenerator
     private const double MaximumLowCapacityTierPoolRatio = 0.20d;
     private const double MaximumMediumCapacityTierWeight = 0.45d;
     private const double FinalBalanceTolerance = 1000d;
+    private const double FinalBalanceHardTolerance = 0.009d;
     private const double MonthlyClosingBalanceCapRatio = 0.10d;
     private const double MonthlyClosingBalanceTolerance = 1d;
     private const double MonthlyIncomeCapMultiplier = 2d;
@@ -538,6 +539,7 @@ public sealed class FlowAutoGenerator
         }
         FinalizeConfiguredPrecisionReferenceAmounts(records, openingBalance, random);
         EnforceMinimumExactAmountRepeatGap(records, request, random);
+        FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("monthly closing final", records);
@@ -556,7 +558,7 @@ public sealed class FlowAutoGenerator
             needsCorrection = true;
         }
 
-        if (IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney))
+        if (IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney))
         {
             needsCorrection = true;
         }
@@ -823,6 +825,7 @@ public sealed class FlowAutoGenerator
         }
 
         EnforceMinimumExactAmountRepeatGap(records, request, random);
+        FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -839,7 +842,7 @@ public sealed class FlowAutoGenerator
             FinalBalance = RoundMoney(finalBalance),
             MinimumBalance = RoundMoney(minimumBalance),
             RequiresOpeningBalanceCorrection = minimumBalance < -0.009d
-                || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney),
+                || IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney),
             RequiredOpeningBalance = source.RequiredOpeningBalance
         };
     }
@@ -945,6 +948,7 @@ public sealed class FlowAutoGenerator
         EnsureDistinctSignedAmounts(records, random);
         RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
         EnforceMinimumExactAmountRepeatGap(records, request, random);
+        FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
 
         var incomeTotal = SumIncome(records);
@@ -960,7 +964,7 @@ public sealed class FlowAutoGenerator
             needsCorrection = true;
         }
 
-        if (IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney))
+        if (IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney))
         {
             needsCorrection = true;
         }
@@ -997,7 +1001,7 @@ public sealed class FlowAutoGenerator
 
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateRunSeed(request, start, end, records.Count ^ 0x6C8E9CF5));
-        var maxAttempts = IsWechatBank(request.Bank) ? 6 : 18;
+        var maxAttempts = IsWechatBank(request.Bank) ? 12 : 32;
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             PruneZeroAmountRecords(records);
@@ -1018,7 +1022,7 @@ public sealed class FlowAutoGenerator
             var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
             var targetBalance = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
             var diff = RoundMoney(finalBalance - targetBalance);
-            if (Math.Abs(diff) <= FinalBalanceTolerance)
+            if (Math.Abs(diff) <= FinalBalanceHardTolerance)
             {
                 break;
             }
@@ -1029,13 +1033,13 @@ public sealed class FlowAutoGenerator
                 DecreaseFinalBalanceWithinRules(records, request, start, end, random, Math.Abs(diff));
                 ApplyBalances(records, openingBalance);
                 diff = RoundMoney((records.LastOrDefault()?.Balance ?? openingBalance) - targetBalance);
-                if (Math.Abs(diff) <= FinalBalanceTolerance)
+                if (Math.Abs(diff) <= FinalBalanceHardTolerance)
                 {
                     break;
                 }
 
                 if (CalculateNetAmount(records) >= beforeNet - 0.009d
-                    || diff > FinalBalanceTolerance)
+                    || diff > FinalBalanceHardTolerance)
                 {
                     ForceAddBalanceAdjustmentRecords(
                         records,
@@ -1052,13 +1056,13 @@ public sealed class FlowAutoGenerator
                 IncreaseFinalBalanceWithinRules(records, request, start, end, random, Math.Abs(diff));
                 ApplyBalances(records, openingBalance);
                 diff = RoundMoney((records.LastOrDefault()?.Balance ?? openingBalance) - targetBalance);
-                if (Math.Abs(diff) <= FinalBalanceTolerance)
+                if (Math.Abs(diff) <= FinalBalanceHardTolerance)
                 {
                     break;
                 }
 
                 if (CalculateNetAmount(records) <= beforeNet + 0.009d
-                    || diff < -FinalBalanceTolerance)
+                    || diff < -FinalBalanceHardTolerance)
                 {
                     ForceAddBalanceAdjustmentRecords(
                         records,
@@ -1074,8 +1078,173 @@ public sealed class FlowAutoGenerator
         }
 
         PruneZeroAmountRecords(records);
-        EnforceConfiguredTotals(records, request);
         ApplyBalances(records, openingBalance);
+    }
+
+    private static void FinalizeHardFinalBalance(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        double openingBalance,
+        DateTime start,
+        DateTime end,
+        Random random)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        var maxAttempts = request.BankUser.AutoCalculateInterest ? 8 : 1;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var interestChanged = false;
+            if (request.BankUser.AutoCalculateInterest)
+            {
+                interestChanged = RecalculateInterestRecords(
+                    records,
+                    request,
+                    openingBalance,
+                    start,
+                    end,
+                    random).RecordsChanged;
+            }
+
+            var closingInputSignature = CalculateBalanceInputSignature(records);
+            ForceCloseExternalFinalBalance(request, records);
+            CloseExactFinalBalanceWithExistingRecords(records, request, openingBalance);
+            ApplyBalances(records, openingBalance);
+            var closingChanged = closingInputSignature != CalculateBalanceInputSignature(records);
+            var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
+            if (!IsFinalBalanceOutsideHardTolerance(
+                    finalBalance,
+                    openingBalance,
+                    request.Config.LastMoney)
+                && !interestChanged
+                && !closingChanged)
+            {
+                break;
+            }
+        }
+    }
+
+    private static bool CloseExactFinalBalanceWithExistingRecords(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        double openingBalance)
+    {
+        ApplyBalances(records, openingBalance);
+        var targetBalance = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
+        var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
+        var diff = RoundMoney(finalBalance - targetBalance);
+        if (Math.Abs(diff) <= FinalBalanceHardTolerance)
+        {
+            return false;
+        }
+
+        var changed = false;
+        if (diff > 0)
+        {
+            var suffixMinimumBalances = new double[records.Count];
+            var suffixMinimum = double.MaxValue;
+            for (var index = records.Count - 1; index >= 0; index--)
+            {
+                suffixMinimum = Math.Min(suffixMinimum, records[index].Balance ?? openingBalance);
+                suffixMinimumBalances[index] = suffixMinimum;
+            }
+
+            var remaining = diff;
+            var suffixReduction = 0d;
+            for (var index = records.Count - 1;
+                 index >= 0 && remaining > FinalBalanceHardTolerance;
+                 index--)
+            {
+                var record = records[index];
+                if (record.TradeMoney >= -0.009d || IsSystemInterestRecord(record))
+                {
+                    continue;
+                }
+
+                var absolute = Math.Abs(record.TradeMoney ?? 0);
+                var bounds = GetRecordAmountBounds(record);
+                var unit = Math.Max(0.01d, bounds.Unit);
+                var room = RoundMoney(bounds.Max - absolute);
+                var safeRoom = RoundMoney(suffixMinimumBalances[index] - suffixReduction);
+                var allowed = Math.Min(Math.Min(room, safeRoom), remaining);
+                var increase = FloorAmountToUnit(allowed, unit);
+                if (increase <= 0.009d)
+                {
+                    continue;
+                }
+
+                var nextAmount = ClampAmountToBounds(absolute + increase, bounds);
+                var actualIncrease = RoundMoney(nextAmount - absolute);
+                if (actualIncrease <= 0.009d || actualIncrease > remaining + 0.009d)
+                {
+                    continue;
+                }
+
+                ApplySignedAmount(record, -1d, nextAmount);
+                remaining = RoundMoney(remaining - actualIncrease);
+                suffixReduction = RoundMoney(suffixReduction + actualIncrease);
+                changed = true;
+            }
+        }
+        else
+        {
+            var remaining = Math.Abs(diff);
+            for (var index = records.Count - 1;
+                 index >= 0 && remaining > FinalBalanceHardTolerance;
+                 index--)
+            {
+                var record = records[index];
+                if (record.TradeMoney >= -0.009d || IsSystemInterestRecord(record))
+                {
+                    continue;
+                }
+
+                var absolute = Math.Abs(record.TradeMoney ?? 0);
+                var bounds = GetRecordAmountBounds(record);
+                var unit = Math.Max(0.01d, bounds.Unit);
+                var reducible = Math.Min(RoundMoney(absolute - bounds.Min), remaining);
+                var reduction = FloorAmountToUnit(reducible, unit);
+                if (reduction <= 0.009d)
+                {
+                    continue;
+                }
+
+                var nextAmount = ClampAmountToBounds(absolute - reduction, bounds);
+                var actualReduction = RoundMoney(absolute - nextAmount);
+                if (actualReduction <= 0.009d || actualReduction > remaining + 0.009d)
+                {
+                    continue;
+                }
+
+                ApplySignedAmount(record, -1d, nextAmount);
+                remaining = RoundMoney(remaining - actualReduction);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+        }
+
+        return changed;
+    }
+
+    private static int CalculateBalanceInputSignature(IReadOnlyList<FlowRecord> records)
+    {
+        var hash = new HashCode();
+        hash.Add(records.Count);
+        foreach (var record in records)
+        {
+            hash.Add(record.AccountTime?.Ticks ?? 0L);
+            hash.Add(RoundMoney(record.TradeMoney ?? 0));
+            hash.Add(record.GeneratedRowKind, StringComparer.Ordinal);
+        }
+
+        return hash.ToHashCode();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -3138,13 +3307,7 @@ public sealed class FlowAutoGenerator
                  monthIndex++)
             {
                 var month = monthlyPlan.Months[monthIndex];
-                var targetUpperBound = monthIndex == monthlyPlan.Months.Count - 1
-                    ? Math.Max(monthlyPlan.ClosingBalanceCap, monthlyPlan.ClosingBalanceTargets[monthIndex])
-                    : monthlyPlan.ClosingBalanceCap;
-                var target = RoundMoney(Math.Clamp(
-                    monthlyPlan.ClosingBalanceTargets[monthIndex],
-                    0,
-                    targetUpperBound));
+                var target = RoundMoney(Math.Max(0, monthlyPlan.ClosingBalanceTargets[monthIndex]));
                 var actual = CalculateBalanceThroughDate(records, openingBalance, month.End);
                 var difference = RoundMoney(actual - target);
                 if (difference > MonthlyClosingBalanceTolerance)
@@ -3300,22 +3463,8 @@ public sealed class FlowAutoGenerator
                  monthIndex--)
             {
                 ApplyBalances(records, openingBalance);
-                var suffixRoom = double.MaxValue;
-                for (var suffixIndex = monthIndex; suffixIndex < monthlyPlan.Months.Count; suffixIndex++)
-                {
-                    var suffixClosing = CalculateBalanceThroughDate(
-                        records,
-                        openingBalance,
-                        monthlyPlan.Months[suffixIndex].End);
-                    var suffixLimit = suffixIndex == monthlyPlan.Months.Count - 1
-                        ? Math.Max(monthlyPlan.ClosingBalanceCap, target)
-                        : monthlyPlan.ClosingBalanceCap;
-                    suffixRoom = Math.Min(
-                        suffixRoom,
-                        RoundMoney(suffixLimit - suffixClosing));
-                }
-
-                var adjustment = RoundMoney(Math.Min(remaining, Math.Max(0, suffixRoom)));
+                var currentFinal = CalculateBalanceThroughDate(records, openingBalance, month.End);
+                var adjustment = RoundMoney(Math.Min(remaining, Math.Max(0, target - currentFinal)));
                 if (adjustment <= MonthlyClosingBalanceTolerance)
                 {
                     continue;
@@ -3376,7 +3525,7 @@ public sealed class FlowAutoGenerator
             var month = monthlyPlan.Months[monthIndex];
             ApplyBalances(records, openingBalance);
             var batchClosing = CalculateBalanceThroughDate(records, openingBalance, month.End);
-            var batchDesiredClosing = monthlyPlan.ClosingBalanceCap;
+            var batchDesiredClosing = GetEffectiveMonthlyClosingBalanceCap(monthlyPlan, monthIndex);
             var batchExcess = RoundMoney(batchClosing - batchDesiredClosing);
             if (batchExcess > MonthlyClosingBalanceTolerance)
             {
@@ -3409,7 +3558,7 @@ public sealed class FlowAutoGenerator
                 ApplyBalances(records, openingBalance);
                 var balanceIndex = BalanceRangeIndex.Create(records, openingBalance);
                 var closing = CalculateBalanceThroughDate(records, openingBalance, month.End);
-                var desiredClosing = monthlyPlan.ClosingBalanceCap;
+                var desiredClosing = GetEffectiveMonthlyClosingBalanceCap(monthlyPlan, monthIndex);
                 var excess = RoundMoney(closing - desiredClosing);
                 if (excess <= MonthlyClosingBalanceTolerance)
                 {
@@ -3525,6 +3674,16 @@ public sealed class FlowAutoGenerator
         }
 
         return changed;
+    }
+
+    private static double GetEffectiveMonthlyClosingBalanceCap(
+        MonthlyAmountPlan monthlyPlan,
+        int monthIndex)
+    {
+        var requiredFloor = monthIndex >= 0 && monthIndex < monthlyPlan.RequiredClosingBalanceFloors.Length
+            ? monthlyPlan.RequiredClosingBalanceFloors[monthIndex]
+            : 0;
+        return RoundMoney(Math.Max(monthlyPlan.ClosingBalanceCap, requiredFloor));
     }
 
     private static int MoveFutureExpenseRecordsToMonthBatch(
@@ -5743,6 +5902,8 @@ public sealed class FlowAutoGenerator
         public required double[] ExpenseTargets { get; init; }
 
         public required double[] ClosingBalanceTargets { get; init; }
+
+        public required double[] RequiredClosingBalanceFloors { get; init; }
 
         public required double ClosingBalanceCap { get; init; }
 
@@ -14016,11 +14177,15 @@ public sealed class FlowAutoGenerator
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var finalBalanceTarget = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
         var closingBalanceCap = RoundMoney(Math.Max(0, targetIncome) * MonthlyClosingBalanceCapRatio);
+        var requiredClosingBalanceFloors = CreateRequiredClosingBalanceFloors(
+            incomeTargets,
+            finalBalanceTarget);
         var closingBalanceTargets = CreateMonthlyClosingBalanceTargets(
             incomeTargets,
             openingBalance,
             finalBalanceTarget,
             closingBalanceCap,
+            requiredClosingBalanceFloors,
             random);
         expenseTargets = CreateMonthlyExpenseTargetsFromClosingBalances(
             incomeTargets,
@@ -14034,6 +14199,7 @@ public sealed class FlowAutoGenerator
             IncomeTargets = incomeTargets,
             ExpenseTargets = expenseTargets,
             ClosingBalanceTargets = closingBalanceTargets,
+            RequiredClosingBalanceFloors = requiredClosingBalanceFloors,
             ClosingBalanceCap = closingBalanceCap,
             MonthlyIncomeCap = monthlyIncomeCap
         };
@@ -14376,11 +14542,33 @@ public sealed class FlowAutoGenerator
         }
     }
 
+    private static double[] CreateRequiredClosingBalanceFloors(
+        IReadOnlyList<double> incomeTargets,
+        double finalBalanceTarget)
+    {
+        var minimumRequired = new double[incomeTargets.Count];
+        if (minimumRequired.Length == 0)
+        {
+            return minimumRequired;
+        }
+
+        minimumRequired[^1] = RoundMoney(Math.Max(0, finalBalanceTarget));
+        for (var index = minimumRequired.Length - 2; index >= 0; index--)
+        {
+            minimumRequired[index] = RoundMoney(Math.Max(
+                0,
+                minimumRequired[index + 1] - Math.Max(0, incomeTargets[index + 1])));
+        }
+
+        return minimumRequired;
+    }
+
     private static double[] CreateMonthlyClosingBalanceTargets(
         IReadOnlyList<double> incomeTargets,
         double openingBalance,
         double finalBalanceTarget,
         double closingBalanceCap,
+        IReadOnlyList<double> requiredClosingBalanceFloors,
         Random random)
     {
         var monthCount = incomeTargets.Count;
@@ -14392,15 +14580,6 @@ public sealed class FlowAutoGenerator
 
         closingBalanceCap = RoundMoney(Math.Max(0, closingBalanceCap));
         finalBalanceTarget = RoundMoney(Math.Max(0, finalBalanceTarget));
-
-        var minimumRequired = new double[monthCount];
-        minimumRequired[^1] = finalBalanceTarget;
-        for (var index = monthCount - 2; index >= 0; index--)
-        {
-            minimumRequired[index] = RoundMoney(Math.Max(
-                0,
-                minimumRequired[index + 1] - Math.Max(0, incomeTargets[index + 1])));
-        }
 
         var previousClosing = RoundMoney(Math.Max(0, openingBalance));
         var buildPosition = 0;
@@ -14415,8 +14594,11 @@ public sealed class FlowAutoGenerator
                 break;
             }
 
-            var lower = Math.Min(closingBalanceCap, minimumRequired[index]);
-            var upper = Math.Min(closingBalanceCap, available);
+            var requiredFloor = index < requiredClosingBalanceFloors.Count
+                ? Math.Max(0, requiredClosingBalanceFloors[index])
+                : 0;
+            var lower = Math.Min(requiredFloor, available);
+            var upper = Math.Min(Math.Max(closingBalanceCap, lower), available);
             if (upper <= 0.009d)
             {
                 targets[index] = 0;
@@ -18175,6 +18357,11 @@ public sealed class FlowAutoGenerator
         return Math.Abs(RoundMoney(finalBalance - CalculateFinalBalanceTarget(openingBalance, lastMoney))) > FinalBalanceTolerance + 0.009d;
     }
 
+    private static bool IsFinalBalanceOutsideHardTolerance(double finalBalance, double openingBalance, double lastMoney)
+    {
+        return Math.Abs(RoundMoney(finalBalance - CalculateFinalBalanceTarget(openingBalance, lastMoney))) > FinalBalanceHardTolerance;
+    }
+
     private static bool IsWechatBank(Bank bank)
     {
         return bank.Name.Contains("\u5fae\u4fe1", StringComparison.Ordinal);
@@ -18294,6 +18481,7 @@ public sealed class FlowAutoGenerator
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
         EnforceMinimumExactAmountRepeatGap(records, request, random);
+        FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
         ValidateActualMonthlyIncomeCap(records, monthlyPlan);
         perfTrace.Mark("fast final validation", records);
@@ -18314,7 +18502,7 @@ public sealed class FlowAutoGenerator
             FinalBalance = RoundMoney(finalBalance),
             MinimumBalance = RoundMoney(minimumBalance),
             RequiresOpeningBalanceCorrection = minimumBalance < -0.009d
-                || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney),
+                || IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney),
             RequiredOpeningBalance = RoundMoney(Math.Max(0, requiredOpeningBalance))
         };
     }
