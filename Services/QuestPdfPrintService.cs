@@ -315,7 +315,8 @@ public sealed class QuestPdfPrintService : IPrintPdfService
 
                     foreach (var record in records)
                     {
-                        var hideTime = record.ProductBrief is "\u7ED3\u606F" or "\u5229\u606F\u7A0E" or "\u77ED\u4FE1\u8D39";
+                        var hideTime = record.ProductBrief is "\u7ED3\u606F" or "\u5229\u606F\u7A0E" or "\u77ED\u4FE1\u8D39"
+                            || IsAgriculturalImportedTimeBlank(record);
                         var amount = (record.TradeMoney ?? 0d).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
                         var values = new[]
                         {
@@ -427,6 +428,14 @@ public sealed class QuestPdfPrintService : IPrintPdfService
     private static string FirstNotBlank(params string?[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+    }
+
+    private static bool IsAgriculturalImportedTimeBlank(FlowRecord record)
+    {
+        // ABC rows with an empty source time are stored at midnight. AccountTime
+        // is the authoritative signal for suppressing 000000 in the fallback.
+        return record.AccountTime is { TimeOfDay: var timeOfDay }
+            && timeOfDay == TimeSpan.Zero;
     }
 
     private static void ExportCore(PrintRenderContext context, string path)

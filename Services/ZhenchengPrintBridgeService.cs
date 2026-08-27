@@ -29,6 +29,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private const string PrintDiagnosticsWrittenDataKey = "SpeedEmulator.PrintDiagnosticsWritten";
     private const string PrintDiagnosticPathDataKey = "SpeedEmulator.PrintDiagnosticPath";
     private const string PrintDiagnosticSummaryDataKey = "SpeedEmulator.PrintDiagnosticSummary";
+    private const string AgriculturalPersonalImportedBlankTimeMarker = "__ABC_IMPORTED_BLANK_TIME__";
     private static readonly HashSet<string> AgriculturalPaperWideDetailPropertyNames = new(StringComparer.Ordinal)
     {
         "AccountNameAndNumber",
@@ -264,6 +265,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (currentBridge.TryExport(context, path))
         {
+            NormalizeAgriculturalPersonalElectronicBlankTimes(context, path);
             NormalizeCgbPersonalElectronicBlankPages(context, path);
             NormalizeCgbPersonalElectronicFooterPdf(context, path);
             NormalizeMinshengPersonalVoucherColumns(context, path);
@@ -3875,18 +3877,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var normalizedPdfData = NormalizeStimulsoftTemplateSortDirection(
             pdfData,
             context.Template.Config.Descending);
-        return NormalizeAgriculturalPersonalLatestBalanceFormat(context, normalizedPdfData);
+        normalizedPdfData = NormalizeAgriculturalPersonalLatestBalanceFormat(context, normalizedPdfData);
+        return NormalizeAgriculturalPersonalLatestTimeFormat(context, normalizedPdfData);
     }
 
     private static string NormalizeAgriculturalPersonalLatestBalanceFormat(
         PrintRenderContext context,
         string pdfData)
     {
-        var templateName = context.Template.Name ?? string.Empty;
-        if (!IsAgriculturalBank(context.Bank)
-            || context.Bank.Type != BankTypes.Personal
-            || (!string.Equals(templateName, "农行个人电子版（最新）", StringComparison.Ordinal)
-                && !string.Equals(templateName, "农行个人电子版（最新版）", StringComparison.Ordinal)))
+        if (!IsAgriculturalPersonalLatestElectronicTemplate(context))
         {
             return pdfData;
         }
@@ -3894,6 +3893,20 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         const string balanceText = "<Text>{流水.Balance}</Text>";
         const string formattedBalanceText = "<Text>{(流水.Balance).ToString(\"0.00\")}</Text>";
         return pdfData.Replace(balanceText, formattedBalanceText, StringComparison.Ordinal);
+    }
+
+    private static string NormalizeAgriculturalPersonalLatestTimeFormat(
+        PrintRenderContext context,
+        string pdfData)
+    {
+        if (!IsAgriculturalPersonalLatestElectronicTemplate(context))
+        {
+            return pdfData;
+        }
+
+        const string sourceTimeText = "<Text>{IIF(流水.ProductBrief == \"结息\" || 流水.ProductBrief == \"利息税\" || 流水.ProductBrief == \"短信费\", \"\",流水.AccountTime.ToString(\"HHmmss\"))}</Text>";
+        var importedTimeText = $"<Text>{{IIF(流水.CashCheck == \"{AgriculturalPersonalImportedBlankTimeMarker}\" || 流水.ProductBrief == \"结息\" || 流水.ProductBrief == \"利息税\" || 流水.ProductBrief == \"短信费\", \"\",流水.AccountTime.ToString(\"HHmmss\"))}}</Text>";
+        return pdfData.Replace(sourceTimeText, importedTimeText, StringComparison.Ordinal);
     }
 
     private static string NormalizeStimulsoftTemplateSortDirection(string pdfData, bool descending)
@@ -6416,7 +6429,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsAgriculturalBankPersonalElectronicTemplate(context))
         {
-            NormalizeAgriculturalElectronicFlowFields(source, values, target);
+            NormalizeAgriculturalElectronicFlowFields(context, source, values, target);
             return;
         }
 
@@ -7624,20 +7637,49 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return isAgriculturalBank && isPersonalElectronic;
     }
 
+    private static bool IsAgriculturalPersonalLatestElectronicTemplate(PrintRenderContext context)
+    {
+        var templateName = context.Template.Name ?? string.Empty;
+        return context.Bank.Type == BankTypes.Personal
+            && IsAgriculturalBankPersonalElectronicTemplate(context)
+            && (string.Equals(templateName, "农行个人电子版（最新）", StringComparison.Ordinal)
+                || string.Equals(templateName, "农行个人电子版（最新版）", StringComparison.Ordinal));
+    }
+
     private static void NormalizeAgriculturalElectronicFlowFields(
+        PrintRenderContext context,
         FlowRecord source,
         IReadOnlyDictionary<string, object?> values,
         object target)
     {
-        var counterpartyName = LimitSingleLinePrintText(
-            ReadStringProperty(target, nameof(FlowRecord.OppositeUsername), string.Empty),
-            10);
+        var rawCounterpartyName = ReadStringProperty(
+            target,
+            nameof(FlowRecord.OppositeUsername),
+            string.Empty);
+        // A personal ABC statement can put a 15-19 digit counterparty account in
+        // the "counterparty information" column. Document imports must round-trip
+        // that source value; the legacy ten-character cap was silently turning
+        // 26143301660000699 into 2614330166 in print preview/export.
+        var counterpartyName = source.IsDocumentImported
+            ? NormalizeSingleLinePrintText(rawCounterpartyName)
+            : LimitSingleLinePrintText(rawCounterpartyName, 10);
         var channel = NormalizeAgriculturalElectronicTradeChannel(FirstNotBlank(
             source.TradeChannel,
             GetValue(values, nameof(FlowRecord.TradeChannel))));
         Set(target, nameof(FlowRecord.OppositeUsername), counterpartyName);
         Set(target, nameof(FlowRecord.TradeChannel), channel);
         Set(target, nameof(FlowRecord.TradeChannelEn), channel);
+        if (IsAgriculturalPersonalLatestElectronicTemplate(context)
+            && source.IsDocumentImported
+            && source.AccountTime is { TimeOfDay: var timeOfDay }
+            && timeOfDay == TimeSpan.Zero)
+        {
+            // The vendor template derives both date and time from AccountTime.
+            // ABC represents an empty source time as midnight. Some records saved
+            // by older import versions also retain a raw "000000" value; do not
+            // mistake that placeholder for a time that should be printed.
+            Set(target, nameof(FlowRecord.CashCheck), AgriculturalPersonalImportedBlankTimeMarker);
+        }
     }
 
     private static string NormalizeAgriculturalElectronicTradeChannel(string value)
@@ -9093,6 +9135,104 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 throw;
             }
         }
+    }
+
+    private static void NormalizeAgriculturalPersonalElectronicBlankTimes(
+        PrintRenderContext context,
+        string path)
+    {
+        if (!IsAgriculturalBankPersonalElectronicTemplate(context)
+            || !context.Records.Any(record =>
+                record.AccountTime is { TimeOfDay: var timeOfDay }
+                && timeOfDay == TimeSpan.Zero)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            var changed = false;
+            foreach (var page in document.Pages)
+            {
+                var fontMaps = ReadPdfFontUnicodeMaps(page);
+                if (fontMaps.Count == 0)
+                {
+                    continue;
+                }
+
+                var sequence = ContentReader.ReadContent(page);
+                if (!TryRemoveAgriculturalBlankTimeText(sequence, fontMaps))
+                {
+                    continue;
+                }
+
+                page.Contents.ReplaceContent(sequence);
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            var tempPath = path + ".abc-blank-times.tmp";
+            try
+            {
+                document.Save(tempPath);
+                document.Close();
+                File.Copy(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteLocalFile(tempPath);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool TryRemoveAgriculturalBlankTimeText(
+        CSequence sequence,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<ushort, string>> fontMaps)
+    {
+        var currentFont = string.Empty;
+        var changed = false;
+        foreach (var item in sequence)
+        {
+            if (item is not COperator operation)
+            {
+                continue;
+            }
+
+            if (operation.Name == "Tf"
+                && operation.Operands.Count > 0
+                && operation.Operands[0] is CName fontName)
+            {
+                currentFont = fontName.ToString();
+                continue;
+            }
+
+            if (operation.Name != "Tj"
+                || operation.Operands.Count == 0
+                || operation.Operands[0] is not CString text
+                || !fontMaps.TryGetValue(currentFont, out var fontMap)
+                || !string.Equals(DecodePdfCidText(text.Value, fontMap), "000000", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            text.Value = string.Empty;
+            changed = true;
+        }
+
+        return changed;
     }
 
     private static Dictionary<string, IReadOnlyDictionary<ushort, string>> ReadPdfFontUnicodeMaps(PdfPage page)

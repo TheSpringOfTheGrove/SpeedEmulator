@@ -387,6 +387,18 @@ public partial class BankUsersWindow : Window
             return;
         }
 
+        if (IsIdColumn(cell.Column)
+            && ReferenceEquals(UsersGrid.SelectedItem, rowItem))
+        {
+            UsersGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+            UsersGrid.CommitEdit(DataGridEditingUnit.Row, true);
+            UsersGrid.SelectedItems.Clear();
+            UsersGrid.CurrentCell = default;
+            viewModel.SelectedUser = null;
+            e.Handled = true;
+            return;
+        }
+
         if (!cell.IsFocused)
         {
             cell.Focus();

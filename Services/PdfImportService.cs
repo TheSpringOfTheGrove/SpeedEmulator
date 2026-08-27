@@ -103,6 +103,19 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Counterparty", 465, 600)
     ];
 
+    private static readonly PdfPositionedColumnSpec[] AbcPersonalColumns =
+    [
+        new("Date", 45, 86),
+        new("Time", 86, 127),
+        new("Summary", 127, 168),
+        new("Amount", 168, 208),
+        new("Balance", 208, 249),
+        new("OppositeInfo", 249, 307),
+        new("LogNumber", 307, 347),
+        new("Channel", 347, 389),
+        new("Remark", 389, 570)
+    ];
+
     private static readonly PdfPositionedColumnSpec[] SpdbPersonalColumns =
     [
         new("Date", 88, 130),
@@ -434,6 +447,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "中行" => true,
             "微信" => true,
             "平安" => true,
+            "农行" => true,
             "浦发" => true,
             "中信" => true,
             "华夏" => true,
@@ -1177,16 +1191,42 @@ public sealed partial class PdfImportService : IPdfImportService
             }
         }
 
-        var recordLines = SplitAbcEmbeddedRecordLines(lines);
-        foreach (var group in GroupLinesByStart(recordLines, IsAbcRecordStart, IsAbcIgnoredLine))
+        var positionedRows = BuildPositionedRows(
+            document.Words,
+            AbcPersonalColumns,
+            IsAbcPersonalHeaderWord,
+            IsAbcPersonalFooterWord,
+            @"^\d{8}$",
+            86,
+            125,
+            CleanAbcPersonalFieldValue,
+            JoinAbcPersonalPositionedCellWords);
+        var positionedRecords = new List<FlowRecord>(positionedRows.Count);
+        foreach (var row in positionedRows)
         {
-            if (TryParseAbcRecord(group, bank, user, out var record))
+            if (TryParseAbcPositionedRecord(row, bank, user, out var record))
             {
-                result.FlowRecords.Add(record);
+                positionedRecords.Add(record);
             }
-            else
+        }
+
+        if (positionedRows.Count > 0 && positionedRecords.Count == positionedRows.Count)
+        {
+            result.FlowRecords.AddRange(positionedRecords);
+        }
+        else
+        {
+            var recordLines = SplitAbcEmbeddedRecordLines(lines);
+            foreach (var group in GroupLinesByStart(recordLines, IsAbcRecordStart, IsAbcIgnoredLine))
             {
-                AddParseWarning(result, group, "该农行流水行未能按专用模板解析。");
+                if (TryParseAbcRecord(group, bank, user, out var record))
+                {
+                    result.FlowRecords.Add(record);
+                }
+                else
+                {
+                    AddParseWarning(result, group, "该农行流水行未能按专用模板解析。");
+                }
             }
         }
 
@@ -5692,7 +5732,7 @@ public sealed partial class PdfImportService : IPdfImportService
         record.ProductBrief = summary;
         record.TradeMoney = ParseDoubleOrNull(match.Groups["amount"].Value);
         record.Balance = ParseDoubleOrNull(match.Groups["balance"].Value);
-        record.OppositeUsername = CleanPdfValue(oppositeName);
+        record.OppositeUsername = CleanAbcPersonalFieldValue(oppositeName);
         record.LogNum = CleanPdfValue(logNumber);
         record.TradeChannel = CleanPdfValue(channel);
         record.Remark = CleanPdfValue(remark);
@@ -5703,11 +5743,66 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "交易金额", match.Groups["amount"].Value);
         SetFlowRaw(record, "本次余额", match.Groups["balance"].Value);
         SetFlowRaw(record, "余额", match.Groups["balance"].Value);
-        SetFlowRaw(record, "对手信息", record.OppositeUsername);
-        SetFlowRaw(record, "户名", record.OppositeUsername);
-        SetFlowRaw(record, "对方户名", record.OppositeUsername);
+        SetAbcFlowRaw(record, "对手信息", record.OppositeUsername);
+        SetAbcFlowRaw(record, "户名", record.OppositeUsername);
+        SetAbcFlowRaw(record, "对方户名", record.OppositeUsername);
         SetFlowRaw(record, "对方账号", record.OppositeAccount);
         SetFlowRaw(record, "对方开户行", record.OppositeBank);
+        SetFlowRaw(record, "日志号", record.LogNum);
+        SetFlowRaw(record, "交易渠道", record.TradeChannel);
+        SetFlowRaw(record, "交易附言", record.Remark);
+        SetFlowRaw(record, "附言", record.Remark);
+        return true;
+    }
+
+    private static bool TryParseAbcPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var date = GetPositionedCell(row, "Date");
+        var time = GetPositionedCell(row, "Time");
+        var summary = GetPositionedCell(row, "Summary");
+        var amountText = GetPositionedCell(row, "Amount");
+        var balanceText = GetPositionedCell(row, "Balance");
+        if (!Regex.IsMatch(date, @"^\d{8}$")
+            || (!string.IsNullOrWhiteSpace(time) && !Regex.IsMatch(time, @"^\d{6}$"))
+            || string.IsNullOrWhiteSpace(summary)
+            || !PdfImportTabularMapper.TryParseDouble(amountText, out _)
+            || !PdfImportTabularMapper.TryParseDouble(balanceText, out _))
+        {
+            return false;
+        }
+
+        var oppositeInfo = GetPositionedCell(row, "OppositeInfo");
+        var logNumber = GetPositionedCell(row, "LogNumber");
+        var channel = NormalizeAbcTradeChannel(GetPositionedCell(row, "Channel"));
+        var remark = GetPositionedCell(row, "Remark");
+        var hasTime = !string.IsNullOrWhiteSpace(time);
+
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.CardNo, user.AccountNo);
+        record.AccountTime = ParseDateTimeOrNull(hasTime ? $"{date} {time}" : date);
+        record.ProductBrief = CleanPdfValue(summary);
+        record.TradeMoney = ParseDoubleOrNull(amountText);
+        record.Balance = ParseDoubleOrNull(balanceText);
+        record.OppositeUsername = CleanAbcPersonalFieldValue(oppositeInfo);
+        record.LogNum = CleanPdfValue(logNumber);
+        record.TradeChannel = CleanPdfValue(channel);
+        record.Remark = CleanPdfValue(remark);
+
+        SetFlowRaw(record, "日期", date);
+        SetFlowRaw(record, "交易时间", time);
+        SetFlowRaw(record, "摘要", record.ProductBrief);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "本次余额", balanceText);
+        SetFlowRaw(record, "余额", balanceText);
+        SetAbcFlowRaw(record, "对手信息", record.OppositeUsername);
+        SetAbcFlowRaw(record, "户名", record.OppositeUsername);
+        SetAbcFlowRaw(record, "对方户名", record.OppositeUsername);
         SetFlowRaw(record, "日志号", record.LogNum);
         SetFlowRaw(record, "交易渠道", record.TradeChannel);
         SetFlowRaw(record, "交易附言", record.Remark);
@@ -7072,7 +7167,9 @@ public sealed partial class PdfImportService : IPdfImportService
         Func<string, bool> isFooterWord,
         string rowStartPattern,
         double rowStartLeftMax,
-        double defaultHeaderBottom)
+        double defaultHeaderBottom,
+        Func<string, string>? cleanWordText = null,
+        Func<IEnumerable<PdfTextWord>, string>? joinCellWords = null)
     {
         if (words.Count == 0)
         {
@@ -7083,7 +7180,7 @@ public sealed partial class PdfImportService : IPdfImportService
         foreach (var pageGroup in words.GroupBy(item => item.PageNumber).OrderBy(group => group.Key))
         {
             var pageWords = pageGroup
-                .Select(item => item with { Text = CleanPdfValue(item.Text) })
+                .Select(item => item with { Text = (cleanWordText ?? CleanPdfValue)(item.Text) })
                 .Where(item => !string.IsNullOrWhiteSpace(item.Text))
                 .OrderBy(item => item.Top)
                 .ThenBy(item => item.Left)
@@ -7131,7 +7228,7 @@ public sealed partial class PdfImportService : IPdfImportService
                     var columnWords = rowWords
                         .Where(item => GetHorizontalCenter(item) >= column.Left && GetHorizontalCenter(item) < column.Right)
                         .ToList();
-                    var value = JoinPositionedCellWords(columnWords);
+                    var value = joinCellWords?.Invoke(columnWords) ?? JoinPositionedCellWords(columnWords);
                     if (!string.IsNullOrWhiteSpace(value))
                     {
                         cells[column.Key] = value;
@@ -8266,6 +8363,19 @@ public sealed partial class PdfImportService : IPdfImportService
         return Regex.IsMatch(text, @"^\d{8}\s+(?:\d{6}\s+)?\S+\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}");
     }
 
+    private static bool IsAbcPersonalHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易日期" or "交易时间" or "交易摘要" or "交易金额" or "本次余额"
+            or "对手信息" or "日志号" or "交易渠道" or "交易附言";
+    }
+
+    private static bool IsAbcPersonalFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value.StartsWith("该交易明细因不可预测的非人控技术原因可能导致数据缺失", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"^第\d+页[，,]\s*共\d+页$");
+    }
+
     private static bool IsPingAnRecordStart(string text)
     {
         return Regex.IsMatch(text, @"^\d+\s+\d{4}-\d{2}-\d{2}\s+[+-]?\d[\d,]*(?:\.\d+)?\s+[+-]?\d[\d,]*(?:\.\d+)?\s+");
@@ -8971,30 +9081,49 @@ public sealed partial class PdfImportService : IPdfImportService
             return (string.Empty, string.Empty, string.Empty);
         }
 
-        // Some CCB reversal rows contain only a counterparty name (no account and
-        // therefore no slash). Flattened PDF text joins that final-column name to the
-        // masked location cell, for example "*** 吴虹毅". Keep the two source columns
-        // separate instead of treating the complete text as the location/remark.
-        var maskedPlaceWithName = Regex.Match(text, @"^(?<place>\*{3})\s+(?<name>\S.*)$");
-        if (maskedPlaceWithName.Success)
-        {
-            return (
-                CleanPdfValue(maskedPlaceWithName.Groups["place"].Value),
-                string.Empty,
-                CleanPdfValue(maskedPlaceWithName.Groups["name"].Value));
-        }
-
-        var slashIndex = text.LastIndexOf('/');
+        // The first slash separates the CCB account and account-name columns.
+        // A wrapped account name may itself contain another slash, for example
+        // "617290073990003/抖音支付-抖音电商/格物致品".
+        var slashIndex = text.IndexOf('/');
         if (slashIndex <= 0 || slashIndex >= text.Length - 1)
         {
+            // Some CCB reversal rows contain only a counterparty name (no account
+            // and therefore no slash). Flattened PDF text joins that final-column
+            // name to the masked location cell, for example "*** 吴虹毅".
+            var maskedPlaceWithName = Regex.Match(text, @"^(?<place>\*{3})\s+(?<name>\S.*)$");
+            if (maskedPlaceWithName.Success)
+            {
+                return (
+                    CleanPdfValue(maskedPlaceWithName.Groups["place"].Value),
+                    string.Empty,
+                    CleanPdfValue(maskedPlaceWithName.Groups["name"].Value));
+            }
+
             return (text, string.Empty, string.Empty);
         }
 
         var beforeSlash = text[..slashIndex].Trim();
-        var oppositeName = text[(slashIndex + 1)..].Trim();
+        var oppositeName = Regex.Replace(
+            text[(slashIndex + 1)..].Trim(),
+            @"\s*/\s*",
+            "/");
         var accountMatch = Regex.Match(beforeSlash, @"(?<account>[0-9A-Za-z*]{4,})$");
         if (!accountMatch.Success)
         {
+            // Some masked CCB counterpart accounts include a Chinese platform
+            // label, such as "4******抖音电商". The preceding *** still belongs
+            // to the separate transaction-place column.
+            var maskedPlaceWithAccount = Regex.Match(
+                beforeSlash,
+                @"^(?<place>\*{3})\s+(?<account>\S.*)$");
+            if (maskedPlaceWithAccount.Success)
+            {
+                return (
+                    CleanPdfValue(maskedPlaceWithAccount.Groups["place"].Value),
+                    CleanPdfValue(maskedPlaceWithAccount.Groups["account"].Value),
+                    CleanPdfValue(oppositeName));
+            }
+
             return (beforeSlash, string.Empty, oppositeName);
         }
 
@@ -9089,24 +9218,62 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static (string OppositeName, string LogNumber, string Channel, string Remark) SplitAbcRemainder(string rest)
     {
-        var tokens = SplitWords(rest).ToList();
+        var tokens = SplitAbcWords(rest).ToList();
         if (tokens.Count == 0)
         {
             return (string.Empty, string.Empty, string.Empty, string.Empty);
         }
 
-        var logIndex = tokens.FindIndex(item => Regex.IsMatch(item, @"^[A-Za-z]?\d{6,}$"));
+        var logIndex = tokens.FindIndex(IsAbcLogNumber);
         if (logIndex < 0)
         {
-            return (CleanPdfValue(string.Join(' ', tokens)), string.Empty, string.Empty, string.Empty);
+            return (CleanAbcPersonalFieldValue(string.Join(' ', tokens)), string.Empty, string.Empty, string.Empty);
         }
 
         var channelIndex = logIndex + 1;
         return (
-            CleanPdfValue(string.Join(' ', tokens.Take(logIndex))),
+            CleanAbcPersonalFieldValue(string.Join(' ', tokens.Take(logIndex))),
             CleanPdfValue(tokens[logIndex]),
             channelIndex < tokens.Count ? CleanPdfValue(tokens[channelIndex]) : string.Empty,
             CleanPdfValue(string.Join(' ', tokens.Skip(channelIndex + 1))));
+    }
+
+    private static IReadOnlyList<string> SplitAbcWords(string text)
+    {
+        return Regex.Split(text.Trim(), @"\s+")
+            .Select(CleanAbcPersonalFieldValue)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToList();
+    }
+
+    private static string JoinAbcPersonalPositionedCellWords(IEnumerable<PdfTextWord> words)
+    {
+        return CleanAbcPersonalFieldValue(string.Concat(words
+            .OrderBy(item => item.Top)
+            .ThenBy(item => item.Left)
+            .Select(item => item.Text)));
+    }
+
+    private static string CleanAbcPersonalFieldValue(string value)
+    {
+        var trimmed = (value ?? string.Empty).Trim();
+        return string.Equals(trimmed, "--", StringComparison.Ordinal)
+            ? "--"
+            : CleanPdfValue(value);
+    }
+
+    private static void SetAbcFlowRaw(FlowRecord record, string columnName, string value)
+    {
+        var cleaned = CleanAbcPersonalFieldValue(value);
+        if (!string.IsNullOrWhiteSpace(cleaned))
+        {
+            record.ExtraFields[columnName] = cleaned;
+        }
+    }
+
+    private static bool IsAbcLogNumber(string value)
+    {
+        return Regex.IsMatch(CleanPdfValue(value), @"^(?:[A-Za-z]\d{9}|\d{10})$");
     }
 
     private static string NormalizeAbcTradeChannel(string value)
@@ -10140,6 +10307,15 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static void FillMissingPdfRecordTimes(IList<FlowRecord> records, Bank bank)
     {
+        if (string.Equals(bank.Name, "农行", StringComparison.Ordinal))
+        {
+            // The personal ABC statement intentionally leaves the transaction-time
+            // cell blank for many rows. Preserve that source state as midnight so
+            // the native template renders an empty cell instead of fabricating a
+            // deterministic random time such as 143346.
+            return;
+        }
+
         var sourceDates = records
             .Where(record => record.AccountTime.HasValue)
             .Select(record => record.AccountTime!.Value.Date)
