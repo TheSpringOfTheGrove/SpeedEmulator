@@ -10,7 +10,7 @@ namespace SpeedEmulator.ViewModels;
 
 public sealed class FlowGenerationViewModel : ObservableObject
 {
-    private const double FinalBalanceTolerance = 1000.009d;
+    private const double FinalBalanceTolerance = 0.009d;
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
@@ -717,6 +717,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
                 if (correctionResult == MessageBoxResult.Yes)
                 {
                     result = CorrectGeneratedResult(BankUser, interestSetting, result);
+                    if (!IsGenerationResultAccepted(result, BankUser, interestSetting, out var correctionReason))
+                    {
+                        throw new InvalidOperationException($"负余额修正后仍未通过校验：{correctionReason}");
+                    }
+
                     StatusMessage = "已完成负余额修正。";
                 }
                 else
@@ -816,7 +821,19 @@ public sealed class FlowGenerationViewModel : ObservableObject
             return result;
         }
 
-        StatusMessage = $"生成结果已自动放行：{reason}";
+        var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
+        if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
+        {
+            throw new InvalidOperationException(
+                $"生成结果期末余额未能收口，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}，请重新生成。");
+        }
+
+        if (!IsInterestResultAccepted(result, bankUser, interestSetting, out var interestReason))
+        {
+            throw new InvalidOperationException($"生成结果利息校验未通过：{interestReason}");
+        }
+
+        StatusMessage = $"生成结果需要处理：{reason}";
         return result;
     }
 
@@ -834,7 +851,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
         if (Math.Abs(result.FinalBalance - finalBalanceTarget) > FinalBalanceTolerance)
         {
-            reason = $"最后余额偏差超过 1000，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
+            reason = $"最后余额未精确收口，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
             return false;
         }
 
