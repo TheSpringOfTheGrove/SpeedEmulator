@@ -46,6 +46,8 @@ public sealed class FlowAutoGenerationResult
 
 public sealed class FlowAutoGenerator
 {
+    public const double AcceptedFinalBalanceTolerance = 1000d;
+
     private const string AmountUnitField = "__GeneratedAmountUnit";
     private const string AmountMinField = "__GeneratedAmountMin";
     private const string AmountMaxField = "__GeneratedAmountMax";
@@ -80,11 +82,13 @@ public sealed class FlowAutoGenerator
     private const double MinimumLowCapacityTierWeight = 0.10d;
     private const double MaximumLowCapacityTierPoolRatio = 0.20d;
     private const double MaximumMediumCapacityTierWeight = 0.45d;
-    private const double FinalBalanceTolerance = 1000d;
+    private const double FinalBalanceTolerance = AcceptedFinalBalanceTolerance;
     private const double FinalBalanceHardTolerance = 0.009d;
+    private const int MaximumFixedRuleRecordCount = 200000;
     private const double MonthlyClosingBalanceCapRatio = 0.10d;
     private const double MonthlyClosingBalanceTolerance = 1d;
     private const double MonthlyIncomeCapMultiplier = 2d;
+    private const double MonthlyPlannedTargetAllowanceMultiplier = 1.35d;
     private const int RequiredRepeatAmountGapDays = 3;
     private const double MinimumPrecisionRepeatGapDays = 7d;
     private const double PreferredPrecisionRepeatGapDays = 30d;
@@ -98,6 +102,15 @@ public sealed class FlowAutoGenerator
     private static readonly ConcurrentDictionary<(FlowRuleBase Rule, Bank Bank, long UserId, int Sign), FlowRecord> RuleRecordTemplates = new();
     private static readonly ConcurrentDictionary<(Bank Bank, string Field), bool> BankFlowFieldPresence = new();
     private static readonly ConditionalWeakTable<FlowRecord, CachedAmountBounds> RecordAmountBounds = new();
+
+    private enum FixedRuleScheduleMode
+    {
+        Legacy,
+        Statement,
+        Monthly,
+        Daily,
+        Range
+    }
     private static readonly IReadOnlyDictionary<string, PropertyInfo> FlowRecordProperties = typeof(FlowRecord)
         .GetProperties(BindingFlags.Instance | BindingFlags.Public)
         .Where(item => item.GetIndexParameters().Length == 0)
@@ -242,7 +255,7 @@ public sealed class FlowAutoGenerator
         var plannedExpense = RoundMoney(Math.Min(targetIncome, Math.Max(0, targetIncome - request.Config.LastMoney)));
         var monthlyPlan = CreateMonthlyAmountPlan(request, start, end, targetIncome, plannedExpense, random);
 
-        GenerateNativeConstRecords(request, monthlyPlan, start, end, targetIncome, random, records, scheduleState, amountUsage);
+        GenerateNativeConstRecords(request, start, end, targetIncome, random, records, scheduleState, amountUsage);
         perfTrace.Mark("base const", records);
         GenerateNativeRequiredReferenceRecords(request, monthlyPlan, targetIncome, random, records, scheduleState, amountUsage);
         perfTrace.Mark("base required", records);
@@ -537,6 +550,12 @@ public sealed class FlowAutoGenerator
         {
             RepairVeryHighVolumeNegativeBalances(records, openingBalance);
         }
+        RedistributeLeadingPartialMonthExpenses(
+            records,
+            request,
+            monthlyPlan,
+            openingBalance,
+            random);
         FinalizeConfiguredPrecisionReferenceAmounts(records, openingBalance, random);
         EnforceMinimumExactAmountRepeatGap(records, request, random);
         FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
@@ -558,7 +577,7 @@ public sealed class FlowAutoGenerator
             needsCorrection = true;
         }
 
-        if (IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney))
+        if (IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney))
         {
             needsCorrection = true;
         }
@@ -842,8 +861,80 @@ public sealed class FlowAutoGenerator
             FinalBalance = RoundMoney(finalBalance),
             MinimumBalance = RoundMoney(minimumBalance),
             RequiresOpeningBalanceCorrection = minimumBalance < -0.009d
-                || IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney),
+                || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney),
             RequiredOpeningBalance = source.RequiredOpeningBalance
+        };
+    }
+
+    public FlowAutoGenerationResult ApplyFinalBalanceCorrection(
+        FlowAutoGenerationRequest request,
+        FlowAutoGenerationResult source)
+    {
+        request = ExcludeUngeneratableReferenceRules(request);
+        var start = request.Config.StartTime.Date;
+        var end = NormalizeEndDate(request.Config.EndTime);
+        if (end < start)
+        {
+            (start, end) = (request.Config.EndTime.Date, NormalizeEndDate(request.Config.StartTime));
+        }
+
+        var openingBalance = RoundMoney(source.OpeningBalance);
+        var random = new Random(CreateRunSeed(request, start, end, source.Records.Count ^ 0x31C7A54D));
+        var records = source.Records
+            .Select(item =>
+            {
+                var copy = item.Clone();
+                copy.Id = 0;
+                return copy;
+            })
+            .ToList();
+        if (records.Count == 0)
+        {
+            return CreateEmptyResult(openingBalance, request.Config.LastMoney);
+        }
+
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            ApplyBalances(records, openingBalance);
+            if (GetMinimumBalance(records, openingBalance) < -0.009d)
+            {
+                ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
+            }
+
+            BringFinalBalanceWithinTolerance(records, request, openingBalance);
+            ForceCloseExternalFinalBalance(request, records);
+            FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
+            ApplyBalances(records, openingBalance);
+            var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
+            if (!IsFinalBalanceOutsideTolerance(
+                    finalBalance,
+                    openingBalance,
+                    request.Config.LastMoney)
+                && GetMinimumBalance(records, openingBalance) >= -0.009d)
+            {
+                break;
+            }
+        }
+
+        PruneZeroAmountRecords(records);
+        ApplyBalances(records, openingBalance);
+        var resultFinalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
+        var minimumBalance = GetMinimumBalance(records, openingBalance);
+        var requiresCorrection = minimumBalance < -0.009d
+            || IsFinalBalanceOutsideTolerance(resultFinalBalance, openingBalance, request.Config.LastMoney);
+        var requiredOpeningBalance = minimumBalance < -0.009d
+            ? RoundMoney(openingBalance - minimumBalance)
+            : openingBalance;
+        return new FlowAutoGenerationResult
+        {
+            Records = records,
+            OpeningBalance = openingBalance,
+            IncomeTotal = SumIncome(records),
+            ExpenseTotal = SumExpense(records),
+            FinalBalance = RoundMoney(resultFinalBalance),
+            MinimumBalance = RoundMoney(minimumBalance),
+            RequiresOpeningBalanceCorrection = requiresCorrection,
+            RequiredOpeningBalance = RoundMoney(Math.Max(0, requiredOpeningBalance))
         };
     }
 
@@ -964,7 +1055,7 @@ public sealed class FlowAutoGenerator
             needsCorrection = true;
         }
 
-        if (IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney))
+        if (IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney))
         {
             needsCorrection = true;
         }
@@ -3683,7 +3774,12 @@ public sealed class FlowAutoGenerator
         var requiredFloor = monthIndex >= 0 && monthIndex < monthlyPlan.RequiredClosingBalanceFloors.Length
             ? monthlyPlan.RequiredClosingBalanceFloors[monthIndex]
             : 0;
-        return RoundMoney(Math.Max(monthlyPlan.ClosingBalanceCap, requiredFloor));
+        var plannedClosing = monthIndex >= 0 && monthIndex < monthlyPlan.ClosingBalanceTargets.Length
+            ? monthlyPlan.ClosingBalanceTargets[monthIndex]
+            : 0;
+        return RoundMoney(Math.Max(
+            monthlyPlan.ClosingBalanceCap,
+            Math.Max(requiredFloor, plannedClosing)));
     }
 
     private static int MoveFutureExpenseRecordsToMonthBatch(
@@ -6202,7 +6298,6 @@ public sealed class FlowAutoGenerator
 
     private static void GenerateNativeConstRecords(
         FlowAutoGenerationRequest request,
-        MonthlyAmountPlan monthlyPlan,
         DateTime start,
         DateTime end,
         double incomeCap,
@@ -6211,6 +6306,9 @@ public sealed class FlowAutoGenerator
         NativeScheduleState scheduleState,
         AmountUsageTracker amountUsage)
     {
+        var plannedDayUsage = new Dictionary<DateTime, int>();
+        var schedules = new List<(GenerateConstRule Rule, IReadOnlyList<DateTime> Dates)>();
+        var totalScheduledCount = 0;
         foreach (var rule in request.ConstItems.Where(item => item.IsCheck))
         {
             if (string.IsNullOrWhiteSpace(rule.FixDay))
@@ -6218,55 +6316,84 @@ public sealed class FlowAutoGenerator
                 continue;
             }
 
-            var repeatCount = GetNativeRepeatCount(rule.ReCnt, random);
-            foreach (var day in ResolveFixedDays(rule, start, end))
+            var dates = ResolveNativeFixedOccurrences(
+                rule,
+                start,
+                end,
+                random,
+                scheduleState,
+                plannedDayUsage);
+            totalScheduledCount += dates.Count;
+            if (totalScheduledCount > MaximumFixedRuleRecordCount)
             {
-                var normalizedDay = NormalizeNativeFixedDay(day, rule, end);
-                if (normalizedDay < start.Date || normalizedDay > end.Date)
+                throw new InvalidOperationException(
+                    $"固定日期增加项目预计生成 {totalScheduledCount:N0} 笔，超过单次上限 {MaximumFixedRuleRecordCount:N0} 笔，请减少次数或缩短日期范围。");
+            }
+
+            schedules.Add((rule, dates));
+            foreach (var date in dates)
+            {
+                plannedDayUsage[date.Date] = plannedDayUsage.GetValueOrDefault(date.Date) + 1;
+            }
+        }
+
+        var remainingRequiredIncomeMinimum = RoundMoney(schedules
+            .Where(item => IsIncomeRuleSafe(item.Rule))
+            .Sum(item => GetRuleAmountBounds(item.Rule).Min * item.Dates.Count));
+        if (remainingRequiredIncomeMinimum > incomeCap + 0.009d)
+        {
+            throw new InvalidOperationException(
+                $"固定日期收入项目按最小金额至少需要 {remainingRequiredIncomeMinimum:N2} 元，已超过总进账金额 {incomeCap:N2} 元，请调整次数、金额或总进账金额。");
+        }
+
+        var generatedIncomeTotal = RoundMoney(SumIncome(records));
+        foreach (var schedule in schedules)
+        {
+            var rule = schedule.Rule;
+            var bounds = GetRuleAmountBounds(rule);
+            var isIncome = IsIncomeRuleSafe(rule);
+            foreach (var normalizedDay in schedule.Dates)
+            {
+                var availableIncome = double.MaxValue;
+                if (isIncome)
                 {
-                    continue;
+                    var futureMinimum = RoundMoney(remainingRequiredIncomeMinimum - bounds.Min);
+                    availableIncome = RoundMoney(incomeCap - generatedIncomeTotal - futureMinimum);
+                    if (availableIncome < bounds.Min - 0.009d)
+                    {
+                        throw new InvalidOperationException(
+                            $"固定日期收入项目第 {rule.Index} 行无法满足配置次数，请提高总进账金额或降低最小金额。");
+                    }
                 }
 
-                for (var index = 0; index < repeatCount; index++)
-                {
-                    var isIncome = IsIncomeRuleSafe(rule);
-                    var availableIncome = RoundMoney(incomeCap - SumIncome(records));
-                    if (isIncome)
-                    {
-                        var monthIndex = FindMonthlyPlanIndex(monthlyPlan.Months, normalizedDay);
-                        if (monthIndex < 0)
-                        {
-                            continue;
-                        }
-
-                        var month = monthlyPlan.Months[monthIndex];
-                        var existingMonthIncome = SumIncome(records.Where(item =>
-                            IsRecordInRange(item, month.Start, month.End)));
-                        availableIncome = RoundMoney(Math.Min(
-                            availableIncome,
-                            Math.Max(0, monthlyPlan.MonthlyIncomeCap - existingMonthIncome)));
-                    }
-
-                    if (isIncome && availableIncome <= 0.009d)
-                    {
-                        continue;
-                    }
-
-                    if (!TryCreateNativeUniqueAmount(rule, isIncome ? availableIncome : double.MaxValue, random, preferLower: false, records, isIncome, amountUsage, out var amount))
-                    {
-                        continue;
-                    }
-
-                    var accountTime = PickNativeTimeOnDate(normalizedDay, rule, random, scheduleState, index);
-                    var record = CreateRecordFromRule(
-                        request,
+                if (!TryCreateNativeUniqueAmount(
                         rule,
-                        request.Bank.ConstColumns,
-                        accountTime,
-                        isIncome ? amount : -amount);
-                    records.Add(record);
-                    scheduleState.Register(record);
-                    amountUsage.Register(record);
+                        availableIncome,
+                        random,
+                        preferLower: isIncome,
+                        records,
+                        isIncome,
+                        amountUsage,
+                        out var amount))
+                {
+                    throw new InvalidOperationException($"固定日期增加项目第 {rule.Index} 行无法生成有效金额，请检查最小金额、最大金额和小数位配置。");
+                }
+
+                var sequence = scheduleState.NextSequence();
+                var accountTime = PickNativeTimeOnDate(normalizedDay, rule, random, scheduleState, sequence);
+                var record = CreateRecordFromRule(
+                    request,
+                    rule,
+                    request.Bank.ConstColumns,
+                    accountTime,
+                    isIncome ? amount : -amount);
+                records.Add(record);
+                scheduleState.Register(record);
+                amountUsage.Register(record);
+                if (isIncome)
+                {
+                    generatedIncomeTotal = RoundMoney(generatedIncomeTotal + amount);
+                    remainingRequiredIncomeMinimum = RoundMoney(remainingRequiredIncomeMinimum - bounds.Min);
                 }
             }
         }
@@ -9181,17 +9308,148 @@ public sealed class FlowAutoGenerator
             .All(item => item.Income <= item.Cap + 0.009d);
     }
 
+    private static bool RedistributeLeadingPartialMonthExpenses(
+        List<FlowRecord> records,
+        FlowAutoGenerationRequest request,
+        MonthlyAmountPlan monthlyPlan,
+        double openingBalance,
+        Random random)
+    {
+        if (records.Count == 0 || monthlyPlan.Months.Count < 2)
+        {
+            return false;
+        }
+
+        var firstMonth = monthlyPlan.Months[0];
+        var daysInMonth = DateTime.DaysInMonth(firstMonth.Start.Year, firstMonth.Start.Month);
+        var activityRatio = GetActiveDayCount(firstMonth) / (double)daysInMonth;
+        if (activityRatio >= 0.75d)
+        {
+            return false;
+        }
+
+        var firstMonthRecords = records
+            .Where(item => IsRecordInRange(item, firstMonth.Start, firstMonth.End))
+            .ToList();
+        var firstMonthExpense = SumExpense(firstMonthRecords);
+        var requiredExpense = SumExpense(firstMonthRecords.Where(item =>
+            IsRequiredGeneratedRecord(item) || IsSystemInterestRecord(item)));
+        var averageExpense = SumExpense(records) / monthlyPlan.Months.Count;
+        var plannedExpense = monthlyPlan.ExpenseTargets.Length > 0
+            ? Math.Max(0, monthlyPlan.ExpenseTargets[0])
+            : averageExpense * activityRatio;
+        var activityCapacity = averageExpense * Math.Max(0.35d, activityRatio * 1.5d);
+        var softCap = RoundMoney(Math.Max(
+            requiredExpense,
+            Math.Min(plannedExpense * MonthlyPlannedTargetAllowanceMultiplier, activityCapacity)));
+        if (firstMonthExpense <= softCap + MonthlyClosingBalanceTolerance)
+        {
+            return false;
+        }
+
+        var monthlyExpenses = monthlyPlan.Months
+            .Select(month => SumExpense(records.Where(item => IsRecordInRange(item, month.Start, month.End))))
+            .ToArray();
+        var scheduleState = NativeScheduleState.From(records);
+        var candidates = firstMonthRecords
+            .Where(item => item.TradeMoney < -0.009d)
+            .Where(item => IsGeneratedReferenceRecord(item) && !IsRequiredGeneratedRecord(item))
+            .Where(item => !IsSystemInterestRecord(item))
+            .Select(item => new
+            {
+                Record = item,
+                Rule = ResolveRecordSourceRule(request, item) as GenerateReferenceRule,
+                Amount = RoundMoney(Math.Abs(item.TradeMoney ?? 0))
+            })
+            .Where(item => item.Rule is not null && item.Amount >= 1000d)
+            .OrderByDescending(item => item.Amount)
+            .ThenBy(_ => random.Next())
+            .ToList();
+
+        var changed = false;
+        foreach (var candidate in candidates)
+        {
+            if (firstMonthExpense <= softCap + MonthlyClosingBalanceTolerance
+                || !candidate.Record.AccountTime.HasValue)
+            {
+                break;
+            }
+
+            var destinations = Enumerable.Range(1, monthlyPlan.Months.Count - 1)
+                .Where(index => scheduleState.GetCandidateDates(
+                    monthlyPlan.Months[index].Start,
+                    monthlyPlan.Months[index].End,
+                    candidate.Rule!).Count > 0)
+                .OrderBy(index => monthlyExpenses[index] / Math.Max(
+                    1d,
+                    index < monthlyPlan.ExpenseTargets.Length
+                        ? monthlyPlan.ExpenseTargets[index]
+                        : averageExpense))
+                .ThenBy(index => monthlyExpenses[index])
+                .ThenBy(_ => random.Next())
+                .ToList();
+            foreach (var destinationIndex in destinations)
+            {
+                var destination = monthlyPlan.Months[destinationIndex];
+                var movedTime = PickNativeDistributedTime(
+                    destination.Start,
+                    destination.End,
+                    candidate.Rule!,
+                    isIncome: false,
+                    random,
+                    scheduleState);
+                var originalTime = candidate.Record.AccountTime.Value;
+                candidate.Record.AccountTime = movedTime;
+                scheduleState.Move(candidate.Record, originalTime);
+                ApplyBalances(records, openingBalance);
+                if (GetMinimumBalance(records, openingBalance) < -0.009d)
+                {
+                    var failedTime = candidate.Record.AccountTime.Value;
+                    candidate.Record.AccountTime = originalTime;
+                    scheduleState.Move(candidate.Record, failedTime);
+                    ApplyBalances(records, openingBalance);
+                    continue;
+                }
+
+                firstMonthExpense = RoundMoney(firstMonthExpense - candidate.Amount);
+                monthlyExpenses[0] = firstMonthExpense;
+                monthlyExpenses[destinationIndex] = RoundMoney(monthlyExpenses[destinationIndex] + candidate.Amount);
+                changed = true;
+                break;
+            }
+        }
+
+        if (changed)
+        {
+            ApplyBalances(records, openingBalance);
+        }
+
+        return changed;
+    }
+
     private static double[] BuildEffectiveMonthlyIncomeCaps(
         IEnumerable<FlowRecord> records,
         MonthlyAmountPlan monthlyPlan)
     {
         return monthlyPlan.Months
-            .Select(month =>
+            .Select((month, index) =>
             {
                 var requiredIncome = SumIncome(records
                     .Where(IsRequiredGeneratedRecord)
                     .Where(item => IsRecordInRange(item, month.Start, month.End)));
-                return RoundMoney(Math.Max(monthlyPlan.MonthlyIncomeCap, requiredIncome));
+                var plannedIncome = index < monthlyPlan.IncomeTargets.Length
+                    ? Math.Max(0, monthlyPlan.IncomeTargets[index])
+                    : monthlyPlan.MonthlyIncomeCap;
+                var daysInMonth = DateTime.DaysInMonth(month.Start.Year, month.Start.Month);
+                var activityRatio = GetActiveDayCount(month) / (double)daysInMonth;
+                var effectiveCap = monthlyPlan.MonthlyIncomeCap;
+                if (activityRatio < 0.75d)
+                {
+                    var plannedCap = RoundMoney(plannedIncome * MonthlyPlannedTargetAllowanceMultiplier);
+                    effectiveCap = Math.Min(monthlyPlan.MonthlyIncomeCap, plannedCap);
+                }
+
+                return RoundMoney(Math.Max(effectiveCap, requiredIncome));
             })
             .ToArray();
     }
@@ -13947,6 +14205,334 @@ public sealed class FlowAutoGenerator
         return random.Next(tokens[0], tokens[^1] + 1);
     }
 
+    private static IReadOnlyList<DateTime> ResolveNativeFixedOccurrences(
+        GenerateConstRule rule,
+        DateTime start,
+        DateTime end,
+        Random random,
+        NativeScheduleState scheduleState,
+        IReadOnlyDictionary<DateTime, int> plannedDayUsage)
+    {
+        var repeatCount = GetNativeRepeatCount(rule.ReCnt, random);
+        var mode = ResolveFixedRuleScheduleMode(rule.FixDay);
+        switch (mode)
+        {
+            case FixedRuleScheduleMode.Statement:
+                return SpreadNativeFixedOccurrences(
+                    scheduleState.GetCandidateDates(start, end, rule),
+                    repeatCount,
+                    scheduleState,
+                    plannedDayUsage,
+                    random);
+
+            case FixedRuleScheduleMode.Monthly:
+            {
+                var result = new List<DateTime>();
+                foreach (var month in EnumerateMonths(start, end))
+                {
+                    result.AddRange(SpreadNativeFixedOccurrences(
+                        scheduleState.GetCandidateDates(month.Start, month.End, rule),
+                        repeatCount,
+                        scheduleState,
+                        plannedDayUsage,
+                        random));
+                }
+
+                return result;
+            }
+
+            case FixedRuleScheduleMode.Daily:
+            {
+                var result = new List<DateTime>();
+                foreach (var date in scheduleState.GetCandidateDates(start, end, rule))
+                {
+                    for (var index = 0; index < repeatCount; index++)
+                    {
+                        result.Add(date.Date);
+                    }
+                }
+
+                return result;
+            }
+
+            case FixedRuleScheduleMode.Range:
+                return ResolveNativeRangeFixedOccurrences(
+                    rule,
+                    start,
+                    end,
+                    repeatCount,
+                    random,
+                    scheduleState,
+                    plannedDayUsage);
+
+            default:
+            {
+                var result = new List<DateTime>();
+                foreach (var day in ResolveFixedDays(rule, start, end))
+                {
+                    var normalizedDay = NormalizeNativeFixedDay(day, rule, end);
+                    if (normalizedDay < start.Date || normalizedDay > end.Date)
+                    {
+                        continue;
+                    }
+
+                    for (var index = 0; index < repeatCount; index++)
+                    {
+                        result.Add(normalizedDay.Date);
+                    }
+                }
+
+                return result;
+            }
+        }
+    }
+
+    private static FixedRuleScheduleMode ResolveFixedRuleScheduleMode(string? value)
+    {
+        return value?.Trim() switch
+        {
+            "+" => FixedRuleScheduleMode.Statement,
+            "*" => FixedRuleScheduleMode.Monthly,
+            "=" => FixedRuleScheduleMode.Daily,
+            "-" => FixedRuleScheduleMode.Range,
+            _ => FixedRuleScheduleMode.Legacy
+        };
+    }
+
+    private static IReadOnlyList<DateTime> ResolveNativeRangeFixedOccurrences(
+        GenerateConstRule rule,
+        DateTime start,
+        DateTime end,
+        int repeatCount,
+        Random random,
+        NativeScheduleState scheduleState,
+        IReadOnlyDictionary<DateTime, int> plannedDayUsage)
+    {
+        var normalizedEnd = NormalizeEndDate(end);
+        var cursor = start.Date;
+        var result = new List<DateTime>();
+        while (cursor <= normalizedEnd.Date)
+        {
+            var remainingDays = (normalizedEnd.Date - cursor).Days + 1;
+            var windowDays = SelectNativeRangeWindowDays(
+                rule,
+                cursor,
+                remainingDays,
+                scheduleState,
+                random);
+            var windowEnd = cursor.AddDays(windowDays - 1);
+            var candidates = scheduleState.GetCandidateDates(cursor, windowEnd, rule);
+            result.AddRange(DistributeNativeRangeOccurrences(
+                candidates,
+                repeatCount,
+                scheduleState,
+                plannedDayUsage,
+                random));
+            cursor = windowEnd.AddDays(1);
+        }
+
+        return result;
+    }
+
+    private static int SelectNativeRangeWindowDays(
+        GenerateConstRule rule,
+        DateTime windowStart,
+        int remainingDays,
+        NativeScheduleState scheduleState,
+        Random random)
+    {
+        if (remainingDays <= 5)
+        {
+            return Math.Max(1, remainingDays);
+        }
+
+        var candidates = Enumerable.Range(3, 3)
+            .Where(windowDays =>
+            {
+                var remainingAfterWindow = remainingDays - windowDays;
+                return remainingAfterWindow == 0 || remainingAfterWindow >= 3;
+            })
+            .Select(windowDays => new
+            {
+                WindowDays = windowDays,
+                EligibleDayCount = scheduleState
+                    .GetCandidateDates(
+                        windowStart,
+                        windowStart.AddDays(windowDays - 1),
+                        rule)
+                    .Select(item => item.Date)
+                    .Distinct()
+                    .Count()
+            })
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return Math.Min(5, remainingDays);
+        }
+
+        var maximumEligibleDays = candidates.Max(item => item.EligibleDayCount);
+        var minimumPreferredEligibleDays = Math.Min(2, maximumEligibleDays);
+        var preferred = candidates
+            .Where(item => item.EligibleDayCount >= minimumPreferredEligibleDays)
+            .ToArray();
+        return preferred[random.Next(preferred.Length)].WindowDays;
+    }
+
+    private static IReadOnlyList<DateTime> DistributeNativeRangeOccurrences(
+        IReadOnlyList<DateTime> sourceDates,
+        int occurrenceCount,
+        NativeScheduleState scheduleState,
+        IReadOnlyDictionary<DateTime, int> plannedDayUsage,
+        Random random)
+    {
+        if (occurrenceCount <= 0 || sourceDates.Count == 0)
+        {
+            return [];
+        }
+
+        var dates = sourceDates
+            .Select(item => item.Date)
+            .Distinct()
+            .OrderBy(item => item)
+            .ToArray();
+        var maximumActiveDays = Math.Min(dates.Length, occurrenceCount);
+        var minimumActiveDays = Math.Min(
+            maximumActiveDays,
+            Math.Max(1, Math.Min(2, occurrenceCount)));
+        if (maximumActiveDays >= 3)
+        {
+            minimumActiveDays = Math.Max(minimumActiveDays, (maximumActiveDays + 1) / 2);
+        }
+
+        var activeDayCount = minimumActiveDays == maximumActiveDays
+            ? maximumActiveDays
+            : random.Next(minimumActiveDays, maximumActiveDays + 1);
+        var activeDates = dates
+            .OrderBy(date =>
+                scheduleState.GetTotalCount(date) + plannedDayUsage.GetValueOrDefault(date))
+            .ThenBy(_ => random.Next())
+            .Take(activeDayCount)
+            .ToArray();
+        var assigned = activeDates.ToDictionary(date => date, _ => 1);
+        var result = activeDates.ToList();
+        var maximumPerDay = Math.Max(
+            1,
+            (int)Math.Ceiling(occurrenceCount * 0.45d));
+
+        while (result.Count < occurrenceCount)
+        {
+            var available = activeDates
+                .Where(date => assigned.GetValueOrDefault(date) < maximumPerDay)
+                .ToArray();
+            if (available.Length == 0)
+            {
+                available = activeDates;
+            }
+
+            var selected = available[random.Next(available.Length)];
+            assigned[selected] = assigned.GetValueOrDefault(selected) + 1;
+            result.Add(selected);
+        }
+
+        return result.OrderBy(item => item).ToArray();
+    }
+
+    private static IReadOnlyList<DateTime> SpreadNativeFixedOccurrences(
+        IReadOnlyList<DateTime> sourceDates,
+        int occurrenceCount,
+        NativeScheduleState scheduleState,
+        IReadOnlyDictionary<DateTime, int> plannedDayUsage,
+        Random random)
+    {
+        if (occurrenceCount <= 0 || sourceDates.Count == 0)
+        {
+            return [];
+        }
+
+        var dates = sourceDates
+            .Select(item => item.Date)
+            .Distinct()
+            .OrderBy(item => item)
+            .ToArray();
+        var result = new List<DateTime>(occurrenceCount);
+        var assigned = new Dictionary<DateTime, int>();
+
+        if (occurrenceCount > dates.Length)
+        {
+            var baseCount = occurrenceCount / dates.Length;
+            for (var index = 0; index < dates.Length; index++)
+            {
+                for (var repeat = 0; repeat < baseCount; repeat++)
+                {
+                    result.Add(dates[index]);
+                }
+
+                assigned[dates[index]] = baseCount;
+            }
+        }
+
+        var remaining = occurrenceCount - result.Count;
+        for (var index = 0; index < remaining; index++)
+        {
+            var bandStart = (int)Math.Floor(index * dates.Length / (double)remaining);
+            var bandEndExclusive = (int)Math.Floor((index + 1d) * dates.Length / remaining);
+            if (bandEndExclusive <= bandStart)
+            {
+                bandEndExclusive = Math.Min(dates.Length, bandStart + 1);
+            }
+
+            var selected = PickLeastLoadedNativeFixedDate(
+                dates,
+                bandStart,
+                bandEndExclusive,
+                scheduleState,
+                plannedDayUsage,
+                assigned,
+                random);
+            result.Add(selected);
+            assigned[selected] = assigned.GetValueOrDefault(selected) + 1;
+        }
+
+        return result.OrderBy(item => item).ToArray();
+    }
+
+    private static DateTime PickLeastLoadedNativeFixedDate(
+        IReadOnlyList<DateTime> dates,
+        int startIndex,
+        int endIndexExclusive,
+        NativeScheduleState scheduleState,
+        IReadOnlyDictionary<DateTime, int> plannedDayUsage,
+        IReadOnlyDictionary<DateTime, int> assigned,
+        Random random)
+    {
+        var selected = dates[Math.Clamp(startIndex, 0, dates.Count - 1)];
+        var bestLoad = int.MaxValue;
+        var tieCount = 0;
+        for (var index = Math.Max(0, startIndex); index < Math.Min(dates.Count, endIndexExclusive); index++)
+        {
+            var date = dates[index];
+            var load = scheduleState.GetTotalCount(date)
+                + plannedDayUsage.GetValueOrDefault(date)
+                + assigned.GetValueOrDefault(date);
+            if (load < bestLoad)
+            {
+                selected = date;
+                bestLoad = load;
+                tieCount = 1;
+            }
+            else if (load == bestLoad)
+            {
+                tieCount++;
+                if (random.Next(tieCount) == 0)
+                {
+                    selected = date;
+                }
+            }
+        }
+
+        return selected;
+    }
+
     private static DateTime NormalizeNativeFixedDay(DateTime day, FlowRuleBase rule, DateTime end)
     {
         var result = day.Date;
@@ -14169,6 +14755,7 @@ public sealed class FlowAutoGenerator
             AmplifyMonthlyBalanceSwing(incomeTargets, expenseTargets, random);
             PreventFirstMonthIncomeSpike(incomeTargets, targetIncome, random);
             BalanceMonthlyIncomeAcrossTimeline(incomeTargets, targetIncome, random);
+            ApplyPartialMonthActivityWeights(incomeTargets, months, targetIncome);
         }
 
         var monthlyIncomeCap = CalculateMonthlyIncomeCap(targetIncome, months.Count);
@@ -14181,6 +14768,7 @@ public sealed class FlowAutoGenerator
             incomeTargets,
             finalBalanceTarget);
         var closingBalanceTargets = CreateMonthlyClosingBalanceTargets(
+            months,
             incomeTargets,
             openingBalance,
             finalBalanceTarget,
@@ -14564,6 +15152,7 @@ public sealed class FlowAutoGenerator
     }
 
     private static double[] CreateMonthlyClosingBalanceTargets(
+        IReadOnlyList<(DateTime Start, DateTime End)> months,
         IReadOnlyList<double> incomeTargets,
         double openingBalance,
         double finalBalanceTarget,
@@ -14571,7 +15160,7 @@ public sealed class FlowAutoGenerator
         IReadOnlyList<double> requiredClosingBalanceFloors,
         Random random)
     {
-        var monthCount = incomeTargets.Count;
+        var monthCount = Math.Min(months.Count, incomeTargets.Count);
         var targets = new double[monthCount];
         if (monthCount == 0)
         {
@@ -14581,12 +15170,18 @@ public sealed class FlowAutoGenerator
         closingBalanceCap = RoundMoney(Math.Max(0, closingBalanceCap));
         finalBalanceTarget = RoundMoney(Math.Max(0, finalBalanceTarget));
 
-        var previousClosing = RoundMoney(Math.Max(0, openingBalance));
-        var buildPosition = 0;
-        var buildLength = random.Next(1, 4);
-        var drawdownNext = false;
+        openingBalance = RoundMoney(Math.Max(0, openingBalance));
+        var previousClosing = openingBalance;
+        var totalActiveDays = months
+            .Take(monthCount)
+            .Sum(GetActiveDayCount);
+        var elapsedActiveDays = 0;
+        var wavePeriod = random.Next(3, Math.Min(6, Math.Max(3, monthCount)) + 1);
+        var wavePhase = random.NextDouble() * Math.PI * 2d;
         for (var index = 0; index < monthCount; index++)
         {
+            var activeDays = GetActiveDayCount(months[index]);
+            elapsedActiveDays += activeDays;
             var available = RoundMoney(previousClosing + Math.Max(0, incomeTargets[index]));
             if (index == monthCount - 1)
             {
@@ -14598,38 +15193,35 @@ public sealed class FlowAutoGenerator
                 ? Math.Max(0, requiredClosingBalanceFloors[index])
                 : 0;
             var lower = Math.Min(requiredFloor, available);
-            var upper = Math.Min(Math.Max(closingBalanceCap, lower), available);
-            if (upper <= 0.009d)
+            if (available <= 0.009d)
             {
                 targets[index] = 0;
                 previousClosing = targets[index];
                 continue;
             }
 
-            // Build a few monthly highs, then deliberately consume back to a low balance.
-            // The backward minimum is still honored when the final-balance target requires it.
-            double targetRatio;
-            if (drawdownNext)
-            {
-                targetRatio = 0.015d + (random.NextDouble() * 0.135d);
-                drawdownNext = false;
-                buildPosition = 0;
-                buildLength = random.Next(1, 4);
-            }
-            else
-            {
-                var progress = (buildPosition + 1d) / buildLength;
-                var centerRatio = 0.34d + (progress * 0.48d);
-                targetRatio = Math.Clamp(
-                    centerRatio + ((random.NextDouble() - 0.5d) * 0.14d),
-                    0.28d,
-                    0.96d);
-                buildPosition++;
-                drawdownNext = buildPosition >= buildLength;
-            }
-
-            var desired = RoundMoney(closingBalanceCap * targetRatio);
-            targets[index] = RoundMoney(Math.Clamp(desired, Math.Min(lower, upper), upper));
+            // Follow the trajectory from the opening balance to the configured final
+            // balance. The former 10% cap now controls only the visible wave amplitude;
+            // it must not force a high opening balance down to an absolute low cap.
+            var progress = totalActiveDays <= 0
+                ? (index + 1d) / monthCount
+                : (double)elapsedActiveDays / totalActiveDays;
+            var trajectory = openingBalance + ((finalBalanceTarget - openingBalance) * progress);
+            var monthActivityRatio = Math.Clamp(
+                activeDays / (double)DateTime.DaysInMonth(months[index].Start.Year, months[index].Start.Month),
+                0d,
+                1d);
+            var waveScale = Math.Sqrt(monthActivityRatio);
+            var wave = Math.Sin((((index + 1d) / wavePeriod) * Math.PI * 2d) + wavePhase)
+                * closingBalanceCap
+                * 0.18d
+                * waveScale;
+            var noise = (random.NextDouble() - 0.5d)
+                * closingBalanceCap
+                * 0.08d
+                * waveScale;
+            var desired = RoundMoney(trajectory + wave + noise);
+            targets[index] = RoundMoney(Math.Clamp(desired, lower, available));
             previousClosing = targets[index];
         }
 
@@ -16014,6 +16606,34 @@ public sealed class FlowAutoGenerator
 
         var targets = NormalizeRawTargets(rawTargets, targetTotal);
         return ApplyLargeIncomeMonthlyFloor(targets, targetTotal, isIncome, rules);
+    }
+
+    private static void ApplyPartialMonthActivityWeights(
+        double[] targets,
+        IReadOnlyList<(DateTime Start, DateTime End)> months,
+        double targetTotal)
+    {
+        if (targets.Length <= 1 || targets.Length != months.Count || targetTotal <= 0.009d)
+        {
+            return;
+        }
+
+        var weightedTargets = new double[targets.Length];
+        for (var index = 0; index < targets.Length; index++)
+        {
+            var month = months[index];
+            var daysInMonth = DateTime.DaysInMonth(month.Start.Year, month.Start.Month);
+            var activityRatio = Math.Clamp(GetActiveDayCount(month) / (double)daysInMonth, 0d, 1d);
+            weightedTargets[index] = Math.Max(0, targets[index]) * activityRatio;
+        }
+
+        var normalized = NormalizeRawTargets(weightedTargets, targetTotal);
+        Array.Copy(normalized, targets, targets.Length);
+    }
+
+    private static int GetActiveDayCount((DateTime Start, DateTime End) month)
+    {
+        return Math.Max(1, (month.End.Date - month.Start.Date).Days + 1);
     }
 
     private static double[] ApplyLargeIncomeMonthlyFloor(
@@ -18502,7 +19122,7 @@ public sealed class FlowAutoGenerator
             FinalBalance = RoundMoney(finalBalance),
             MinimumBalance = RoundMoney(minimumBalance),
             RequiresOpeningBalanceCorrection = minimumBalance < -0.009d
-                || IsFinalBalanceOutsideHardTolerance(finalBalance, openingBalance, request.Config.LastMoney),
+                || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney),
             RequiredOpeningBalance = RoundMoney(Math.Max(0, requiredOpeningBalance))
         };
     }
