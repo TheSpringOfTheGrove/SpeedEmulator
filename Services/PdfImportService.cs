@@ -38,6 +38,7 @@ public sealed partial class PdfImportService : IPdfImportService
         new("建行", "中国建设银行个人活期账户交易明细 PDF", ["中国建设银行个人活期账户全部交易明细", "卡号/账号", "客户名称", "交易金额"]),
         new("民生", "中国民生银行个人账户对账单 PDF", ["个人账户对账单", "中国民生银行", "客户姓名", "客户账号"]),
         new("农行", "中国农业银行个人账户活期交易明细 PDF", ["中国农业银行账户活期交易明细清单", "户名", "账户", "电子流水号"]),
+        new("招行", "招商银行个人交易流水 PDF", ["招商银行交易流水", "Transaction Statement of China Merchants Bank", "记账日期", "对手信息"]),
         new("平安", "平安银行个人账户交易明细清单 PDF", ["平安银行个人账户交易明细清单", "Transaction Details List of Personal Account", "交易对手信息"]),
         new("浦发", "上海浦东发展银行个人客户交易流水专用回单 PDF", ["上海浦东发展银行个人客户交易流水专用回单", "Transaction Statement of Shanghai Pudong Development Bank", "对手账号"]),
         new("兴业", "兴业银行个人交易流水 PDF", ["兴业银行", "记账日期", "摘要", "支/收", "交易金额"]),
@@ -114,6 +115,19 @@ public sealed partial class PdfImportService : IPdfImportService
         new("LogNumber", 307, 347),
         new("Channel", 347, 389),
         new("Remark", 389, 570)
+    ];
+
+    // The personal CMB statement is a fixed six-column layout. Counterparty text can
+    // start above the date baseline and wrap onto the following line, so it must be
+    // parsed independently from the corporate CMB statement and from text-order rows.
+    private static readonly PdfPositionedColumnSpec[] CmbPersonalColumns =
+    [
+        new("Date", 30, 95),
+        new("Currency", 95, 145),
+        new("Amount", 145, 225),
+        new("Balance", 225, 300),
+        new("Summary", 300, 410),
+        new("Counterparty", 410, 575)
     ];
 
     private static readonly PdfPositionedColumnSpec[] SpdbPersonalColumns =
@@ -448,6 +462,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "微信" => true,
             "平安" => true,
             "农行" => true,
+            "招行" => true,
             "浦发" => true,
             "中信" => true,
             "华夏" => true,
@@ -616,6 +631,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "建行" => ParseCcbPdf(bank, bankUser, document, result),
             "民生" => ParseCmbcPdf(bank, bankUser, document, result),
             "农行" => ParseAbcPdf(bank, bankUser, document, result),
+            "招行" => ParseCmbPersonalPdf(bank, bankUser, document, result),
             "平安" => ParsePingAnPdf(bank, bankUser, document, result),
             "浦发" => ParseSpdbPdf(bank, bankUser, document, result),
             "兴业" => ParseCibPdf(bank, bankUser, document, result),
@@ -2783,6 +2799,255 @@ public sealed partial class PdfImportService : IPdfImportService
         return parsedUser;
     }
 
+    private static bool ParseCmbPersonalPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = false;
+        foreach (var line in document.Lines.Where(item => item.PageNumber == 1).Take(50))
+        {
+            var text = CleanPdfValue(line.Text);
+            var periodMatch = Regex.Match(text, @"^(?<start>\d{4}-\d{2}-\d{2})\s*--\s*(?<end>\d{4}-\d{2}-\d{2})$");
+            if (periodMatch.Success)
+            {
+                SetUserNamed(user, bank, "起始日期", periodMatch.Groups["start"].Value);
+                SetUserNamed(user, bank, "终止日期", periodMatch.Groups["end"].Value);
+                parsedUser = true;
+                continue;
+            }
+
+            var nameMatch = Regex.Match(text, @"^户\s*名[:：]\s*(?<name>.+)$");
+            if (nameMatch.Success)
+            {
+                SetUserNamed(user, bank, "户口名称", nameMatch.Groups["name"].Value);
+                parsedUser = true;
+                continue;
+            }
+
+            var accountMatch = Regex.Match(text, @"^账号[:：]\s*(?<account>\d+)$");
+            if (accountMatch.Success)
+            {
+                var account = accountMatch.Groups["account"].Value;
+                SetUserNamed(user, bank, "户口号", account);
+                SetUserNamed(user, bank, "账号序号", account);
+                parsedUser = true;
+                continue;
+            }
+
+            var accountTypeMatch = Regex.Match(text, @"^账户类型[:：]\s*(?<type>.+)$");
+            if (accountTypeMatch.Success)
+            {
+                SetUserNamed(user, bank, "账号类型", accountTypeMatch.Groups["type"].Value);
+                parsedUser = true;
+                continue;
+            }
+
+            var branchMatch = Regex.Match(text, @"^开\s*户\s*行[:：]\s*(?<branch>.+)$");
+            if (branchMatch.Success)
+            {
+                var branch = branchMatch.Groups["branch"].Value;
+                SetUserNamed(user, bank, "开户行", branch);
+                SetUserNamed(user, bank, "网点名称", branch);
+                parsedUser = true;
+                continue;
+            }
+
+            var printTimeMatch = Regex.Match(text, @"^申请时间[:：]\s*(?<time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})$");
+            if (printTimeMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印日期", printTimeMatch.Groups["time"].Value);
+                parsedUser = true;
+                continue;
+            }
+
+            var verificationMatch = Regex.Match(text, @"^验\s*证\s*码[:：]\s*(?<code>[A-Za-z0-9]+)$");
+            if (verificationMatch.Success)
+            {
+                SetUserNamed(user, bank, "验证码", verificationMatch.Groups["code"].Value);
+                parsedUser = true;
+            }
+        }
+
+        foreach (var row in BuildCmbPersonalPositionedRows(document.Words))
+        {
+            if (TryParseCmbPersonalPositionedRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        ApplyCmbPersonalOpeningBalances(user, bank, result.FlowRecords);
+        return parsedUser;
+    }
+
+    private static IReadOnlyList<PdfPositionedRow> BuildCmbPersonalPositionedRows(IReadOnlyList<PdfTextWord> words)
+    {
+        return BuildPositionedRowsWithTopLead(
+            words,
+            CmbPersonalColumns,
+            IsCmbPersonalHeaderWord,
+            IsCmbPersonalFooterWord,
+            @"^\d{4}-\d{2}-\d{2}$",
+            95,
+            75,
+            20,
+            joinCellWords: JoinCmbPersonalCellWords,
+            minimumRowStartGap: 20);
+    }
+
+    private static bool IsCmbPersonalHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "记账日期" or "货币" or "交易金额" or "联机余额" or "交易摘要" or "对手信息"
+            or "Date" or "Currency" or "Transaction" or "Amount" or "Balance" or "Type" or "Counter" or "Party";
+    }
+
+    private static bool IsCmbPersonalFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return value is "合并" or "统计"
+            || value.StartsWith("合并统计", StringComparison.Ordinal)
+            || value.StartsWith("合并收入", StringComparison.Ordinal)
+            || value.StartsWith("合并支出", StringComparison.Ordinal)
+            || value.StartsWith("温馨提示", StringComparison.Ordinal)
+            || Regex.IsMatch(value, @"^\d+/\d+$")
+            || Regex.IsMatch(value, @"^[—-]{8,}$");
+    }
+
+    private static string JoinCmbPersonalCellWords(IEnumerable<PdfTextWord> words)
+    {
+        return CleanPdfValue(string.Join(' ', words
+            .OrderBy(item => item.Top)
+            .ThenBy(item => item.Left)
+            .Select(item => item.Text)));
+    }
+
+    private static bool TryParseCmbPersonalPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateText = GetPositionedCell(row, "Date");
+        var currency = CleanPdfValue(GetPositionedCell(row, "Currency")).ToUpperInvariant();
+        var amountText = GetPositionedCell(row, "Amount").Replace('−', '-');
+        var balanceText = GetPositionedCell(row, "Balance").Replace('−', '-');
+        var summary = CollapseChineseSeparatedWords(GetPositionedCell(row, "Summary"));
+        // Keep word boundaries until the name/account split is complete. Some long
+        // merchant names end in a digit and the following account begins with one;
+        // collapsing digit-separated words first would erase the only delimiter.
+        var counterparty = CleanPdfValue(GetPositionedCell(row, "Counterparty"));
+        if (!Regex.IsMatch(dateText, @"^\d{4}-\d{2}-\d{2}$")
+            || !Regex.IsMatch(currency, @"^[A-Z]{3}$")
+            || !IsPdfMoneyToken(amountText)
+            || !IsPdfMoneyToken(balanceText))
+        {
+            return false;
+        }
+
+        var amount = ParseDoubleOrNull(amountText);
+        var balance = ParseDoubleOrNull(balanceText);
+        if (!amount.HasValue || !balance.HasValue)
+        {
+            return false;
+        }
+
+        var (oppositeName, oppositeAccount) = SplitCmbPersonalCounterparty(counterparty);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(dateText);
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.ProductType = summary;
+        record.TradeExplain = summary;
+        record.TradeMoney = amount;
+        record.Balance = balance;
+        record.BalanceAmount = balance;
+        record.Currency = currency;
+        record.TradeCurrency = currency;
+        record.OppositeUsername = oppositeName;
+        record.OppositeAccount = oppositeAccount;
+        record.Remark = summary;
+        ApplySignedAmountColumns(record, amount);
+
+        SetFlowRaw(record, "记帐日期", dateText);
+        SetFlowRaw(record, "记账日期", dateText);
+        SetFlowRaw(record, "帐户代码", record.Account);
+        SetFlowRaw(record, "货币", currency);
+        SetFlowRaw(record, "交易金额", amountText);
+        SetFlowRaw(record, "联机余额", balanceText);
+        SetFlowRaw(record, "摘要代码", summary);
+        SetFlowRaw(record, "对方姓名", oppositeName);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "对方账号", oppositeAccount);
+        SetFlowRaw(record, "银行摘要", summary);
+        SetFlowRaw(record, "交易说明", summary);
+        SetFlowRaw(record, "对手信息", counterparty);
+        return true;
+    }
+
+    private static (string Name, string Account) SplitCmbPersonalCounterparty(string value)
+    {
+        var text = CleanPdfValue(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var accountIndex = Array.FindLastIndex(tokens, IsCmbPersonalCounterpartyAccountToken);
+        if (accountIndex < 0)
+        {
+            return (CollapseChineseSeparatedWords(text), string.Empty);
+        }
+
+        return (
+            CollapseChineseSeparatedWords(string.Join(' ', tokens.Where((_, index) => index != accountIndex))),
+            CollapseChineseSeparatedWords(tokens[accountIndex]));
+    }
+
+    private static bool IsCmbPersonalCounterpartyAccountToken(string value)
+    {
+        var token = CleanPdfValue(value);
+        var plain = token
+            .Replace("*", string.Empty, StringComparison.Ordinal)
+            .Replace("/", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal);
+        return plain.Length >= 6
+            && plain.Any(char.IsDigit)
+            && Regex.IsMatch(token, @"^[0-9A-Za-z*\/-]+$");
+    }
+
+    private static void ApplyCmbPersonalOpeningBalances(
+        BankUser user,
+        Bank bank,
+        IReadOnlyList<FlowRecord> records)
+    {
+        var openingBalances = records
+            .Where(record => record.TradeMoney.HasValue && record.Balance.HasValue)
+            .GroupBy(record => FirstNotBlank(record.Currency, "CNY"), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Currency = group.Key.ToUpperInvariant(),
+                OpeningBalance = Math.Round(
+                    group.First().Balance!.Value - group.First().TradeMoney!.Value,
+                    2,
+                    MidpointRounding.AwayFromZero)
+            })
+            .ToList();
+        if (openingBalances.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var item in openingBalances)
+        {
+            user[$"期初余额_{item.Currency}"] = FormatMoney(item.OpeningBalance);
+        }
+
+        var preferred = openingBalances.FirstOrDefault(item => item.Currency == "CNY") ?? openingBalances[0];
+        SetUserNamed(user, bank, "期初余额", FormatMoney(preferred.OpeningBalance));
+    }
+
     private static bool ParseCmbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
         var parsedUser = false;
@@ -3910,7 +4175,8 @@ public sealed partial class PdfImportService : IPdfImportService
         double rowTopLead,
         Func<PdfTextWord, IReadOnlyList<PdfTextWord>, bool>? isRowStartWord = null,
         Func<IEnumerable<PdfTextWord>, string>? joinCellWords = null,
-        Func<string, string>? cleanWordText = null)
+        Func<string, string>? cleanWordText = null,
+        double? minimumRowStartGap = null)
     {
         if (words.Count == 0)
         {
@@ -3947,7 +4213,7 @@ public sealed partial class PdfImportService : IPdfImportService
                 .OrderBy(item => item.Top)
                 .ThenBy(item => item.Left)
                 .ToList();
-            var minimumStartGap = Math.Max(6d, rowTopLead * 1.5d);
+            var minimumStartGap = minimumRowStartGap ?? Math.Max(6d, rowTopLead * 1.5d);
             rowStartWords = rowStartWords
                 .Aggregate(new List<PdfTextWord>(), (items, word) =>
                 {
@@ -10307,12 +10573,12 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static void FillMissingPdfRecordTimes(IList<FlowRecord> records, Bank bank)
     {
-        if (string.Equals(bank.Name, "农行", StringComparison.Ordinal))
+        if (string.Equals(bank.Name, "农行", StringComparison.Ordinal)
+            || string.Equals(bank.Name, "招行", StringComparison.Ordinal))
         {
-            // The personal ABC statement intentionally leaves the transaction-time
-            // cell blank for many rows. Preserve that source state as midnight so
-            // the native template renders an empty cell instead of fabricating a
-            // deterministic random time such as 143346.
+            // Personal ABC rows can omit time selectively, while personal CMB
+            // statements contain no transaction-time column at all. Preserve the
+            // source state as midnight instead of fabricating deterministic times.
             return;
         }
 
