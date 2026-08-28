@@ -25,6 +25,9 @@ namespace SpeedEmulator.Services;
 public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 {
     private static readonly object SyncRoot = new();
+    private static readonly object CcbPersonalStampCodeSyncRoot = new();
+    private static readonly Dictionary<string, string> CcbPersonalStampCodesByUser = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> IssuedCcbPersonalStampCodes = new(StringComparer.Ordinal);
     private const string DefaultIcbcQrCodeValue = "https://www.gjxxbankk.com/check.html";
     private const string PrintDiagnosticsWrittenDataKey = "SpeedEmulator.PrintDiagnosticsWritten";
     private const string PrintDiagnosticPathDataKey = "SpeedEmulator.PrintDiagnosticPath";
@@ -4042,6 +4045,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         var configured = ResolveConfiguredBankUserStampCode(context, bankUser, values);
+        if (IsCcbPersonalPrintContext(context) && string.IsNullOrWhiteSpace(configured))
+        {
+            return ResolveCcbPersonalFallbackStampCode(context, bankUser);
+        }
 
         if (!IsIcbcPrintContext(context))
         {
@@ -4071,6 +4078,86 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             GetValue(values, "StampCode"),
             GetValue(values, "ChapterCode"),
             GetValue(values, "ZhangCode"));
+    }
+
+    private static bool IsCcbPersonalPrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Type == BankTypes.Personal
+            && IsConstructionBank(context.Bank);
+    }
+
+    private static string ResolveCcbPersonalFallbackStampCode(
+        PrintRenderContext context,
+        BankUser bankUser)
+    {
+        var userKey = CreateCcbPersonalStampCodeUserKey(context, bankUser);
+
+        lock (CcbPersonalStampCodeSyncRoot)
+        {
+            if (CcbPersonalStampCodesByUser.TryGetValue(userKey, out var existingCode))
+            {
+                return existingCode;
+            }
+
+            string code;
+            do
+            {
+                code = CreateCcbPersonalFallbackStampCode();
+            }
+            while (!IssuedCcbPersonalStampCodes.Add(code));
+
+            CcbPersonalStampCodesByUser[userKey] = code;
+            return code;
+        }
+    }
+
+    private static string CreateCcbPersonalStampCodeUserKey(
+        PrintRenderContext context,
+        BankUser bankUser)
+    {
+        var bankKey = context.Bank.Id > 0
+            ? context.Bank.Id.ToString(CultureInfo.InvariantCulture)
+            : NormalizeSingleLinePrintText(context.Bank.Name);
+
+        if (bankUser.Id > 0)
+        {
+            return $"{bankKey}|local:{bankUser.Id.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        if (bankUser.BackendId > 0)
+        {
+            return $"{bankKey}|backend:{bankUser.BackendId.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        var naturalKey = string.Join(
+            "|",
+            NormalizeSingleLinePrintText(bankUser.UserCode),
+            NormalizeSingleLinePrintText(bankUser.AccountNo),
+            NormalizeSingleLinePrintText(bankUser.CardNo),
+            NormalizeSingleLinePrintText(bankUser.IdNumber),
+            NormalizeSingleLinePrintText(bankUser.AccountName));
+        if (!string.IsNullOrWhiteSpace(naturalKey.Replace("|", string.Empty, StringComparison.Ordinal)))
+        {
+            return $"{bankKey}|natural:{naturalKey}";
+        }
+
+        return $"{bankKey}|runtime:{RuntimeHelpers.GetHashCode(bankUser).ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    private static string CreateCcbPersonalFallbackStampCode()
+    {
+        var chars = new char[12];
+        for (var index = 0; index < 6; index++)
+        {
+            chars[index] = CreateRandomDigit();
+        }
+
+        for (var index = 6; index < chars.Length; index++)
+        {
+            chars[index] = CreateRandomUpperLetter();
+        }
+
+        return new string(chars);
     }
 
     private static bool ShouldUseIcbcFallbackStampCode(PrintRenderContext context)
