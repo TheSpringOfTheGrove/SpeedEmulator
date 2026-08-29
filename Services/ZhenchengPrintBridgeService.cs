@@ -18,6 +18,7 @@ using PdfSharpCore.Pdf.IO;
 using PdfSharpCore.Drawing;
 using PdfDocument = PdfSharpCore.Pdf.PdfDocument;
 using SpeedEmulator.Models;
+using Stimulsoft.Report;
 using UglyToad.PdfPig;
 
 namespace SpeedEmulator.Services;
@@ -2958,9 +2959,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private DefaultStimulsoftExporter(string vendorDir)
         {
             this.vendorDir = vendorDir;
+            EnsureOfficialStimulsoftRuntimeLoaded();
             RegisterResolver(vendorDir);
             LoadOptionalAssemblies(vendorDir, "caiwu-core.dll");
-            LoadOptionalAssemblies(vendorDir, "Stimulsoft*.dll");
 
             var mainDll = Path.Combine(vendorDir, ZhenchengRuntimeLocator.MainDllName);
             mainAssembly = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(assembly =>
@@ -3003,6 +3004,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     ? typeof(object)
                     : exportParameters[2].ParameterType);
             InitializeStimulsoftPrintRuntime();
+        }
+
+        private static void EnsureOfficialStimulsoftRuntimeLoaded()
+        {
+            // This compile-time reference deliberately loads the NuGet runtime before
+            // any vendor assembly is inspected. It prevents AssemblyLoadContext from
+            // binding the vendor bridge to an obsolete Stimulsoft DLL left by an old
+            // installation or runtime synchronization.
+            _ = typeof(StiReport).Assembly;
         }
 
         internal static bool IsStimulsoftExportMethod(MethodInfo method)
@@ -3186,6 +3196,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             AssemblyLoadContext.Default.Resolving += (_, assemblyName) =>
             {
+                // Stimulsoft is supplied by the official NuGet packages in the
+                // application directory. Never fall back to vendor-bundled copies,
+                // including stale files left by an older installation.
+                if (assemblyName.Name?.StartsWith("Stimulsoft.", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return null;
+                }
+
                 foreach (var directory in ResolverDirectories)
                 {
                     var candidate = Path.Combine(directory, assemblyName.Name + ".dll");
