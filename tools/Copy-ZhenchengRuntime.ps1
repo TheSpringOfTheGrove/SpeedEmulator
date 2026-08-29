@@ -92,7 +92,8 @@ $robocopyArgs = @(
     "*.log",
     "*.tmp",
     "*.bak",
-    "*.cache"
+    "*.cache",
+    "Stimulsoft*.dll"
 )
 
 Write-Host "Source: $Source"
