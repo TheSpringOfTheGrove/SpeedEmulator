@@ -1118,11 +1118,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
 
         private string? GetSealImagePath()
         {
-            if (!context.BankUser.ShouldPrintSeal)
-            {
-                return null;
-            }
-
+            // The legacy checkbox is retained for data compatibility; configured images always win.
             if (!string.IsNullOrWhiteSpace(context.BankUser.SealImagePath) && File.Exists(context.BankUser.SealImagePath))
             {
                 return context.BankUser.SealImagePath;

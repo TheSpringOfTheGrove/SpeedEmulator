@@ -4517,7 +4517,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values)
     {
         var signedStampPath = ResolveVendorSignedStampPath(context);
-        var shouldPrintStamp = bankUser.ShouldPrintSeal || !string.IsNullOrWhiteSpace(signedStampPath);
+        var defaultStampPath = ResolveVendorDefaultStampPath(context);
+        // The legacy checkbox is retained for data compatibility; all print templates must render a stamp.
+        const bool shouldPrintStamp = true;
         var stampCode = ResolveBankUserStampCode(context, bankUser, values);
         var stampBranch = FirstNotBlank(
             bankUser.ChapterBranch,
@@ -4535,7 +4537,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         Set(target, "IsPrintStamp", shouldPrintStamp);
         Set(target, "ZhangImg", shouldPrintStamp
-            ? FirstNotBlank(signedStampPath, bankUser.SealImagePath, GetValue(values, "ZhangImg"))
+            ? FirstNotBlank(bankUser.SealImagePath, GetValue(values, "ZhangImg"), signedStampPath, defaultStampPath)
             : string.Empty);
         Set(target, "StampCode", stampCode);
         Set(target, "StampBranch", stampBranch);
@@ -4586,6 +4588,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         var path = Path.Combine(ZhenchengRuntimeLocator.ResolveRequired(), "static", "bank", fileName);
+        return File.Exists(path) ? path : string.Empty;
+    }
+
+    private static string ResolveVendorDefaultStampPath(PrintRenderContext context)
+    {
+        if (!string.Equals(context.Template.Name, "招行个人纸质版", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        var path = Path.Combine(
+            ZhenchengRuntimeLocator.ResolveRequired(),
+            "static",
+            "bank",
+            "招行个人纸质版默认印章.png");
         return File.Exists(path) ? path : string.Empty;
     }
 
