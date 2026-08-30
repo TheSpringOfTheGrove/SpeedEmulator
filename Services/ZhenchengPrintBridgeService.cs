@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using System.Xml;
 using PdfSharpCore.Pdf.Advanced;
 using PdfSharpCore.Pdf.Content;
 using PdfSharpCore.Pdf.Content.Objects;
@@ -115,14 +116,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return ExportInternalAsync(context, path);
     }
 
-    public void OpenTemplateDesigner(PrintTemplate template)
+    public void OpenTemplateDesigner(PrintRenderContext context, PrintTemplate template)
     {
         if (string.IsNullOrWhiteSpace(template.PdfData))
         {
             throw new InvalidOperationException("模板未找到");
         }
 
-        DefaultStimulsoftExporter.OpenTemplateDesigner(ResolveVendorDir(), template);
+        DefaultStimulsoftExporter.OpenTemplateDesigner(ResolveVendorDir(), context, template);
     }
 
     public bool TryCreateBlankTemplate(PrintTemplate template)
@@ -245,6 +246,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Directory.CreateDirectory(directory);
         }
 
+        if (IsIndustrialBank(context.Bank)
+            && string.Equals(context.Template.Name, "兴业个人电子版11", StringComparison.Ordinal))
+        {
+            QuestPdfPrintService.ExportIndustrialPersonalElectronicVersion11(context, path);
+            return;
+        }
+
         var forceVendorRenderer = ShouldForceVendorRenderer(context);
         if (fallbackService is not null
             && !forceVendorRenderer
@@ -274,6 +282,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             NormalizeCgbPersonalElectronicFooterPdf(context, path);
             NormalizeMinshengPersonalVoucherColumns(context, path);
             NormalizeBocomCorporateElectronic2CurrentPageCounts(context, path);
+            NormalizeCcbPersonalElectronic13TableBorders(context, path);
             return;
         }
 
@@ -1624,7 +1633,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, context.BankUser.CardNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
             var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
@@ -2575,7 +2584,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, context.BankUser.CardNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
             var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
@@ -2954,7 +2963,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly Type flowListType;
         private readonly MethodInfo exportMethod;
         private readonly MethodInfo? templateDesignerMethod;
+        private readonly MethodInfo? templateCreatorMethod;
+        private readonly IReadOnlyList<FieldInfo> vendorBankListFields;
+        private readonly Type? vendorBankType;
+        private readonly Type? vendorColumnType;
         private readonly Assembly mainAssembly;
+        private static readonly object DesignerBankRegistrationSync = new();
 
         private DefaultStimulsoftExporter(string vendorDir)
         {
@@ -2999,7 +3013,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             flowListType = exportParameters[1].ParameterType;
             flowType = flowListType.GetGenericArguments()[0];
             templateDesignerMethod = ResolveStimulsoftTemplateDesignerMethod(types, exportMethod);
+            templateCreatorMethod = ResolveStimulsoftTemplateCreatorMethod(types, templateDesignerMethod);
+            vendorBankListFields = ResolveVendorBankListFields(types);
+            vendorBankType = vendorBankListFields.FirstOrDefault()?.FieldType.GetGenericArguments()[0];
+            vendorColumnType = ResolveVendorColumnType(vendorBankType);
             templateType = templateDesignerMethod?.GetParameters()[0].ParameterType
+                ?? templateCreatorMethod?.ReturnType
                 ?? (typeof(Stream).IsAssignableFrom(exportParameters[2].ParameterType)
                     ? typeof(object)
                     : exportParameters[2].ParameterType);
@@ -3046,6 +3065,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 && string.Equals(parameters[0].ParameterType.Name, "PDFTemplate", StringComparison.Ordinal);
         }
 
+        internal static bool IsStimulsoftTemplateCreatorMethod(MethodInfo method)
+        {
+            var parameters = method.GetParameters();
+            return string.Equals(method.ReturnType.Name, "PDFTemplate", StringComparison.Ordinal)
+                && parameters.Length == 4
+                && string.Equals(parameters[0].ParameterType.Name, "BankUser", StringComparison.Ordinal)
+                && parameters[1].ParameterType.FullName?.Contains("GenerateFlowRecord", StringComparison.Ordinal) == true
+                && parameters[2].ParameterType == typeof(long)
+                && parameters[3].ParameterType == typeof(string);
+        }
+
         private static bool IsStimulsoftTemplateExportSignature(MethodInfo method)
         {
             var parameters = method.GetParameters();
@@ -3079,6 +3109,46 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 .Where(type => type.GetMethods(flags).Any(IsStimulsoftTemplateExportSignature))
                 .SelectMany(type => type.GetMethods(flags))
                 .FirstOrDefault(IsStimulsoftTemplateDesignerMethod);
+        }
+
+        private static MethodInfo? ResolveStimulsoftTemplateCreatorMethod(
+            IReadOnlyCollection<Type> runtimeTypes,
+            MethodInfo? designerMethod)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+            var directMethod = designerMethod?.DeclaringType?
+                .GetMethods(flags)
+                .FirstOrDefault(IsStimulsoftTemplateCreatorMethod);
+            if (directMethod is not null)
+            {
+                return directMethod;
+            }
+
+            return runtimeTypes
+                .Where(type => type.GetMethods(flags).Any(IsStimulsoftTemplateDesignerMethod))
+                .SelectMany(type => type.GetMethods(flags))
+                .FirstOrDefault(IsStimulsoftTemplateCreatorMethod);
+        }
+
+        private static IReadOnlyList<FieldInfo> ResolveVendorBankListFields(IEnumerable<Type> runtimeTypes)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+            return runtimeTypes
+                .SelectMany(type => type.GetFields(flags))
+                .Where(field => field.FieldType.IsGenericType
+                    && field.FieldType.GetGenericTypeDefinition() == typeof(List<>)
+                    && string.Equals(field.FieldType.GetGenericArguments()[0].Name, "Bank", StringComparison.Ordinal))
+                .ToList();
+        }
+
+        private static Type? ResolveVendorColumnType(Type? bankType)
+        {
+            var columnsType = bankType?
+                .GetProperty("Columns", BindingFlags.Public | BindingFlags.Instance)?
+                .PropertyType;
+            return columnsType?.IsGenericType == true
+                ? columnsType.GetGenericArguments()[0]
+                : null;
         }
 
         public static bool TryExport(string vendorDir, PrintRenderContext context, string path)
@@ -3124,7 +3194,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
 
-        public static void OpenTemplateDesigner(string vendorDir, PrintTemplate template)
+        public static void OpenTemplateDesigner(string vendorDir, PrintRenderContext context, PrintTemplate template)
         {
             if (string.IsNullOrWhiteSpace(template.PdfData))
             {
@@ -3136,7 +3206,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 Directory.SetCurrentDirectory(vendorDir);
                 var exporter = Get(vendorDir);
-                exporter.OpenTemplateDesigner(template);
+                exporter.OpenTemplateDesigner(context, template);
             }
             finally
             {
@@ -3464,7 +3534,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
             TryWritePrintRenderProbe(context, path, records, "default-stimulsoft", bankUser);
-            var pdfData = PrepareStimulsoftPdfData(context, context.Template.PdfData);
+            var pdfData = NormalizeDesignerBusinessObjectColumns(
+                context,
+                context.Template,
+                PrepareStimulsoftPdfData(context, context.Template.PdfData));
             if (typeof(Stream).IsAssignableFrom(exportMethod.GetParameters()[2].ParameterType))
             {
                 using var stream = new MemoryStream(Encoding.UTF8.GetBytes(pdfData));
@@ -3478,35 +3551,516 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
 
-        private void OpenTemplateDesigner(PrintTemplate template)
+        private void OpenTemplateDesigner(PrintRenderContext context, PrintTemplate template)
         {
+            if (IsBlankDesignerTemplate(template))
+            {
+                if (templateCreatorMethod is null || templateDesignerMethod is null)
+                {
+                    throw new MissingMethodException("Vendor Stimulsoft template creator or designer method was not found.");
+                }
+
+                var bankUser = CreateBankUser(context);
+                var records = CreateFlowRecords(context);
+                ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
+                EnsureDesignerBankRegistered(context);
+                var createdVendorTemplate = templateCreatorMethod.Invoke(
+                        null,
+                        [bankUser, records, GetDesignerVendorBankId(context), template.Name])
+                    ?? throw new InvalidOperationException("Vendor Stimulsoft template creator returned no template.");
+                CopyTemplateBack(createdVendorTemplate, template);
+                template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
+
+                var editableVendorTemplate = CreateTemplate(template);
+                templateDesignerMethod.Invoke(null, [editableVendorTemplate]);
+                CopyTemplateBack(editableVendorTemplate, template);
+                template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
+                return;
+            }
+
             if (templateDesignerMethod is null)
             {
                 throw new MissingMethodException("Vendor Stimulsoft template designer method was not found.");
             }
+
+            template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
             var vendorTemplate = CreateTemplate(template);
             templateDesignerMethod.Invoke(null, [vendorTemplate]);
             CopyTemplateBack(vendorTemplate, template);
+            template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
         }
 
         private void CreateBlankTemplate(PrintTemplate template)
         {
-            var reportType = AssemblyLoadContext.Default.Assemblies
-                .Select(assembly => assembly.GetType("Stimulsoft.Report.StiReport", false))
-                .FirstOrDefault(type => type is not null)
-                ?? throw new MissingMemberException("Stimulsoft.Report.StiReport was not found.");
-            var report = Activator.CreateInstance(reportType)
-                ?? throw new InvalidOperationException("Cannot create blank Stimulsoft report.");
-            var saveToString = reportType.GetMethod("SaveToString", Type.EmptyTypes)
-                ?? throw new MissingMethodException(reportType.FullName, "SaveToString");
-
-            template.PdfData = Convert.ToString(saveToString.Invoke(report, null)) ?? string.Empty;
+            using var report = new StiReport();
+            template.PdfData = report.SaveToString();
             template.PageSize = "A4Portrait";
             template.PageRows = 0;
             template.Remark = string.Empty;
             template.VendorId = 0;
-            template.VendorBankId = 0;
             template.IsSystem = false;
+        }
+
+        private static bool IsBlankDesignerTemplate(PrintTemplate template)
+        {
+            var data = template.PdfData;
+            return template.VendorId <= 0
+                && data.Length < 20_000
+                && data.Contains("<Components isList=\"true\" count=\"0\"", StringComparison.Ordinal)
+                && !data.Contains("StiText", StringComparison.Ordinal)
+                && !data.Contains("DataBand", StringComparison.Ordinal);
+        }
+
+        private static long GetDesignerVendorBankId(PrintRenderContext context)
+        {
+            if (context.Template.VendorBankId > 0)
+            {
+                return context.Template.VendorBankId;
+            }
+
+            throw new InvalidOperationException($"未找到银行“{context.Bank.Name}{context.Bank.GetBankType()}”对应的真诚银行标识，无法创建匹配字段的数据源。");
+        }
+
+        private void EnsureDesignerBankRegistered(PrintRenderContext context)
+        {
+            if (vendorBankType is null || vendorColumnType is null || vendorBankListFields.Count == 0)
+            {
+                throw new MissingMemberException("Vendor bank field configuration was not found.");
+            }
+
+            var vendorBankId = GetDesignerVendorBankId(context);
+            lock (DesignerBankRegistrationSync)
+            {
+                foreach (var field in vendorBankListFields)
+                {
+                    var banks = field.GetValue(null) as IList;
+                    if (banks is null)
+                    {
+                        banks = (IList)(Activator.CreateInstance(field.FieldType)
+                            ?? throw new InvalidOperationException("Cannot create vendor bank list."));
+                        field.SetValue(null, banks);
+                    }
+
+                    var vendorBank = banks
+                        .Cast<object>()
+                        .FirstOrDefault(item => ReadLong(item, "Id", 0) == vendorBankId);
+                    if (vendorBank is null)
+                    {
+                        vendorBank = Activator.CreateInstance(vendorBankType)
+                            ?? throw new InvalidOperationException("Cannot create vendor bank configuration.");
+                        banks.Add(vendorBank);
+                    }
+
+                    ApplyDesignerBankConfiguration(vendorBank, context, vendorBankId);
+                }
+            }
+        }
+
+        private void ApplyDesignerBankConfiguration(object vendorBank, PrintRenderContext context, long vendorBankId)
+        {
+            Set(vendorBank, "Id", vendorBankId);
+            Set(vendorBank, "BankId", vendorBankId);
+            Set(vendorBank, "Name", context.Bank.Name);
+            Set(vendorBank, "Title", context.Bank.Name);
+            Set(vendorBank, "BankTitle", context.Bank.Name);
+            Set(vendorBank, "Type", context.Bank.Type);
+            if (context.Bank.Rate.HasValue)
+            {
+                Set(vendorBank, "Rate", context.Bank.Rate.Value);
+                Set(vendorBank, "Rame", context.Bank.Rate.Value);
+            }
+
+            Set(vendorBank, "Columns", CreateDesignerVendorColumns(
+                context.Bank.Columns,
+                column => ToDesignerVendorBankUserColumnField(context.Bank, column)));
+            Set(vendorBank, "ReferenceColumns", CreateDesignerVendorColumns(context.Bank.ReferenceColumns));
+            Set(vendorBank, "ConstColumms", CreateDesignerVendorColumns(context.Bank.ConstColumns));
+            Set(vendorBank, "FlowColumns", CreateDesignerVendorColumns(
+                context.Bank.FlowColumns,
+                excludeNativeFlowColumns: true));
+        }
+
+        private IList CreateDesignerVendorColumns(
+            IEnumerable<ColumnDefinition> columns,
+            Func<ColumnDefinition, string>? fieldResolver = null,
+            bool excludeNativeFlowColumns = false)
+        {
+            var list = (IList)(Activator.CreateInstance(typeof(List<>).MakeGenericType(vendorColumnType!))
+                ?? throw new InvalidOperationException("Cannot create vendor column list."));
+            foreach (var column in columns)
+            {
+                if (excludeNativeFlowColumns && IsNativeDesignerFlowColumn(column.Field))
+                {
+                    continue;
+                }
+
+                var vendorColumn = Activator.CreateInstance(vendorColumnType!)
+                    ?? throw new InvalidOperationException("Cannot create vendor column configuration.");
+                Set(vendorColumn, "Type", NormalizeDesignerVendorColumnType(column.Type));
+                Set(vendorColumn, "Name", column.Name ?? string.Empty);
+                Set(vendorColumn, "Field", fieldResolver?.Invoke(column)
+                    ?? ToDesignerVendorColumnField(column.Field));
+                Set(vendorColumn, "Width", column.Width);
+                Set(vendorColumn, "Order", column.Order);
+                Set(vendorColumn, "Show", column.Show);
+                list.Add(vendorColumn);
+            }
+
+            return list;
+        }
+
+        private static bool IsNativeDesignerFlowColumn(string? field)
+        {
+            return ToDesignerVendorColumnField(field) switch
+            {
+                "account_time" or "trade_money" or "balance" => true,
+                _ => false
+            };
+        }
+
+        private static string ToDesignerVendorBankUserColumnField(Bank bank, ColumnDefinition column)
+        {
+            var localField = column.Field ?? string.Empty;
+            var canonicalField = localField switch
+            {
+                nameof(BankUser.Id) => "Id",
+                nameof(BankUser.AccountName) => "Username",
+                nameof(BankUser.AccountNo) => "AccountNum",
+                nameof(BankUser.CardNo) => "CardNum",
+                nameof(BankUser.IdNumber) => "IdNum",
+                nameof(BankUser.UserCode) => "UserNum",
+                nameof(BankUser.OpenBranch) => "OpenBranch",
+                nameof(BankUser.Balance) => "Balance",
+                nameof(BankUser.TransactionType) => "QueryType",
+                nameof(BankUser.Currency) => "Currency",
+                nameof(BankUser.ChapterCode) => "StampCode",
+                nameof(BankUser.ChapterBranch) => "StampBranch",
+                nameof(BankUser.ShouldPrintSeal) => "IsPrintStamp",
+                nameof(BankUser.Remark) => "Remark",
+                nameof(BankUser.OpeningBalance) => "InitialBalance",
+                nameof(BankUser.AutoCalculateInterest) => "IsAutoInterest",
+                nameof(BankUser.StartDate) => "StartTime",
+                nameof(BankUser.EndDate) => "EndTime",
+                _ => string.Empty
+            };
+
+            if (string.Equals(bank.Name, "农行", StringComparison.Ordinal))
+            {
+                canonicalField = column.Name switch
+                {
+                    "打印机构" => "PrintBranch",
+                    "打印日期" => "PrintTime",
+                    "姓名" => "Username",
+                    "卡号" => "Account",
+                    "账户序号" => "UserNum",
+                    "货币" => "Currency",
+                    "抬头" => "BankTitle",
+                    "开始日期" => "StartTime",
+                    "结束日期" => "EndTime",
+                    "流水号" => "ReceiptNum",
+                    "章内编码" => "StampCode",
+                    "章内支行" => "StampBranch",
+                    "证件号" => "IdNum",
+                    "是否打印章" => "IsPrintStamp",
+                    "备注" => "Remark",
+                    "期初余额" => "InitialBalance",
+                    "自动计算利息" => "IsAutoInterest",
+                    _ => canonicalField
+                };
+            }
+
+            return string.IsNullOrWhiteSpace(canonicalField)
+                ? ToDesignerVendorColumnField(localField)
+                : ToDesignerVendorColumnField(canonicalField);
+        }
+
+        private static string NormalizeDesignerBusinessObjectColumns(
+            PrintRenderContext context,
+            PrintTemplate template,
+            string pdfData)
+        {
+            if (string.IsNullOrWhiteSpace(pdfData)
+                || !pdfData.Contains("<BusinessObjects", StringComparison.Ordinal)
+                || !pdfData.Contains("<Columns", StringComparison.Ordinal))
+            {
+                return pdfData;
+            }
+
+            try
+            {
+                var document = new XmlDocument { PreserveWhitespace = true };
+                document.LoadXml(pdfData);
+                var columnGroups = document.SelectNodes(
+                    "//*[local-name()='BusinessObjects']//*[local-name()='Columns']");
+                if (columnGroups is null)
+                {
+                    return pdfData;
+                }
+
+                var migrateAgriculturalCustomUserSchema = !template.IsSystem
+                    && IsAgriculturalBank(context.Bank);
+                var normalizeCustomDateColumns = !template.IsSystem;
+                var changed = false;
+                foreach (XmlElement columns in columnGroups.OfType<XmlElement>())
+                {
+                    var groupChanged = false;
+                    var businessObject = columns.ParentNode as XmlElement;
+                    var businessObjectName = businessObject?
+                        .SelectSingleNode("./*[local-name()='Name']")?
+                        .InnerText;
+                    var isUserBusinessObject = string.Equals(
+                        businessObjectName ?? businessObject?.LocalName,
+                        "用户",
+                        StringComparison.Ordinal);
+                    var values = columns.ChildNodes
+                        .OfType<XmlElement>()
+                        .Where(element => string.Equals(element.LocalName, "value", StringComparison.Ordinal))
+                        .ToList();
+                    var seenFields = new HashSet<string>(StringComparer.Ordinal);
+                    for (var index = values.Count - 1; index >= 0; index--)
+                    {
+                        var serializedColumn = values[index].InnerText;
+                        var parts = serializedColumn.Split(',', 3);
+                        var field = parts[0];
+                        if (parts.Length == 3)
+                        {
+                            if (migrateAgriculturalCustomUserSchema
+                                && isUserBusinessObject
+                                && string.Equals(field, "VoucherType", StringComparison.Ordinal)
+                                && string.Equals(parts[1], "流水号", StringComparison.Ordinal))
+                            {
+                                field = "ReceiptNum";
+                                parts[0] = field;
+                            }
+
+                            if (normalizeCustomDateColumns
+                                && IsDesignerDateColumn(
+                                    context,
+                                    isUserBusinessObject,
+                                    field,
+                                    parts[1])
+                                && !string.Equals(parts[2], "System.DateTime", StringComparison.Ordinal))
+                            {
+                                parts[2] = "System.DateTime";
+                            }
+
+                            var normalizedColumn = string.Join(',', parts);
+                            if (!string.Equals(serializedColumn, normalizedColumn, StringComparison.Ordinal))
+                            {
+                                values[index].InnerText = normalizedColumn;
+                                groupChanged = true;
+                                changed = true;
+                            }
+                        }
+
+                        if (seenFields.Add(field))
+                        {
+                            continue;
+                        }
+
+                        columns.RemoveChild(values[index]);
+                        groupChanged = true;
+                        changed = true;
+                    }
+
+                    if (groupChanged && columns.HasAttribute("count"))
+                    {
+                        columns.SetAttribute(
+                            "count",
+                            columns.ChildNodes.OfType<XmlElement>()
+                                .Count(element => string.Equals(element.LocalName, "value", StringComparison.Ordinal))
+                                .ToString(CultureInfo.InvariantCulture));
+                    }
+                }
+
+                if (migrateAgriculturalCustomUserSchema)
+                {
+                    var textNodes = document.SelectNodes("//text()[contains(., '用户.VoucherType')]");
+                    if (textNodes is not null)
+                    {
+                        foreach (XmlText textNode in textNodes.OfType<XmlText>())
+                        {
+                            var value = textNode.Value;
+                            if (string.IsNullOrEmpty(value))
+                            {
+                                continue;
+                            }
+
+                            var normalizedValue = value.Replace(
+                                "用户.VoucherType",
+                                "用户.ReceiptNum",
+                                StringComparison.Ordinal);
+                            if (!string.Equals(value, normalizedValue, StringComparison.Ordinal))
+                            {
+                                textNode.Value = normalizedValue;
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    if (BindAgriculturalCustomReceiptNumber(document))
+                    {
+                        changed = true;
+                    }
+                }
+
+                return changed ? document.OuterXml : pdfData;
+            }
+            catch (XmlException)
+            {
+                return pdfData;
+            }
+        }
+
+        private static bool IsDesignerDateColumn(
+            PrintRenderContext context,
+            bool isUserBusinessObject,
+            string field,
+            string alias)
+        {
+            IEnumerable<ColumnDefinition> configuredColumns = isUserBusinessObject
+                ? context.Bank.Columns
+                : context.Bank.ReferenceColumns
+                    .Concat(context.Bank.ConstColumns)
+                    .Concat(context.Bank.FlowColumns);
+            if (configuredColumns.Any(column =>
+                    string.Equals(column.Name, alias, StringComparison.Ordinal)
+                    && IsDesignerDateColumnType(column.Type)))
+            {
+                return true;
+            }
+
+            return field.EndsWith("Date", StringComparison.OrdinalIgnoreCase)
+                || field.EndsWith("Time", StringComparison.OrdinalIgnoreCase)
+                || alias.Contains("日期", StringComparison.Ordinal)
+                || alias.Contains("时间", StringComparison.Ordinal)
+                || alias.EndsWith("日", StringComparison.Ordinal);
+        }
+
+        private static bool IsDesignerDateColumnType(string? type)
+        {
+            return (type ?? string.Empty).Trim().ToLowerInvariant() is "date" or "datetime" or "time";
+        }
+
+        private static bool BindAgriculturalCustomReceiptNumber(XmlDocument document)
+        {
+            var labelNodes = document.SelectNodes(
+                "//*[local-name()='Text' and (normalize-space(.)='电子流水号：' or normalize-space(.)='电子流水号:' or normalize-space(.)='流水号：' or normalize-space(.)='流水号:')]");
+            if (labelNodes is null)
+            {
+                return false;
+            }
+
+            var changed = false;
+            foreach (XmlElement labelText in labelNodes.OfType<XmlElement>())
+            {
+                if (labelText.ParentNode is not XmlElement labelComponent
+                    || labelComponent.ParentNode is not XmlElement componentContainer
+                    || !TryReadStimulsoftClientRectangle(labelComponent, out var labelRectangle))
+                {
+                    continue;
+                }
+
+                var target = componentContainer.ChildNodes
+                    .OfType<XmlElement>()
+                    .Where(component => !ReferenceEquals(component, labelComponent))
+                    .Select(component => new
+                    {
+                        Component = component,
+                        Text = component.SelectSingleNode("./*[local-name()='Text']") as XmlElement,
+                        IsTextComponent = string.Equals(component.GetAttribute("type"), "Text", StringComparison.Ordinal)
+                            || component.SelectSingleNode("./*[local-name()='TextBrush']") is not null,
+                        HasRectangle = TryReadStimulsoftClientRectangle(component, out var rectangle),
+                        Rectangle = rectangle
+                    })
+                    .Where(candidate => candidate.IsTextComponent
+                        && (candidate.Text is null || string.IsNullOrWhiteSpace(candidate.Text.InnerText))
+                        && candidate.HasRectangle
+                        && Math.Abs(candidate.Rectangle.Y - labelRectangle.Y) < 0.01d
+                        && candidate.Rectangle.X >= labelRectangle.X + labelRectangle.Width - 0.01d
+                        && candidate.Rectangle.X <= labelRectangle.X + labelRectangle.Width + 5d)
+                    .OrderBy(candidate => candidate.Rectangle.X)
+                    .FirstOrDefault();
+                if (target is null)
+                {
+                    continue;
+                }
+
+                var targetText = target.Text;
+                if (targetText is null)
+                {
+                    targetText = document.CreateElement("Text");
+                    var textBrush = target.Component.SelectSingleNode("./*[local-name()='TextBrush']");
+                    target.Component.InsertBefore(targetText, textBrush);
+                }
+
+                targetText.InnerText = "{用户.ReceiptNum}";
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static bool TryReadStimulsoftClientRectangle(
+            XmlElement component,
+            out (double X, double Y, double Width, double Height) rectangle)
+        {
+            rectangle = default;
+            var serialized = component
+                .SelectSingleNode("./*[local-name()='ClientRectangle']")?
+                .InnerText;
+            var parts = serialized?.Split(',', StringSplitOptions.TrimEntries);
+            if (parts is not { Length: 4 }
+                || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
+                || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+                || !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var width)
+                || !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var height))
+            {
+                return false;
+            }
+
+            rectangle = (x, y, width, height);
+            return true;
+        }
+
+        private static string NormalizeDesignerVendorColumnType(string? type)
+        {
+            return (type ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                "int" or "integer" or "number" => "int",
+                "double" or "decimal" or "money" or "float" => "double",
+                "date" or "datetime" or "time" => "date",
+                "bool" or "boolean" => "bool",
+                _ => "string"
+            };
+        }
+
+        private static string ToDesignerVendorColumnField(string? field)
+        {
+            if (string.IsNullOrWhiteSpace(field)
+                || field.Contains('_', StringComparison.Ordinal)
+                || field.StartsWith("[", StringComparison.Ordinal))
+            {
+                return field ?? string.Empty;
+            }
+
+            var builder = new StringBuilder(field.Length + 8);
+            for (var index = 0; index < field.Length; index++)
+            {
+                var character = field[index];
+                if (char.IsUpper(character)
+                    && index > 0
+                    && (char.IsLower(field[index - 1])
+                        || char.IsDigit(field[index - 1])
+                        || (index + 1 < field.Length && char.IsLower(field[index + 1]))))
+                {
+                    builder.Append('_');
+                }
+
+                builder.Append(char.ToLowerInvariant(character));
+            }
+
+            return builder.ToString();
         }
 
         private object CreateTemplate(PrintTemplate source)
@@ -3552,7 +4106,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "Id", context.BankUser.Id);
             Set(target, "BankId", GetVendorBankId(context));
             Set(target, "Username", FirstNotBlank(context.BankUser.AccountName, GetValue(values, "Username"), GetValue(values, "AccountName")));
-            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
+            var accountNumber = NormalizePrintNumber(context, FirstNotBlank(context.BankUser.AccountNo, context.BankUser.CardNo, GetValue(values, "AccountNum"), GetValue(values, "Account"), GetValue(values, "CardNum")));
             var userNumber = NormalizePrintNumber(context, ResolveBankUserNumber(context, values));
             var customerNo = FirstNotBlank(GetValue(values, "CustomerNo"), userNumber);
             var printNo = FirstNotBlank(GetValue(values, "PrintNo"), userNumber);
@@ -5275,6 +5829,29 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "PrintTime", printTime);
         Set(target, "StampTime", printTime);
 
+        var openBranchName = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(
+                context,
+                values,
+                "开户机构名称",
+                "开户行名称",
+                "开户网点名称",
+                "开户机构",
+                "开户行"),
+            context.BankUser.OpenBranch,
+            GetValue(values, "OpenBranch"),
+            ResolveBankUserPrintBranch(context, values)));
+        if (!string.IsNullOrWhiteSpace(openBranchName))
+        {
+            SetBankUserPrintBranchAliases(target, openBranchName, includeOpenBranch: true);
+
+            // Several vendor postal "new" electronic templates label this value
+            // as the opening-bank name but bind it to BankUser.OpenBranchNum.
+            // Keep the compatibility assignment postal-only so real institution
+            // number fields used by other banks retain their original meaning.
+            SetVendorStringNotNull(target, "OpenBranchNum", openBranchName);
+        }
+
         var currency = ResolvePostalCurrencyFromRecords(context);
         if (!string.IsNullOrWhiteSpace(currency))
         {
@@ -5909,7 +6486,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsPostalBank(bank))
         {
-            currency = FirstNotBlank(tradeCurrency, currency);
+            // The vendor postal QuestPDF template calls Currency.EndsWith(...)
+            // without a null check. Generated interest/tax rows may not carry a
+            // row-level currency, so fall back to the account currency and keep
+            // the normalized print value non-null.
+            currency = NormalizeCurrency(FirstNotBlank(
+                tradeCurrency,
+                currency,
+                context.BankUser.Currency,
+                "RMB"));
             tradeCurrency = FirstNotBlank(tradeCurrency, currency);
         }
 
@@ -5980,7 +6565,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
         Set(target, nameof(FlowRecord.Remark), remark);
         Set(target, nameof(FlowRecord.TradeChannelEn), tradeChannelEn);
-        Set(target, nameof(FlowRecord.Currency), currency);
+        if (IsPostalBank(bank))
+        {
+            SetVendorStringNotNull(target, nameof(FlowRecord.Currency), currency);
+        }
+        else
+        {
+            Set(target, nameof(FlowRecord.Currency), currency);
+        }
         Set(target, nameof(FlowRecord.TradeCurrency), tradeCurrency);
 
         if (IsMinshengBank(bank) && source.IsDocumentImported)
@@ -6962,7 +7554,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         var summary = NormalizeSingleLinePrintText(FirstNotBlank(
             source.Remark,
+            source.ProductBrief,
+            source.TradeExplain,
+            source.ProductName,
             GetValue(values, nameof(FlowRecord.Remark)),
+            GetValue(values, nameof(FlowRecord.ProductBrief)),
+            GetValue(values, nameof(FlowRecord.TradeExplain)),
+            GetValue(values, nameof(FlowRecord.ProductName)),
             GetFlowExtraFieldValue(context.Bank, source, values, "\u9644\u8A00")));
         var rawCashCheck = FirstNotBlank(source.CashCheck, GetValue(values, nameof(FlowRecord.CashCheck)));
         var channel = NormalizeSingleLinePrintText(FirstNotBlank(
@@ -6992,6 +7590,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsPostalPersonalElectronicPrintContext(context))
         {
+            // The vendor postal template renders its "external system flow" column
+            // from SerialNum. Mirror the source VoucherNum exactly, including an
+            // explicit empty value, so the bridge cannot leak its synthetic row
+            // sequence into the printed document.
+            var externalSystemFlow = NormalizeSingleLinePrintText(source.VoucherNum);
+            // Vendor QuestPDF postal templates dereference these string fields.
+            // Bypass the generic converter because it turns an empty string into
+            // null; the printed value must stay empty without crashing the table.
+            SetVendorStringNotNull(target, nameof(FlowRecord.VoucherNum), externalSystemFlow);
+            SetVendorStringNotNull(target, nameof(FlowRecord.SerialNum), externalSystemFlow);
+
             Set(target, nameof(FlowRecord.ProductType), summary);
             Set(target, nameof(FlowRecord.ProductName), channel);
         }
@@ -8894,6 +9503,352 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 throw;
             }
+        }
+    }
+
+    private static void NormalizeCcbPersonalElectronic13TableBorders(
+        PrintRenderContext context,
+        string path)
+    {
+        if (!IsCcbPersonalPrintContext(context)
+            || !string.Equals(context.Template.Name, "建行个人电子版13", StringComparison.Ordinal)
+            || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+            var changed = false;
+            foreach (var page in document.Pages)
+            {
+                var graphicStates = page.Resources?.Elements.GetDictionary("/ExtGState");
+                if (graphicStates is null)
+                {
+                    continue;
+                }
+
+                var tableGraphicStateNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var key in graphicStates.Elements.KeyNames)
+                {
+                    var graphicState = graphicStates.Elements.GetDictionary(key.Value);
+                    if (graphicState is null)
+                    {
+                        continue;
+                    }
+
+                    var currentLineWidth = graphicState.Elements.GetReal("/LW");
+                    var isOriginalTableState = currentLineWidth >= 0.9d && currentLineWidth <= 1.1d;
+                    var isSharedNormalizedTableState = currentLineWidth >= 0.49d && currentLineWidth <= 0.51d;
+                    if (!isOriginalTableState && !isSharedNormalizedTableState)
+                    {
+                        continue;
+                    }
+
+                    tableGraphicStateNames.Add(key.Value);
+                }
+
+                if (tableGraphicStateNames.Count == 0)
+                {
+                    continue;
+                }
+
+                var sequence = ContentReader.ReadContent(page);
+                if (!TryRewriteCcbPersonalElectronic13TableBorders(
+                        sequence,
+                        tableGraphicStateNames))
+                {
+                    continue;
+                }
+
+                foreach (var tableGraphicStateName in tableGraphicStateNames)
+                {
+                    var graphicState = graphicStates.Elements.GetDictionary(tableGraphicStateName);
+                    graphicState?.Elements.SetReal("/LW", 0.5d);
+                }
+
+                page.Contents.ReplaceContent(sequence);
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            var tempPath = path + ".ccb13-table-borders.tmp";
+            try
+            {
+                document.Save(tempPath);
+                document.Close();
+                File.Copy(tempPath, path, overwrite: true);
+            }
+            finally
+            {
+                TryDeleteLocalFile(tempPath);
+            }
+        }
+        catch
+        {
+            if (IsPrintBridgeDebugEnabledGlobal())
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool TryRewriteCcbPersonalElectronic13TableBorders(
+        CSequence sequence,
+        IReadOnlySet<string> tableGraphicStateNames)
+    {
+        const int expectedColumnCount = 7;
+        var currentGraphicState = string.Empty;
+        var graphicStateStack = new Stack<string>();
+        List<(int Index, double X, double Y, double Width, double Height, double TransformX, double TransformY)> rectangles = [];
+
+        for (var index = 0; index < sequence.Count; index++)
+        {
+            if (sequence[index] is not COperator operation)
+            {
+                continue;
+            }
+
+            switch (operation.Name)
+            {
+                case "q":
+                    graphicStateStack.Push(currentGraphicState);
+                    break;
+                case "Q":
+                    currentGraphicState = graphicStateStack.Count > 0
+                        ? graphicStateStack.Pop()
+                        : string.Empty;
+                    break;
+                case "gs" when operation.Operands.Count > 0 && operation.Operands[0] is CName graphicStateName:
+                    currentGraphicState = graphicStateName.ToString();
+                    break;
+                case "re" when tableGraphicStateNames.Contains(currentGraphicState):
+                    if (index + 1 >= sequence.Count
+                        || sequence[index + 1] is not COperator { Name: "S" }
+                        || !TryReadPdfRectangle(operation, out var rectangle)
+                        || !TryReadPreviousPdfTransform(sequence, index, out var transformX, out var transformY))
+                    {
+                        return false;
+                    }
+
+                    rectangles.Add((
+                        index,
+                        rectangle.X,
+                        rectangle.Y,
+                        rectangle.Width,
+                        rectangle.Height,
+                        transformX,
+                        transformY));
+                    break;
+            }
+        }
+
+        var columnPositions = rectangles
+            .Select(rectangle => Math.Round(rectangle.TransformX, 3))
+            .Distinct()
+            .OrderBy(position => position)
+            .ToList();
+        var rowPositions = rectangles
+            .Select(rectangle => Math.Round(rectangle.TransformY, 3))
+            .Distinct()
+            .OrderBy(position => position)
+            .ToList();
+        if (columnPositions.Count != expectedColumnCount
+            || rowPositions.Count == 0
+            || rectangles.Count != columnPositions.Count * rowPositions.Count
+            || rectangles
+                .Select(rectangle => (
+                    Math.Round(rectangle.TransformX, 3),
+                    Math.Round(rectangle.TransformY, 3)))
+                .Distinct()
+                .Count() != rectangles.Count)
+        {
+            return false;
+        }
+
+        var firstColumnPosition = columnPositions[0];
+        var firstRowPosition = rowPositions[0];
+        foreach (var rectangle in rectangles.OrderByDescending(rectangle => rectangle.Index))
+        {
+            var drawTop = Math.Abs(Math.Round(rectangle.TransformY, 3) - firstRowPosition) < 0.001d;
+            var drawLeft = Math.Abs(Math.Round(rectangle.TransformX, 3) - firstColumnPosition) < 0.001d;
+            var replacement = CreateReferenceStylePdfCellBorderOperations(
+                rectangle.X,
+                rectangle.Y,
+                rectangle.Width,
+                rectangle.Height,
+                drawTop,
+                drawLeft);
+
+            sequence.RemoveAt(rectangle.Index + 1);
+            sequence.RemoveAt(rectangle.Index);
+            for (var replacementIndex = 0; replacementIndex < replacement.Count; replacementIndex++)
+            {
+                sequence.Insert(rectangle.Index + replacementIndex, replacement[replacementIndex]);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryReadPdfRectangle(
+        COperator operation,
+        out (double X, double Y, double Width, double Height) rectangle)
+    {
+        rectangle = default;
+        if (operation.Operands.Count != 4
+            || !TryReadPdfNumber(operation.Operands[0], out var x)
+            || !TryReadPdfNumber(operation.Operands[1], out var y)
+            || !TryReadPdfNumber(operation.Operands[2], out var width)
+            || !TryReadPdfNumber(operation.Operands[3], out var height)
+            || width <= 0.5d
+            || height <= 0.5d)
+        {
+            return false;
+        }
+
+        rectangle = (x, y, width, height);
+        return true;
+    }
+
+    private static bool TryReadPreviousPdfTransform(
+        CSequence sequence,
+        int startIndex,
+        out double transformX,
+        out double transformY)
+    {
+        transformX = 0d;
+        transformY = 0d;
+        for (var index = startIndex - 1; index >= 0; index--)
+        {
+            if (sequence[index] is not COperator operation)
+            {
+                continue;
+            }
+
+            if (operation.Name == "q")
+            {
+                return false;
+            }
+
+            if (operation.Name != "cm"
+                || operation.Operands.Count != 6
+                || !TryReadPdfNumber(operation.Operands[4], out transformX)
+                || !TryReadPdfNumber(operation.Operands[5], out transformY))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static List<COperator> CreateReferenceStylePdfCellBorderOperations(
+        double x,
+        double y,
+        double width,
+        double height,
+        bool drawTop,
+        bool drawLeft)
+    {
+        const double halfLineWidth = 0.25d;
+        List<COperator> operations =
+        [
+            CreatePdfIntegerContentOperator("J", 0),
+            CreatePdfContentOperator("w", halfLineWidth * 2d),
+            CreatePdfIntegerContentOperator("j", 0)
+        ];
+
+        if (drawTop)
+        {
+            AddPdfLine(
+                operations,
+                x,
+                y + halfLineWidth,
+                x + width,
+                y + halfLineWidth);
+        }
+
+        AddPdfLine(
+            operations,
+            x + width,
+            y + height - halfLineWidth,
+            x,
+            y + height - halfLineWidth);
+        AddPdfLine(
+            operations,
+            x + width - halfLineWidth,
+            y,
+            x + width - halfLineWidth,
+            y + height);
+
+        if (drawLeft)
+        {
+            AddPdfLine(
+                operations,
+                x + halfLineWidth,
+                y,
+                x + halfLineWidth,
+                y + height);
+        }
+
+        return operations;
+    }
+
+    private static void AddPdfLine(
+        ICollection<COperator> operations,
+        double startX,
+        double startY,
+        double endX,
+        double endY)
+    {
+        operations.Add(CreatePdfContentOperator("m", startX, startY));
+        operations.Add(CreatePdfContentOperator("l", endX, endY));
+        operations.Add(CreatePdfContentOperator("S"));
+    }
+
+    private static COperator CreatePdfContentOperator(string name, params double[] operands)
+    {
+        var operation = OpCodes.OperatorFromName(name).Clone();
+        foreach (var value in operands)
+        {
+            operation.Operands.Add(new CReal { Value = value });
+        }
+
+        return operation;
+    }
+
+    private static COperator CreatePdfIntegerContentOperator(string name, params int[] operands)
+    {
+        var operation = OpCodes.OperatorFromName(name).Clone();
+        foreach (var value in operands)
+        {
+            operation.Operands.Add(new CInteger { Value = value });
+        }
+
+        return operation;
+    }
+
+    private static bool TryReadPdfNumber(CObject value, out double number)
+    {
+        switch (value)
+        {
+            case CInteger integer:
+                number = integer.Value;
+                return true;
+            case CReal real:
+                number = real.Value;
+                return true;
+            default:
+                number = 0d;
+                return false;
         }
     }
 

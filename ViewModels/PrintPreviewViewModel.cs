@@ -630,8 +630,9 @@ public sealed class PrintPreviewViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            EnsureVendorBankIdForDesigner(SelectedTemplate);
             var before = TemplateSnapshot.From(SelectedTemplate);
-            zhenchengPrintBridgeService.OpenTemplateDesigner(SelectedTemplate);
+            zhenchengPrintBridgeService.OpenTemplateDesigner(CreateContext(SelectedTemplate), SelectedTemplate);
             if (string.IsNullOrWhiteSpace(SelectedTemplate.PdfData) || ShouldRefreshBlankEditableShell(SelectedTemplate))
             {
                 before.Restore(SelectedTemplate);
@@ -1049,6 +1050,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
         {
             Id = 0,
             BankId = Bank.Id,
+            VendorBankId = ResolveVendorBankIdForCurrentBank(),
             IsSystem = false,
             Name = $"{Bank.Name}{Bank.GetBankType()}自定义模板",
             PageSize = "A4Portrait",
@@ -1056,6 +1058,37 @@ public sealed class PrintPreviewViewModel : ObservableObject
             Remark = string.Empty,
             Config = new PrintPdfConfig()
         };
+    }
+
+    private void EnsureVendorBankIdForDesigner(PrintTemplate template)
+    {
+        if (template.VendorBankId <= 0)
+        {
+            template.VendorBankId = ResolveVendorBankIdForCurrentBank(template);
+        }
+    }
+
+    private long ResolveVendorBankIdForCurrentBank(PrintTemplate? excludedTemplate = null)
+    {
+        var systemVendorBankId = Templates
+            .Where(item => !ReferenceEquals(item, excludedTemplate) && item.IsSystem && item.VendorBankId > 0)
+            .GroupBy(item => item.VendorBankId)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key)
+            .Select(group => group.Key)
+            .FirstOrDefault();
+        if (systemVendorBankId > 0)
+        {
+            return systemVendorBankId;
+        }
+
+        return Templates
+            .Where(item => !ReferenceEquals(item, excludedTemplate) && item.VendorBankId > 0)
+            .GroupBy(item => item.VendorBankId)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key)
+            .Select(group => group.Key)
+            .FirstOrDefault();
     }
 
     private static string? PromptText(string title, string label, string defaultValue)
