@@ -474,6 +474,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private async Task ExportInternalCoreAsync(PrintRenderContext context, string path)
     {
+        // Editable Stimulsoft templates own their DataBand sort definition. Keep
+        // the local bridge setting in sync before it prepares the source list;
+        // otherwise a designer-saved DESC sort is overwritten by the stale
+        // Config.Descending value during preview/export.
+        SynchronizeEditableTemplateAccountTimeSort(context.Template);
+
         // Apply the template ordering once before selecting a renderer. Vendor,
         // dedicated QuestPDF and fallback templates must all honour the same
         // Descending setting from the template-settings dialog.
@@ -3794,6 +3800,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private void OpenTemplateDesigner(PrintRenderContext context, PrintTemplate template)
         {
+            SynchronizeEditableTemplateAccountTimeSort(template);
+            WarmUpStimulsoftDesignerFonts();
+
             if (IsBlankDesignerTemplate(template))
             {
                 if (templateCreatorMethod is null || templateDesignerMethod is null)
@@ -3817,6 +3826,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 templateDesignerMethod.Invoke(null, [editableVendorTemplate]);
                 CopyTemplateBack(editableVendorTemplate, template);
                 template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
+                SynchronizeEditableTemplateAccountTimeSort(template);
                 return;
             }
 
@@ -3831,6 +3841,30 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             templateDesignerMethod.Invoke(null, [vendorTemplate]);
             CopyTemplateBack(vendorTemplate, template);
             template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
+            SynchronizeEditableTemplateAccountTimeSort(template);
+        }
+
+        private static void WarmUpStimulsoftDesignerFonts()
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is not null && !dispatcher.CheckAccess())
+            {
+                dispatcher.Invoke(WarmUpStimulsoftDesignerFontsCore);
+                return;
+            }
+
+            WarmUpStimulsoftDesignerFontsCore();
+        }
+
+        private static void WarmUpStimulsoftDesignerFontsCore()
+        {
+            // The WPF font helper creates its font-list controls in its static
+            // initializer. If that happens only when the user first opens the
+            // font picker, the picker refreshes after the click and discards the
+            // first selection. Initialize both the WPF and custom-font lists on
+            // the UI thread before the designer window is shown.
+            _ = Stimulsoft.Report.Wpf.StiFontHelper.GetSystemFonts();
+            _ = Stimulsoft.Base.StiFontCollection.GetFontFamilies();
         }
 
         private sealed class DesignerFlowBusinessObjectScope : IDisposable
@@ -4809,6 +4843,52 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             context.Template.Config.Descending);
         normalizedPdfData = NormalizeAgriculturalPersonalLatestBalanceFormat(context, normalizedPdfData);
         return NormalizeAgriculturalPersonalLatestTimeFormat(context, normalizedPdfData);
+    }
+
+    private static void SynchronizeEditableTemplateAccountTimeSort(PrintTemplate template)
+    {
+        if (template.IsSystem
+            || string.IsNullOrWhiteSpace(template.PdfData)
+            || !TryReadStimulsoftAccountTimeSortDirection(template.PdfData, out var descending))
+        {
+            return;
+        }
+
+        template.Config ??= new PrintPdfConfig();
+        template.Config.Descending = descending;
+    }
+
+    private static bool TryReadStimulsoftAccountTimeSortDirection(string pdfData, out bool descending)
+    {
+        descending = false;
+        if (string.IsNullOrWhiteSpace(pdfData))
+        {
+            return false;
+        }
+
+        var sortBlocks = Regex.Matches(
+            pdfData,
+            @"<Sort\b[^>]*>(?<body>.*?)</Sort>",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        foreach (Match sortBlock in sortBlocks)
+        {
+            var accountTimeSort = Regex.Match(
+                sortBlock.Groups["body"].Value,
+                @"<value>\s*(?<direction>ASC|DESC)\s*</value>\s*<value>\s*(?:流水\.)?AccountTime\s*</value>",
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (!accountTimeSort.Success)
+            {
+                continue;
+            }
+
+            descending = string.Equals(
+                accountTimeSort.Groups["direction"].Value,
+                "DESC",
+                StringComparison.OrdinalIgnoreCase);
+            return true;
+        }
+
+        return false;
     }
 
     private static string NormalizeAgriculturalPersonalLatestBalanceFormat(

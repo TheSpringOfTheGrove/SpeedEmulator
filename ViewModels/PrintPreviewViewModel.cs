@@ -1198,11 +1198,23 @@ public sealed class PrintPreviewViewModel : ObservableObject
         };
     }
 
-    private sealed record TemplateSnapshot(string Name, int PageRows, string Remark, string PdfData, string QuestPdfLayoutData)
+    private sealed record TemplateSnapshot(
+        string Name,
+        int PageRows,
+        string Remark,
+        string PdfData,
+        string QuestPdfLayoutData,
+        bool Descending)
     {
         public static TemplateSnapshot From(PrintTemplate template)
         {
-            return new TemplateSnapshot(template.Name, template.PageRows, template.Remark, template.PdfData, template.QuestPdfLayoutData);
+            return new TemplateSnapshot(
+                template.Name,
+                template.PageRows,
+                template.Remark,
+                template.PdfData,
+                template.QuestPdfLayoutData,
+                template.Config.Descending);
         }
 
         public void Restore(PrintTemplate template)
@@ -1212,6 +1224,7 @@ public sealed class PrintPreviewViewModel : ObservableObject
             template.Remark = Remark;
             template.PdfData = PdfData;
             template.QuestPdfLayoutData = QuestPdfLayoutData;
+            template.Config.Descending = Descending;
         }
     }
 }
