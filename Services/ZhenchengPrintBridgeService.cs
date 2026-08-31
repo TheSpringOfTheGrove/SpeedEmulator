@@ -20,6 +20,10 @@ using PdfSharpCore.Drawing;
 using PdfDocument = PdfSharpCore.Pdf.PdfDocument;
 using SpeedEmulator.Models;
 using Stimulsoft.Report;
+using Stimulsoft.Report.Components;
+using Stimulsoft.Report.Design;
+using Stimulsoft.Report.Dictionary;
+using Stimulsoft.Report.Events;
 using UglyToad.PdfPig;
 
 namespace SpeedEmulator.Services;
@@ -30,6 +34,162 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static readonly object CcbPersonalStampCodeSyncRoot = new();
     private static readonly Dictionary<string, string> CcbPersonalStampCodesByUser = new(StringComparer.Ordinal);
     private static readonly HashSet<string> IssuedCcbPersonalStampCodes = new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, string> DesignerBankUserFieldsByAlias = new(StringComparer.Ordinal)
+    {
+        ["ID"] = "Id",
+        ["起始日期"] = "StartTime",
+        ["开始日期"] = "StartTime",
+        ["开始时间"] = "StartTime",
+        ["开始对账日期"] = "StartTime",
+        ["查询起日"] = "StartTime",
+        ["起息日期"] = "StartTime",
+        ["终止日期"] = "EndTime",
+        ["结束日期"] = "EndTime",
+        ["结束时间"] = "EndTime",
+        ["结束对账日期"] = "EndTime",
+        ["查询止日"] = "EndTime",
+        ["截止日期"] = "EndTime",
+        ["户名"] = "Username",
+        ["姓名"] = "Username",
+        ["客户姓名"] = "Username",
+        ["客户名称"] = "Username",
+        ["公司名称"] = "Username",
+        ["单位名称"] = "Username",
+        ["账户名"] = "Username",
+        ["账户名称"] = "Username",
+        ["户口名称"] = "Username",
+        ["客户户名"] = "Username",
+        ["存款人名称"] = "Username",
+        ["姓名英文"] = "UsernameEn",
+        ["客户英文名"] = "UsernameEn",
+        ["编号"] = "AccountNum",
+        ["支付宝账户"] = "AccountNum",
+        ["账号卡号"] = "AccountNum",
+        ["账户账号"] = "AccountNum",
+        ["账号"] = "Account",
+        ["客户账号"] = "Account",
+        ["客户账口"] = "Account",
+        ["户口号"] = "Account",
+        ["旧账号"] = "OtherAccount",
+        ["卡号"] = "CardNum",
+        ["借记卡号"] = "CardNum",
+        ["主卡卡号"] = "OtherAccount",
+        ["打印卡号"] = "TransactionCode",
+        ["身份证"] = "IdNum",
+        ["身份证号"] = "IdNum",
+        ["证件号"] = "IdNum",
+        ["证件编号"] = "IdNum",
+        ["证件号码"] = "IdNum",
+        ["序号"] = "UserNum",
+        ["账号序号"] = "UserNum",
+        ["账户序号"] = "UserNum",
+        ["客户号"] = "UserNum",
+        ["客户编号"] = "UserNum",
+        ["客口号"] = "UserNum",
+        ["微信号"] = "UserNum",
+        ["操作地区"] = "OperationArea",
+        ["地区号"] = "OperationArea",
+        ["部门"] = "OperationArea",
+        ["机构"] = "OperationArea",
+        ["打印日期"] = "PrintTime",
+        ["打印时间"] = "PrintTime",
+        ["查询日期"] = "PrintTime",
+        ["查询时间"] = "PrintTime",
+        ["制表日期"] = "PrintTime",
+        ["日期"] = "PrintTime",
+        ["打印机构"] = "PrintBranch",
+        ["打印网点"] = "PrintBranch",
+        ["打印渠道"] = "PrintBranch",
+        ["网点号"] = "PrintBranch",
+        ["操作柜员"] = "Operator",
+        ["操作员"] = "Operator",
+        ["查询柜员"] = "Operator",
+        ["打印柜员"] = "Operator",
+        ["打印经办"] = "Operator",
+        ["经办"] = "Operator",
+        ["柜员号"] = "OperatorNum",
+        ["授权柜员号"] = "Authorizer",
+        ["交易柜员"] = "Authorizer",
+        ["凭证种类"] = "VoucherType",
+        ["证件种类"] = "VoucherType",
+        ["账户类型"] = "VoucherType",
+        ["账号类型"] = "AccountType",
+        ["开户日期"] = "OpenTime",
+        ["开户行"] = "OpenBranch",
+        ["开户银行"] = "OpenBranch",
+        ["开户网点"] = "OpenBranch",
+        ["开户机构"] = "OpenBranch",
+        ["开户机构名称"] = "OpenBranch",
+        ["网点名称"] = "OpenBranch",
+        ["支行名称"] = "OpenBranch",
+        ["分行"] = "OpenBranch",
+        ["客户行"] = "OpenBranch",
+        ["开户机构号"] = "OpenBranchNum",
+        ["机构号"] = "OpenBranchNum",
+        ["抬头"] = "BankTitle",
+        ["交易类型"] = "QueryType",
+        ["查询类型"] = "QueryType",
+        ["交易名称"] = "QueryType",
+        ["受理行"] = "AcceptBranch",
+        ["操作网点"] = "AcceptBranch",
+        ["发卡行"] = "AcceptBranch",
+        ["产品名称"] = "ProductType",
+        ["存款种类"] = "ProductType",
+        ["存期"] = "InterestTime",
+        ["交易日期"] = "PrintTime",
+        ["到期日"] = "ExpireTime",
+        ["活期一本通"] = "PassbookNum",
+        ["币种"] = "CurrencyNum",
+        ["币别"] = "CurrencyNum",
+        ["货币"] = "Currency",
+        ["验证码"] = "VerificationCode",
+        ["校验码"] = "TransactionCode",
+        ["验证列表"] = "VerificationCode",
+        ["交易码"] = "TransactionCode",
+        ["设备编号"] = "DeviceNum",
+        ["经办设备"] = "DeviceNum",
+        ["页码"] = "DeviceNum",
+        ["申请日期"] = "ApplyTime",
+        ["截止日期列表"] = "ApplyTime",
+        ["回单编号"] = "ReceiptNum",
+        ["结单号"] = "ReceiptNum",
+        ["清单编号"] = "ReceiptNum",
+        ["印章流水"] = "ReceiptNum",
+        ["核心流水号"] = "ReceiptNum",
+        ["流水号"] = "ReceiptNum",
+        ["柜员流水号"] = "UserNum",
+        ["钞汇"] = "CashCheck",
+        ["钞汇标志"] = "CashCheck",
+        ["卡级别"] = "CardLevel",
+        ["上次交易日"] = "StampTime",
+        ["章内日期"] = "StampTime",
+        ["余额"] = "Deposit",
+        ["截止可用余额"] = "Deposit",
+        ["二维码"] = "QrCode",
+        ["二维码1"] = "QrCode",
+        ["邮编"] = "PostCode",
+        ["邮政编码"] = "PostCode",
+        ["账单地址"] = "BillAddress",
+        ["地址"] = "BillAddress",
+        ["开户行地址"] = "BillAddress",
+        ["存款人地址"] = "BillAddress",
+        ["记录状态"] = "RecordStatus",
+        ["打印次数"] = "RecordStatus",
+        ["转存方式"] = "DepositMethod",
+        ["收支类型"] = "FindType",
+        ["按收支筛选"] = "FilterByIncome",
+        ["按货币筛选"] = "FilterByCurrency",
+        ["年份"] = "Year",
+        ["截止月列表"] = "ProductSubType",
+        ["章内支行"] = "StampBranch",
+        ["章内编码"] = "StampCode",
+        ["章内编码2"] = "TransactionCode",
+        ["是否打印章"] = "IsPrintStamp",
+        ["备注"] = "Remark",
+        ["期初余额"] = "InitialBalance",
+        ["自动计算利息"] = "IsAutoInterest",
+        ["科目"] = "AccountType"
+    };
     private const string DefaultIcbcQrCodeValue = "https://www.gjxxbankk.com/check.html";
     private const string PrintDiagnosticsWrittenDataKey = "SpeedEmulator.PrintDiagnosticsWritten";
     private const string PrintDiagnosticPathDataKey = "SpeedEmulator.PrintDiagnosticPath";
@@ -124,6 +284,85 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         DefaultStimulsoftExporter.OpenTemplateDesigner(ResolveVendorDir(), context, template);
+    }
+
+    private static string ResolveDesignerVendorBankUserProperty(Bank bank, ColumnDefinition column)
+    {
+        var alias = column.Name?.Trim() ?? string.Empty;
+        var bankName = bank.Name?.Trim() ?? string.Empty;
+        var bankSpecificProperty = (bankName, alias) switch
+        {
+            ("农行", "卡号") or ("农行对公", "卡号") => "Account",
+            ("建行", "卡号") => "Account",
+            ("农行", "抬头") => "OpenBranch",
+            ("农行", "流水号") or ("农行对公", "流水号") => "VoucherType",
+            ("微信", "币种") => "Currency",
+            ("工行", "交易日期") => "PrintTime",
+            ("工行对公", "交易日期") => "InterestTime",
+            ("工行", "截止日期") => "EndTime",
+            ("工行对公", "截止日期") => "ExpireTime",
+            ("浦发对公", "年份") => "UserNum",
+            ("兴业对公", "年份") => "Year",
+            ("建行对公", "证件号码") => "CardNum",
+            ("平安", "清单编号") => "VoucherType",
+            ("民生", "活期一本通") => "PassbookNum",
+            ("民生对公", "打印渠道") => "DepositMethod",
+            ("交行对公", "支行名称") => "PrintBranch",
+            _ => string.Empty
+        };
+        if (!string.IsNullOrWhiteSpace(bankSpecificProperty))
+        {
+            return bankSpecificProperty;
+        }
+
+        if (DesignerBankUserFieldsByAlias.TryGetValue(alias, out var propertyName))
+        {
+            return propertyName;
+        }
+
+        return NormalizeFieldName(column.Field ?? string.Empty) switch
+        {
+            nameof(BankUser.Id) => "Id",
+            nameof(BankUser.AccountName) => "Username",
+            nameof(BankUser.AccountNo) => "AccountNum",
+            nameof(BankUser.CardNo) => "CardNum",
+            nameof(BankUser.IdNumber) => "IdNum",
+            nameof(BankUser.UserCode) => "UserNum",
+            nameof(BankUser.OpenBranch) => "OpenBranch",
+            nameof(BankUser.Balance) => "Balance",
+            nameof(BankUser.TransactionType) => "QueryType",
+            nameof(BankUser.Currency) => "Currency",
+            nameof(BankUser.ChapterCode) => "StampCode",
+            nameof(BankUser.ChapterBranch) => "StampBranch",
+            nameof(BankUser.ShouldPrintSeal) => "IsPrintStamp",
+            nameof(BankUser.Remark) => "Remark",
+            nameof(BankUser.OpeningBalance) => "InitialBalance",
+            nameof(BankUser.AutoCalculateInterest) => "IsAutoInterest",
+            nameof(BankUser.StartDate) => "StartTime",
+            nameof(BankUser.EndDate) => "EndTime",
+            _ => string.Empty
+        };
+    }
+
+    private static void ApplyConfiguredDesignerBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        foreach (var column in context.Bank.Columns.OrderBy(column => column.Order))
+        {
+            var propertyName = ResolveDesignerVendorBankUserProperty(context.Bank, column);
+            if (string.IsNullOrWhiteSpace(propertyName) || string.IsNullOrWhiteSpace(column.Name))
+            {
+                continue;
+            }
+
+            var value = GetBankUserColumnValue(context, values, column.Name);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                Set(target, propertyName, value);
+            }
+        }
     }
 
     public bool TryCreateBlankTemplate(PrintTemplate template)
@@ -1660,6 +1899,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
             ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
+            ApplyConfiguredDesignerBankUserFields(context, target, values);
             ApplyTemplateSpecificBankUserFields(context, target, values);
             ApplyAgriculturalElectronicReceiptNumber(context, target, values);
             return target;
@@ -2611,6 +2851,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
             ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
+            ApplyConfiguredDesignerBankUserFields(context, target, values);
             ApplyTemplateSpecificBankUserFields(context, target, values);
             ApplyAgriculturalElectronicReceiptNumber(context, target, values);
             return target;
@@ -3572,6 +3813,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
 
                 var editableVendorTemplate = CreateTemplate(template);
+                using var designerDefaults = new DesignerFlowBusinessObjectScope();
                 templateDesignerMethod.Invoke(null, [editableVendorTemplate]);
                 CopyTemplateBack(editableVendorTemplate, template);
                 template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
@@ -3585,9 +3827,71 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
             var vendorTemplate = CreateTemplate(template);
+            using var existingTemplateDesignerDefaults = new DesignerFlowBusinessObjectScope();
             templateDesignerMethod.Invoke(null, [vendorTemplate]);
             CopyTemplateBack(vendorTemplate, template);
             template.PdfData = NormalizeDesignerBusinessObjectColumns(context, template, template.PdfData);
+        }
+
+        private sealed class DesignerFlowBusinessObjectScope : IDisposable
+        {
+            public DesignerFlowBusinessObjectScope()
+            {
+                StiOptions.Engine.GlobalEvents.LoadedDesigner += BindUnassignedDataBands;
+                StiOptions.Engine.GlobalEvents.ReportChangedInDesigner += BindUnassignedDataBands;
+                StiOptions.Engine.GlobalEvents.ComponentCreated += BindCreatedDataBand;
+            }
+
+            public void Dispose()
+            {
+                StiOptions.Engine.GlobalEvents.LoadedDesigner -= BindUnassignedDataBands;
+                StiOptions.Engine.GlobalEvents.ReportChangedInDesigner -= BindUnassignedDataBands;
+                StiOptions.Engine.GlobalEvents.ComponentCreated -= BindCreatedDataBand;
+            }
+
+            private static void BindUnassignedDataBands(object? sender, EventArgs args)
+            {
+                if (sender is not IStiDesignerBase designer || designer.Report is null)
+                {
+                    return;
+                }
+
+                BindUnassignedDataBands(designer.Report);
+            }
+
+            private static void BindCreatedDataBand(object? sender, StiComponentCreationEventArgs args)
+            {
+                if (args.Component is not StiDataBand dataBand || args.Designer.Report is null)
+                {
+                    return;
+                }
+
+                BindDataBandToFlow(args.Designer.Report, dataBand);
+            }
+
+            private static void BindUnassignedDataBands(StiReport report)
+            {
+                foreach (var dataBand in report.GetComponents().OfType<StiDataBand>())
+                {
+                    BindDataBandToFlow(report, dataBand);
+                }
+            }
+
+            private static void BindDataBandToFlow(StiReport report, StiDataBand dataBand)
+            {
+                var flowBusinessObject = report.Dictionary.BusinessObjects["流水"];
+                if (flowBusinessObject is null || string.IsNullOrWhiteSpace(flowBusinessObject.Guid))
+                {
+                    return;
+                }
+
+                if (dataBand.DataSource is null
+                    && dataBand.BusinessObject is null
+                    && string.IsNullOrWhiteSpace(dataBand.BusinessObjectGuid))
+                {
+                    dataBand.BusinessObjectGuid = flowBusinessObject.Guid;
+                }
+            }
         }
 
         private void CreateBlankTemplate(PrintTemplate template)
@@ -3720,57 +4024,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private static string ToDesignerVendorBankUserColumnField(Bank bank, ColumnDefinition column)
         {
-            var localField = column.Field ?? string.Empty;
-            var canonicalField = localField switch
-            {
-                nameof(BankUser.Id) => "Id",
-                nameof(BankUser.AccountName) => "Username",
-                nameof(BankUser.AccountNo) => "AccountNum",
-                nameof(BankUser.CardNo) => "CardNum",
-                nameof(BankUser.IdNumber) => "IdNum",
-                nameof(BankUser.UserCode) => "UserNum",
-                nameof(BankUser.OpenBranch) => "OpenBranch",
-                nameof(BankUser.Balance) => "Balance",
-                nameof(BankUser.TransactionType) => "QueryType",
-                nameof(BankUser.Currency) => "Currency",
-                nameof(BankUser.ChapterCode) => "StampCode",
-                nameof(BankUser.ChapterBranch) => "StampBranch",
-                nameof(BankUser.ShouldPrintSeal) => "IsPrintStamp",
-                nameof(BankUser.Remark) => "Remark",
-                nameof(BankUser.OpeningBalance) => "InitialBalance",
-                nameof(BankUser.AutoCalculateInterest) => "IsAutoInterest",
-                nameof(BankUser.StartDate) => "StartTime",
-                nameof(BankUser.EndDate) => "EndTime",
-                _ => string.Empty
-            };
-
-            if (string.Equals(bank.Name, "农行", StringComparison.Ordinal))
-            {
-                canonicalField = column.Name switch
-                {
-                    "打印机构" => "PrintBranch",
-                    "打印日期" => "PrintTime",
-                    "姓名" => "Username",
-                    "卡号" => "Account",
-                    "账户序号" => "UserNum",
-                    "货币" => "Currency",
-                    "抬头" => "BankTitle",
-                    "开始日期" => "StartTime",
-                    "结束日期" => "EndTime",
-                    "流水号" => "ReceiptNum",
-                    "章内编码" => "StampCode",
-                    "章内支行" => "StampBranch",
-                    "证件号" => "IdNum",
-                    "是否打印章" => "IsPrintStamp",
-                    "备注" => "Remark",
-                    "期初余额" => "InitialBalance",
-                    "自动计算利息" => "IsAutoInterest",
-                    _ => canonicalField
-                };
-            }
+            var canonicalField = ResolveDesignerVendorBankUserProperty(bank, column);
 
             return string.IsNullOrWhiteSpace(canonicalField)
-                ? ToDesignerVendorColumnField(localField)
+                ? string.Empty
                 : ToDesignerVendorColumnField(canonicalField);
         }
 
@@ -3799,7 +4056,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
                 var migrateAgriculturalCustomUserSchema = !template.IsSystem
                     && IsAgriculturalBank(context.Bank);
+                var migrateCustomUserSchema = !template.IsSystem;
                 var normalizeCustomDateColumns = !template.IsSystem;
+                var userFieldReplacements = new Dictionary<string, string>(StringComparer.Ordinal);
                 var changed = false;
                 foreach (XmlElement columns in columnGroups.OfType<XmlElement>())
                 {
@@ -3824,6 +4083,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         var field = parts[0];
                         if (parts.Length == 3)
                         {
+                            if (migrateCustomUserSchema && isUserBusinessObject)
+                            {
+                                var configuredColumn = context.Bank.Columns.FirstOrDefault(column =>
+                                    string.Equals(column.Name, parts[1], StringComparison.Ordinal));
+                                var canonicalUserField = configuredColumn is null
+                                    ? string.Empty
+                                    : ResolveDesignerVendorBankUserProperty(context.Bank, configuredColumn);
+                                if (!string.IsNullOrWhiteSpace(canonicalUserField)
+                                    && !string.Equals(field, canonicalUserField, StringComparison.Ordinal))
+                                {
+                                    userFieldReplacements[field] = canonicalUserField;
+                                    field = canonicalUserField;
+                                    parts[0] = field;
+                                }
+                            }
+
                             if (migrateAgriculturalCustomUserSchema
                                 && isUserBusinessObject
                                 && string.Equals(field, "VoucherType", StringComparison.Ordinal)
@@ -3873,6 +4148,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
                 }
 
+                if (ReplaceDesignerBusinessObjectFieldReferences(document, userFieldReplacements))
+                {
+                    changed = true;
+                }
+
                 if (migrateAgriculturalCustomUserSchema)
                 {
                     var textNodes = document.SelectNodes("//text()[contains(., '用户.VoucherType')]");
@@ -3910,6 +4190,80 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 return pdfData;
             }
+        }
+
+        private static bool ReplaceDesignerBusinessObjectFieldReferences(
+            XmlDocument document,
+            IReadOnlyDictionary<string, string> replacements)
+        {
+            if (replacements.Count == 0)
+            {
+                return false;
+            }
+
+            var textNodes = document.SelectNodes("//text()");
+            if (textNodes is null)
+            {
+                return false;
+            }
+
+            var changed = false;
+            foreach (var textNode in textNodes.OfType<XmlText>())
+            {
+                var value = textNode.Value;
+                if (string.IsNullOrEmpty(value))
+                {
+                    continue;
+                }
+
+                var normalizedValue = value;
+                foreach (var replacement in replacements)
+                {
+                    foreach (var token in GetDesignerBusinessObjectFieldTokens(replacement.Key))
+                    {
+                        normalizedValue = Regex.Replace(
+                            normalizedValue,
+                            Regex.Escape(token),
+                            replacement.Value,
+                            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                    }
+                }
+
+                if (!string.Equals(value, normalizedValue, StringComparison.Ordinal))
+                {
+                    textNode.Value = normalizedValue;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        private static IReadOnlyCollection<string> GetDesignerBusinessObjectFieldTokens(string field)
+        {
+            var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { field };
+            var core = field;
+            if (core.StartsWith("_x005B_", StringComparison.OrdinalIgnoreCase)
+                && core.EndsWith("_x005D_", StringComparison.OrdinalIgnoreCase))
+            {
+                core = core[7..^7];
+            }
+            else
+            {
+                core = core.Trim('[', ']');
+            }
+
+            if (!string.IsNullOrWhiteSpace(core))
+            {
+                tokens.Add($"_{core}_");
+                var identifier = new string(core.Where(char.IsLetterOrDigit).ToArray());
+                if (!string.IsNullOrWhiteSpace(identifier))
+                {
+                    tokens.Add($"_{identifier}_");
+                }
+            }
+
+            return tokens.OrderByDescending(token => token.Length).ToArray();
         }
 
         private static bool IsDesignerDateColumn(
@@ -4133,6 +4487,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "IsAutoInterest", context.BankUser.AutoCalculateInterest);
             ApplyVendorBankUserStampFields(context, target, context.BankUser, values);
             Set(target, "BankTitle", context.Bank.Name);
+            ApplyConfiguredDesignerBankUserFields(context, target, values);
             ApplyTemplateSpecificBankUserFields(context, target, values);
             ApplyAgriculturalElectronicReceiptNumber(context, target, values);
             return target;
