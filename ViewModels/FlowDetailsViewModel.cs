@@ -36,7 +36,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
         IBankUserRepository? bankUserRepository = null,
         IPdfImportService? pdfImportService = null,
         IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null,
-        IBankInterestSettingsRepository? interestSettingsRepository = null)
+        IBankInterestSettingsRepository? interestSettingsRepository = null,
+        bool canUploadPdf = true)
     {
         Bank = bank;
         BankUser = bankUser;
@@ -46,6 +47,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         this.interestSettingsRepository = interestSettingsRepository;
         this.pdfImportService = pdfImportService ?? new PdfImportService();
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
+        CanUploadPdf = canUploadPdf;
         openingBalance = (double)bankUser.OpeningBalance;
         autoCalculateInterest = bankUser.AutoCalculateInterest;
 
@@ -68,7 +70,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         CloseCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
         ImportRecordCommand = new AsyncRelayCommand(ImportRecordsFromXlsxAsync);
         ExportRecordCommand = new RelayCommand(ExportRecordsToXlsx);
-        ImportPdfRecordCommand = new AsyncRelayCommand(ImportRecordsFromPdfAsync);
+        ImportPdfRecordCommand = new AsyncRelayCommand(ImportRecordsFromPdfAsync, () => CanUploadPdf);
     }
 
     public event EventHandler? RequestClose;
@@ -86,6 +88,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public Bank Bank { get; }
 
     public BankUser BankUser { get; }
+
+    public bool CanUploadPdf { get; }
 
     public string WindowTitle => $"流水页-版本({AppVersion.DisplayVersion})-{Bank.Name}";
 
@@ -158,7 +162,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         {
             allRecords.Clear();
             activeFilterConditions = [];
-            var records = await repository.ListByUserAsync(Bank.Id, BankUser.Id);
+            var records = await repository.ListByUserAsync(Bank, BankUser.Id);
             foreach (var item in records)
             {
                 allRecords.Add(item);
@@ -1021,6 +1025,12 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private bool EnsurePdfImportSupported()
     {
+        if (!CanUploadPdf)
+        {
+            StatusMessage = "当前账号版本不支持上传 PDF。";
+            return false;
+        }
+
         if (pdfImportService.IsBankSupported(Bank))
         {
             return true;

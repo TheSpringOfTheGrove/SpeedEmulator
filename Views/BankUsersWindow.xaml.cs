@@ -99,7 +99,7 @@ public partial class BankUsersWindow : Window
                 interestSettingsRepository,
                 new FlowRuleExcelService());
 
-            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
+            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService, viewModel.CanUploadPdf)
             {
                 Owner = this
             };
@@ -119,7 +119,7 @@ public partial class BankUsersWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, viewModel.CanUploadPdf);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
@@ -137,7 +137,7 @@ public partial class BankUsersWindow : Window
 
         try
         {
-            var records = await flowRecordRepository.ListByUserAsync(viewModel.Bank.Id, targetUser.Id);
+            var records = await flowRecordRepository.ListByUserAsync(viewModel.Bank, targetUser.Id);
             var printViewModel = new PrintPreviewViewModel(
                 viewModel.Bank,
                 targetUser,

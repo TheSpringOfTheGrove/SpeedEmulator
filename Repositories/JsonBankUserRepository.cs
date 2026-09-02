@@ -25,16 +25,24 @@ public sealed class JsonBankUserRepository : IBankUserRepository
             "bank-users.json");
     }
 
-    public Task<IReadOnlyList<BankUser>> ListByBankAsync(long bankId)
+    public Task<IReadOnlyList<BankUser>> ListByBankAsync(Bank bank)
     {
         lock (syncRoot)
         {
             EnsureLoaded();
             var result = users
-                .Where(user => user.BankId == bankId)
+                .Where(user => user.BankId == bank.Id
+                    || bank.AlternateIds.Contains(user.BankId)
+                    || string.Equals(user.BankName?.Trim(), bank.Name.Trim(), StringComparison.OrdinalIgnoreCase))
                 .OrderBy(user => user.UserCode)
                 .ThenBy(user => user.Id)
-                .Select(user => user.Clone())
+                .Select(user =>
+                {
+                    var copy = user.Clone();
+                    copy.BankId = bank.Id;
+                    copy.BankName = bank.Name;
+                    return copy;
+                })
                 .ToList();
 
             return Task.FromResult<IReadOnlyList<BankUser>>(result);

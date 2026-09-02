@@ -4,7 +4,7 @@ namespace SpeedEmulator.Repositories;
 
 public interface IBankUserRepository
 {
-    Task<IReadOnlyList<BankUser>> ListByBankAsync(long bankId);
+    Task<IReadOnlyList<BankUser>> ListByBankAsync(Bank bank);
 
     Task<BankUser> SaveAsync(BankUser user);
 

@@ -29,21 +29,49 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
             Path.GetFileNameWithoutExtension(this.storagePath));
     }
 
-    public Task<IReadOnlyList<FlowRecord>> ListByUserAsync(long bankId, long bankUserId)
+    public Task<IReadOnlyList<FlowRecord>> ListByUserAsync(Bank bank, long bankUserId)
     {
         lock (syncRoot)
         {
             EnsureLoaded();
-            var key = CreateKey(bankId, bankUserId);
-            if (!recordsByUser.TryGetValue(key, out var records))
+            var records = FindRecords(bank, bankUserId);
+            if (records is null)
             {
-                records = CreateSeed(bankId, bankUserId);
-                recordsByUser[key] = records;
-                PersistUser(bankId, bankUserId, records);
+                records = CreateSeed(bank.Id, bankUserId);
+                recordsByUser[CreateKey(bank.Id, bankUserId)] = records;
+                PersistUser(bank.Id, bankUserId, records);
             }
 
-            return Task.FromResult<IReadOnlyList<FlowRecord>>(records.Select(item => item.Clone()).ToList());
+            return Task.FromResult<IReadOnlyList<FlowRecord>>(records.Select(item =>
+            {
+                var copy = item.Clone();
+                copy.BankId = bank.Id;
+                copy.BankUserId = bankUserId;
+                return copy;
+            }).ToList());
         }
+    }
+
+    private List<FlowRecord>? FindRecords(Bank bank, long bankUserId)
+    {
+        foreach (var bankId in new[] { bank.Id }.Concat(bank.AlternateIds).Distinct())
+        {
+            if (recordsByUser.TryGetValue(CreateKey(bankId, bankUserId), out var records))
+            {
+                return records;
+            }
+        }
+
+        // Bank user IDs are allocated globally. This fallback recovers records
+        // written by a release whose generated bank ID no longer matches.
+        var suffix = $":{bankUserId}";
+        var matches = recordsByUser
+            .Where(item => item.Key.EndsWith(suffix, StringComparison.Ordinal))
+            .Select(item => item.Value)
+            .Take(2)
+            .ToList();
+
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     public Task SaveAllAsync(long bankId, long bankUserId, IEnumerable<FlowRecord> records)

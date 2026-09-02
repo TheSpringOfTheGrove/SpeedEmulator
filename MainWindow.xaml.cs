@@ -143,6 +143,12 @@ public partial class MainWindow : Window
 
     private void OpenBankUsersWindow(Bank bank)
     {
+        if (string.Equals(bank.Type, BankTypes.Corporate, StringComparison.Ordinal)
+            && !session.CanUseCorporateBank)
+        {
+            return;
+        }
+
         var viewModel = new BankUsersViewModel(
             bank,
             bankUserRepository,
@@ -152,7 +158,8 @@ public partial class MainWindow : Window
             tableExcelService,
             flowRecordRepository,
             pdfImportService,
-            pdfImportPreviewDialogService);
+            pdfImportPreviewDialogService,
+            session.CanUploadPdf);
         var window = new BankUsersWindow(viewModel, bankUserRepository, bankUserColumnSettingsRepository, bankInterestSettingsRepository, flowGenerationRepository, flowRecordRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
         {
             Owner = this

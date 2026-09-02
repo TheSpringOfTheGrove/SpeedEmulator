@@ -674,7 +674,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
             await Task.Yield();
 
             SetGenerationProgress(12, "正在检查已有流水");
-            var existingRecords = await flowRecordRepository.ListByUserAsync(Bank.Id, BankUser.Id);
+            var existingRecords = await flowRecordRepository.ListByUserAsync(Bank, BankUser.Id);
             var appendToExistingRecords = false;
             if (existingRecords.Count > 0)
             {

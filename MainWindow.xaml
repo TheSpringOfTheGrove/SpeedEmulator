@@ -228,6 +228,8 @@
                        VerticalAlignment="Center">
                 <Run Text="ID: " />
                 <Run Text="{Binding ExeId, Mode=OneWay}" />
+                <Run Text="  账号版本: " />
+                <Run Text="{Binding PermissionName, Mode=OneWay}" />
             </TextBlock>
         </Border>
 
@@ -237,9 +239,10 @@
                     BorderThickness="1">
                 <TabControl Margin="0"
                             Style="{StaticResource HomeTabControlStyle}"
-                            SelectedIndex="0"
+                            SelectedIndex="{Binding InitialSelectedBankCategoryIndex, Mode=OneTime}"
                             BorderThickness="0">
-                    <TabItem Header="个人">
+                    <TabItem Header="个人"
+                             Visibility="{Binding HasPersonalBanks, Converter={StaticResource BoolToVisibilityConverter}}">
                         <ScrollViewer Padding="10,12,8,12" VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding GeRenBanks}"
                                               ItemTemplate="{StaticResource BankTileTemplate}">
@@ -251,7 +254,8 @@
                                 </ItemsControl>
                         </ScrollViewer>
                     </TabItem>
-                    <TabItem Header="对公">
+                    <TabItem Header="对公"
+                             Visibility="{Binding HasCorporateBanks, Converter={StaticResource BoolToVisibilityConverter}}">
                         <ScrollViewer Padding="10,12,8,12" VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding DuiGongBanks}"
                                               ItemTemplate="{StaticResource BankTileTemplate}">
@@ -263,7 +267,8 @@
                                 </ItemsControl>
                         </ScrollViewer>
                     </TabItem>
-                    <TabItem Header="地方">
+                    <TabItem Header="地方"
+                             Visibility="{Binding HasLocalBanks, Converter={StaticResource BoolToVisibilityConverter}}">
                         <ScrollViewer Padding="10,12,8,12" VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding DiFangBanks}"
                                               ItemTemplate="{StaticResource BankTileTemplate}">
@@ -275,7 +280,8 @@
                                 </ItemsControl>
                         </ScrollViewer>
                     </TabItem>
-                    <TabItem Header="凭条">
+                    <TabItem Header="凭条"
+                             Visibility="{Binding HasReceiptBanks, Converter={StaticResource BoolToVisibilityConverter}}">
                         <ScrollViewer Padding="10,12,8,12" VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding ReceiptBanks}"
                                               ItemTemplate="{StaticResource BankTileTemplate}">

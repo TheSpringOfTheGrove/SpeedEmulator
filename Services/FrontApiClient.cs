@@ -124,7 +124,7 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
             HttpMethod.Get,
             SessionEndpoint,
             cancellationToken);
-        session.Apply(payload);
+        session.Apply(payload, preserveExistingToken: true);
         return session;
     }
 
@@ -162,6 +162,12 @@ public sealed class FrontApiClient : IFrontApiClient, IDisposable
 
     public async Task<BankUser> SaveBankUserAsync(Bank bank, BankUser user, CancellationToken cancellationToken = default)
     {
+        if (string.Equals(bank.Type, BankTypes.Corporate, StringComparison.Ordinal)
+            && !session.CanUseCorporateBank)
+        {
+            throw new FrontApiException("当前账号版本无权新增或修改对公银行数据。");
+        }
+
         if (string.IsNullOrWhiteSpace(bank.Code))
         {
             throw new FrontApiException("当前银行缺少后台授权 Code，请重新登录后再保存。");

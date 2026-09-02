@@ -49,6 +49,10 @@ public sealed class Bank : ObservableObject
 
     public List<ColumnDefinition> FlowColumns { get; } = [];
 
+    // IDs used by short-lived releases before this bank was restored to its
+    // legacy persistent ID. They are read aliases only; new data uses Id.
+    public List<long> AlternateIds { get; } = [];
+
     public bool IsReadConfigExcel
     {
         get => isReadConfigExcel;

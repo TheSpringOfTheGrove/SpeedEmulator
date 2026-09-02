@@ -22,6 +22,7 @@ public partial class FlowGenerationWindow : Window
     private readonly ITableExcelService tableExcelService;
     private readonly IPdfImportService pdfImportService;
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
+    private readonly bool canUploadPdf;
 
     public FlowGenerationWindow(
         FlowGenerationViewModel viewModel,
@@ -31,7 +32,8 @@ public partial class FlowGenerationWindow : Window
         IBankUserRepository bankUserRepository,
         ITableExcelService tableExcelService,
         IPdfImportService pdfImportService,
-        IPdfImportPreviewDialogService pdfImportPreviewDialogService)
+        IPdfImportPreviewDialogService pdfImportPreviewDialogService,
+        bool canUploadPdf)
     {
         InitializeComponent();
         this.viewModel = viewModel;
@@ -42,6 +44,7 @@ public partial class FlowGenerationWindow : Window
         this.tableExcelService = tableExcelService;
         this.pdfImportService = pdfImportService;
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService;
+        this.canUploadPdf = canUploadPdf;
         DataContext = viewModel;
         viewModel.RequestClose += ViewModel_RequestClose;
         viewModel.RequestOpenMonthDetails += ViewModel_RequestOpenMonthDetails;
@@ -136,7 +139,7 @@ public partial class FlowGenerationWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, canUploadPdf);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this

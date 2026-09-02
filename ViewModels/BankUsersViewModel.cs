@@ -40,7 +40,8 @@ public sealed class BankUsersViewModel : ObservableObject
         ITableExcelService tableExcelService,
         IFlowRecordRepository flowRecordRepository,
         IPdfImportService? pdfImportService = null,
-        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null)
+        IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null,
+        bool canUploadPdf = true)
     {
         Bank = bank;
         this.repository = repository;
@@ -51,6 +52,7 @@ public sealed class BankUsersViewModel : ObservableObject
         this.flowRecordRepository = flowRecordRepository;
         this.pdfImportService = pdfImportService ?? new PdfImportService();
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
+        CanUploadPdf = canUploadPdf;
         editableUser = BankUser.CreateDraft(bank);
         statusMessage = $"正在维护 {bank.Name} 用户资料";
 
@@ -72,7 +74,7 @@ public sealed class BankUsersViewModel : ObservableObject
         BackCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
         ImportXlsxCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromXlsxAsync);
         ExportXlsxCommand = new AsyncRelayCommand(ExportSelectedUserFlowsToXlsxAsync);
-        ImportPdfCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromPdfAsync);
+        ImportPdfCommand = new AsyncRelayCommand(ImportSelectedUserFlowsFromPdfAsync, () => CanUploadPdf);
     }
 
     public event EventHandler? RequestClose;
@@ -88,6 +90,8 @@ public sealed class BankUsersViewModel : ObservableObject
     public event EventHandler? RequestOpenInterestSettings;
 
     public Bank Bank { get; }
+
+    public bool CanUploadPdf { get; }
 
     public string WindowTitle => $"流水主页界面-版本({AppVersion.DisplayVersion})-{Bank.Name}{Bank.Type}";
 
@@ -198,7 +202,7 @@ public sealed class BankUsersViewModel : ObservableObject
         try
         {
             Users.Clear();
-            var users = await repository.ListByBankAsync(Bank.Id);
+            var users = await repository.ListByBankAsync(Bank);
             foreach (var user in users)
             {
                 Users.Add(user);
@@ -976,6 +980,12 @@ public sealed class BankUsersViewModel : ObservableObject
 
     private bool EnsurePdfImportSupported()
     {
+        if (!CanUploadPdf)
+        {
+            StatusMessage = "当前账号版本不支持上传 PDF。";
+            return false;
+        }
+
         if (pdfImportService.IsBankSupported(Bank))
         {
             return true;
@@ -1005,7 +1015,7 @@ public sealed class BankUsersViewModel : ObservableObject
                 return;
             }
 
-            var records = await flowRecordRepository.ListByUserAsync(Bank.Id, SelectedUser.Id);
+            var records = await flowRecordRepository.ListByUserAsync(Bank, SelectedUser.Id);
             tableExcelService.ExportFlowRecords(path, records, Bank, SelectedUser);
             StatusMessage = $"导出成功：{path}";
             MessageBox.Show("导出成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);

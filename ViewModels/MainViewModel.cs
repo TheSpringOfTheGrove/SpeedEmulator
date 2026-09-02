@@ -14,6 +14,50 @@ public sealed class MainViewModel : ObservableObject
     private const string DefaultContactText = "客服联系方式\nQQ号：2295429421\n没加好友的加下QQ好友，有问题或者高低配文字咨询客服。";
     private const string DefaultAnnouncementText = "各位老板、发大财；有什么需要优化的地方，请添加客服反馈！";
 
+    private static readonly IReadOnlyDictionary<string, long> LegacyPersonalBankIds =
+        new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["支付宝"] = 1,
+            ["微信"] = 2,
+            ["个人农商"] = 3,
+            ["工行"] = 4,
+            ["光大"] = 5,
+            ["广发"] = 6,
+            ["华夏"] = 7,
+            ["建行"] = 8,
+            ["交行"] = 9,
+            ["民生"] = 10,
+            ["农行"] = 11,
+            ["平安"] = 12,
+            ["浦发"] = 13,
+            ["兴业"] = 14,
+            ["邮政"] = 15,
+            ["招行"] = 16,
+            ["中信"] = 17,
+            ["中行"] = 18
+        };
+
+    private static readonly IReadOnlyDictionary<string, long> LegacyCorporateBankIds =
+        new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["对公农商"] = 101,
+            ["民生对公"] = 102,
+            ["中信对公"] = 103,
+            ["工行对公"] = 104,
+            ["农行对公"] = 105,
+            ["中行对公"] = 106,
+            ["光大对公"] = 107,
+            ["平安对公"] = 108,
+            ["广发对公"] = 109,
+            ["浦发对公"] = 110,
+            ["华夏对公"] = 111,
+            ["兴业对公"] = 112,
+            ["建行对公"] = 113,
+            ["邮政对公"] = 114,
+            ["交行对公"] = 115,
+            ["招行对公"] = 116
+        };
+
     private readonly FrontSession session;
     private readonly Action<Bank>? openBankUsers;
     private readonly IFrontApiClient? frontApiClient;
@@ -42,6 +86,30 @@ public sealed class MainViewModel : ObservableObject
     public string CurrentYear => DateTime.Now.Year.ToString();
 
     public string AccountDisplay => string.IsNullOrWhiteSpace(session.DisplayName) ? session.Account : session.DisplayName;
+
+    public string PermissionName => session.PermissionName;
+
+    public bool CanUsePersonalBank => session.CanUsePersonalBank;
+
+    public bool CanUseCorporateBank => session.CanUseCorporateBank;
+
+    public bool HasPersonalBanks => GeRenBanks.Count > 0;
+
+    public bool HasCorporateBanks => DuiGongBanks.Count > 0;
+
+    public bool HasLocalBanks => DiFangBanks.Count > 0;
+
+    public bool HasReceiptBanks => ReceiptBanks.Count > 0;
+
+    public int InitialSelectedBankCategoryIndex => HasPersonalBanks
+        ? 0
+        : HasCorporateBanks
+            ? 1
+            : HasLocalBanks
+                ? 2
+                : HasReceiptBanks
+                    ? 3
+                    : -1;
 
     public ObservableCollection<Bank> GeRenBanks { get; } = [];
 
@@ -114,6 +182,18 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        if (string.Equals(bank.Type, BankTypes.Corporate, StringComparison.Ordinal) && !CanUseCorporateBank)
+        {
+            StatusMessage = "当前账号版本无权使用对公银行功能。";
+            return;
+        }
+
+        if (string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal) && !CanUsePersonalBank)
+        {
+            StatusMessage = "当前账号无权使用个人银行功能。";
+            return;
+        }
+
         SelectedBank = bank;
         StatusMessage = $"已选择：{bank.Name}（{bank.GetBankType()}），正在打开用户列表。";
         openBankUsers?.Invoke(bank);
@@ -121,30 +201,30 @@ public sealed class MainViewModel : ObservableObject
 
     private void SeedBanks()
     {
-        var knownBanks = CreateKnownBanks();
-        foreach (var bank in knownBanks)
+        foreach (var authorizedBank in session.AuthorizedBanks)
         {
-            AddAuthorizedBank(bank);
+            var type = NormalizeBankType(authorizedBank.Category);
+            if (type == BankTypes.Corporate && !CanUseCorporateBank)
+            {
+                continue;
+            }
+
+            if (type == BankTypes.Personal && !CanUsePersonalBank)
+            {
+                continue;
+            }
+
+            AddAuthorizedBank(CreateAuthorizedBank(authorizedBank, type));
         }
 
-        StatusMessage = $"{AccountDisplay} 已登录，已加载全部银行 {TotalBankCount} 个。";
+        StatusMessage = $"{AccountDisplay} 已登录（{PermissionName}），已加载授权银行 {TotalBankCount} 个。";
 
         OnPropertyChanged(nameof(TotalBankCount));
-    }
-
-    private static List<Bank> CreateKnownBanks()
-    {
-        var banks = new List<Bank>();
-
-        AddRange(banks, BankTypes.Personal,
-            "支付宝", "微信", "个人农商",
-            "工行", "光大", "广发", "华夏", "建行", "交行", "民生",
-            "农行", "平安", "浦发", "兴业", "邮政", "招行", "中信", "中行");
-
-        AddRange(banks, BankTypes.Corporate,
-            "对公农商", "民生对公", "中信对公", "工行对公", "农行对公", "中行对公", "光大对公", "平安对公", "广发对公", "浦发对公", "华夏对公", "兴业对公", "建行对公", "邮政对公", "交行对公", "招行对公");
-
-        return banks;
+        OnPropertyChanged(nameof(HasPersonalBanks));
+        OnPropertyChanged(nameof(HasCorporateBanks));
+        OnPropertyChanged(nameof(HasLocalBanks));
+        OnPropertyChanged(nameof(HasReceiptBanks));
+        OnPropertyChanged(nameof(InitialSelectedBankCategoryIndex));
     }
 
     private void AddAuthorizedBank(Bank bank)
@@ -166,36 +246,41 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private static void AddRange(ICollection<Bank> target, string type, params string[] names)
+    private static Bank CreateAuthorizedBank(AuthorizedBankInfo authorizedBank, string type)
     {
-        var startId = type switch
-        {
-            BankTypes.Personal => 1,
-            BankTypes.Corporate => 101,
-            BankTypes.Local => 201,
-            _ => 301
-        };
-
-        for (var index = 0; index < names.Length; index++)
-        {
-            target.Add(CreateBank(startId + index, names[index], type, index % 3 == 0));
-        }
-    }
-
-    private static Bank CreateBank(long id, string name, string type, bool isReadConfigExcel)
-    {
+        var generatedId = CreateAuthorizedBankId(authorizedBank, type);
+        var persistentId = ResolvePersistentBankId(type, authorizedBank.Name, generatedId);
         var bank = new Bank
         {
-            Id = id,
-            Code = BuildBankCode(type, name),
-            Name = name,
+            Id = persistentId,
+            Code = authorizedBank.Code?.Trim() ?? string.Empty,
+            Name = authorizedBank.Name?.Trim() ?? string.Empty,
             Type = type,
             Rate = 0,
-            IsReadConfigExcel = isReadConfigExcel
+            IsReadConfigExcel = false
         };
+
+        if (generatedId != persistentId)
+        {
+            bank.AlternateIds.Add(generatedId);
+        }
 
         ConfigureBankColumns(bank);
         return bank;
+    }
+
+    private static long ResolvePersistentBankId(string type, string? name, long generatedId)
+    {
+        var normalizedName = name?.Trim() ?? string.Empty;
+        var legacyIds = type == BankTypes.Personal
+            ? LegacyPersonalBankIds
+            : type == BankTypes.Corporate
+                ? LegacyCorporateBankIds
+                : null;
+
+        return legacyIds is not null && legacyIds.TryGetValue(normalizedName, out var legacyId)
+            ? legacyId
+            : generatedId;
     }
 
     private static long CreateAuthorizedBankId(AuthorizedBankInfo authorizedBank, string type)
@@ -217,41 +302,14 @@ public sealed class MainViewModel : ObservableObject
 
     private static string NormalizeBankType(string? category)
     {
-        return category?.Trim() switch
+        return category?.Trim().ToUpperInvariant() switch
         {
-            BankTypes.Personal => BankTypes.Personal,
-            BankTypes.Corporate => BankTypes.Corporate,
-            BankTypes.Local => BankTypes.Local,
-            BankTypes.Receipt => BankTypes.Receipt,
+            "PERSONAL" or "PERSONAL_BANK" or "个人" or "个人银行" => BankTypes.Personal,
+            "CORPORATE" or "CORPORATE_BANK" or "对公" or "对公银行" => BankTypes.Corporate,
+            "LOCAL" or "LOCAL_BANK" or "地方" or "地方银行" => BankTypes.Local,
+            "RECEIPT" or "凭条" => BankTypes.Receipt,
             _ => BankTypes.Personal
         };
-    }
-
-    private static string BuildBankCode(string type, string name)
-    {
-        var prefix = type switch
-        {
-            BankTypes.Personal => "P",
-            BankTypes.Corporate => "C",
-            BankTypes.Local => "L",
-            _ => "R"
-        };
-
-        return $"{prefix}_{JavaStringHashCode(name):X}";
-    }
-
-    private static int JavaStringHashCode(string value)
-    {
-        unchecked
-        {
-            var hash = 0;
-            foreach (var ch in value)
-            {
-                hash = (31 * hash) + ch;
-            }
-
-            return hash;
-        }
     }
 
     private static void ConfigureBankColumns(Bank bank)
