@@ -203,6 +203,7 @@ public sealed class BankUsersViewModel : ObservableObject
         {
             Users.Clear();
             var users = await repository.ListByBankAsync(Bank);
+            var recoveredFlowCount = await flowRecordRepository.RecoverTemporaryUserRecordsAsync(Bank.Id, users);
             foreach (var user in users)
             {
                 Users.Add(user);
@@ -213,7 +214,9 @@ public sealed class BankUsersViewModel : ObservableObject
 
             if (Users.Count > 0)
             {
-                StatusMessage = $"已载入 {Users.Count} 个 {Bank.Name} 用户，请选择用户或点击新增。";
+                StatusMessage = recoveredFlowCount > 0
+                    ? $"已载入 {Users.Count} 个 {Bank.Name} 用户，并恢复 {recoveredFlowCount} 份临时用户流水。"
+                    : $"已载入 {Users.Count} 个 {Bank.Name} 用户，请选择用户或点击新增。";
             }
             else
             {
@@ -383,6 +386,12 @@ public sealed class BankUsersViewModel : ObservableObject
             target.BankName = Bank.Name;
 
             var localSaved = await repository.SaveAsync(target);
+            ApplySavedUserIdentity(target, localSaved);
+            if (originalId <= 0 && localSaved.Id > 0 && originalId != localSaved.Id)
+            {
+                await flowRecordRepository.MoveUserRecordsAsync(Bank.Id, originalId, localSaved.Id);
+            }
+
             ReplaceUserInList(target, originalId, localSaved);
             StatusMessage = "保存成功";
             _ = SyncBackendUserAsync(localSaved);
@@ -397,6 +406,14 @@ public sealed class BankUsersViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    private static void ApplySavedUserIdentity(BankUser target, BankUser saved)
+    {
+        target.Id = saved.Id;
+        target.BackendId = saved.BackendId;
+        target.CreatedAt = saved.CreatedAt;
+        target.UpdatedAt = saved.UpdatedAt;
     }
 
     private void NormalizeEditableUserBeforeSave(BankUser user)

@@ -98,6 +98,133 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
         }
     }
 
+    public Task MoveUserRecordsAsync(long bankId, long sourceBankUserId, long targetBankUserId)
+    {
+        if (sourceBankUserId == targetBankUserId)
+        {
+            return Task.CompletedTask;
+        }
+
+        lock (syncRoot)
+        {
+            EnsureLoaded();
+            MoveUserRecords(bankId, sourceBankUserId, targetBankUserId);
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<int> RecoverTemporaryUserRecordsAsync(long bankId, IReadOnlyList<BankUser> users)
+    {
+        lock (syncRoot)
+        {
+            EnsureLoaded();
+            var claimedUserIds = new HashSet<long>();
+            var migrations = new List<(long SourceId, long TargetId)>();
+            foreach (var source in recordsByUser
+                         .Where(item => TryParseStorageKey(item.Key, out var itemBankId, out var itemUserId)
+                             && itemBankId == bankId
+                             && itemUserId <= 0
+                             && item.Value.Count > 0)
+                         .Select(item => new
+                         {
+                             SourceId = ParseUserId(item.Key),
+                             Records = item.Value
+                         })
+                         .Where(item => item.SourceId.HasValue)
+                         .ToList())
+            {
+                var shardPath = GetShardPath(bankId, source.SourceId!.Value);
+                if (!File.Exists(shardPath))
+                {
+                    continue;
+                }
+
+                var accountValues = source.Records
+                    .SelectMany(record => new[] { record.Account, record.AccountNum })
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (accountValues.Count == 0)
+                {
+                    continue;
+                }
+
+                var modifiedAt = File.GetLastWriteTime(shardPath);
+                var candidates = users
+                    .Where(user => user.Id > 0 && !claimedUserIds.Contains(user.Id))
+                    .Where(user => accountValues.Contains(user.AccountNo?.Trim() ?? string.Empty)
+                        || accountValues.Contains(user.CardNo?.Trim() ?? string.Empty))
+                    .Where(user => !recordsByUser.TryGetValue(CreateKey(bankId, user.Id), out var records)
+                        || records.Count == 0)
+                    .Select(user => new
+                    {
+                        User = user,
+                        Distance = Math.Min(
+                            Math.Abs((user.CreatedAt.ToLocalTime() - modifiedAt).TotalSeconds),
+                            Math.Abs((user.UpdatedAt.ToLocalTime() - modifiedAt).TotalSeconds))
+                    })
+                    .Where(item => item.Distance <= TimeSpan.FromMinutes(5).TotalSeconds)
+                    .OrderBy(item => item.Distance)
+                    .ThenByDescending(item => item.User.Id)
+                    .ToList();
+                if (candidates.Count == 0
+                    || (candidates.Count > 1
+                        && Math.Abs(candidates[0].Distance - candidates[1].Distance) < 1d))
+                {
+                    continue;
+                }
+
+                migrations.Add((source.SourceId.Value, candidates[0].User.Id));
+                claimedUserIds.Add(candidates[0].User.Id);
+            }
+
+            foreach (var migration in migrations)
+            {
+                MoveUserRecords(bankId, migration.SourceId, migration.TargetId);
+            }
+
+            return Task.FromResult(migrations.Count);
+        }
+    }
+
+    private void MoveUserRecords(long bankId, long sourceBankUserId, long targetBankUserId)
+    {
+        var sourceKey = CreateKey(bankId, sourceBankUserId);
+        if (!recordsByUser.TryGetValue(sourceKey, out var sourceRecords))
+        {
+            return;
+        }
+
+        var targetKey = CreateKey(bankId, targetBankUserId);
+        var targetRecords = recordsByUser.TryGetValue(targetKey, out var existingTargetRecords)
+            ? existingTargetRecords
+            : [];
+        var migrated = targetRecords
+            .Concat(sourceRecords)
+            .Select(record =>
+            {
+                var copy = record.Clone();
+                copy.BankId = bankId;
+                copy.BankUserId = targetBankUserId;
+                RemoveInternalFields(copy);
+                return copy;
+            })
+            .OrderBy(record => record.AccountTime ?? DateTime.MaxValue)
+            .ThenBy(record => record.Index)
+            .ToList();
+        for (var index = 0; index < migrated.Count; index++)
+        {
+            migrated[index].Index = index + 1;
+        }
+
+        // Keep the source intact until the target shard has been replaced successfully.
+        PersistUser(bankId, targetBankUserId, migrated);
+        recordsByUser[targetKey] = migrated;
+
+        recordsByUser.Remove(sourceKey);
+        DeleteUserShard(bankId, sourceBankUserId);
+    }
+
     private void EnsureLoaded()
     {
         if (loaded)
@@ -199,6 +326,21 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
         return Path.Combine(storageDirectory, $"{bankId}-{bankUserId}.json");
     }
 
+    private void DeleteUserShard(long bankId, long bankUserId)
+    {
+        var shardPath = GetShardPath(bankId, bankUserId);
+        if (File.Exists(shardPath))
+        {
+            File.Delete(shardPath);
+        }
+
+        var temporaryPath = shardPath + ".tmp";
+        if (File.Exists(temporaryPath))
+        {
+            File.Delete(temporaryPath);
+        }
+    }
+
     private static bool TryParseShardKey(string path, out string key)
     {
         key = string.Empty;
@@ -289,6 +431,21 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
     private static string CreateKey(long bankId, long bankUserId)
     {
         return $"{bankId}:{bankUserId}";
+    }
+
+    private static bool TryParseStorageKey(string key, out long bankId, out long bankUserId)
+    {
+        bankId = 0;
+        bankUserId = 0;
+        var separatorIndex = key.IndexOf(':', StringComparison.Ordinal);
+        return separatorIndex > 0
+            && long.TryParse(key[..separatorIndex], out bankId)
+            && long.TryParse(key[(separatorIndex + 1)..], out bankUserId);
+    }
+
+    private static long? ParseUserId(string key)
+    {
+        return TryParseStorageKey(key, out _, out var bankUserId) ? bankUserId : null;
     }
 
     private static string RandomDigits(int seed, int length)

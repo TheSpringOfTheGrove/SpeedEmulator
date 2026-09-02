@@ -607,7 +607,16 @@ public sealed class FlowGenerationViewModel : ObservableObject
         BankUser.OpeningBalance = Convert.ToDecimal(Config.OpeningBalance);
         BankUser.BankId = Bank.Id;
         BankUser.BankName = Bank.Name;
-        await bankUserRepository.SaveAsync(BankUser);
+        var originalId = BankUser.Id;
+        var saved = await bankUserRepository.SaveAsync(BankUser);
+        BankUser.Id = saved.Id;
+        BankUser.BackendId = saved.BackendId;
+        BankUser.CreatedAt = saved.CreatedAt;
+        BankUser.UpdatedAt = saved.UpdatedAt;
+        if (originalId <= 0 && saved.Id > 0 && originalId != saved.Id)
+        {
+            await flowRecordRepository.MoveUserRecordsAsync(Bank.Id, originalId, saved.Id);
+        }
     }
 
     private static int CountCoveredMonths(DateTime startDate, DateTime endDate)
@@ -666,6 +675,9 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         IsBusy = true;
         GenerationProgress = 0;
+        var previousUserStartDate = BankUser.StartDate;
+        var previousUserEndDate = BankUser.EndDate;
+        var previousOpeningBalance = Convert.ToDouble(BankUser.OpeningBalance);
 
         try
         {
@@ -740,13 +752,43 @@ public sealed class FlowGenerationViewModel : ObservableObject
             var recordsToSave = appendToExistingRecords
                 ? MergeGeneratedRecordsForAppend(existingRecords, result.Records)
                 : result.Records;
+            if (appendToExistingRecords)
+            {
+                var completeOpeningBalance = Config.StartTime < previousUserStartDate
+                    ? result.OpeningBalance
+                    : previousOpeningBalance;
+                var completeRange = ResolveCompleteStatementRange(
+                    existingRecords,
+                    result.Records,
+                    previousUserStartDate,
+                    previousUserEndDate,
+                    Config.StartTime,
+                    Config.EndTime);
+                Config.StartTime = completeRange.Start;
+                Config.EndTime = completeRange.End;
+                Config.OpeningBalance = completeOpeningBalance;
+                RecalculateCompleteStatement(
+                    recordsToSave,
+                    interestSetting,
+                    completeOpeningBalance,
+                    completeRange.Start,
+                    completeRange.End);
+            }
+
             await flowRecordRepository.SaveAllAsync(Bank.Id, BankUser.Id, recordsToSave);
             await SaveBankUserValuesAsync();
             await Task.Yield();
 
             SetGenerationProgress(92, "正在准备流水明细页面");
+            var savedIncomeTotal = RoundMoney(recordsToSave
+                .Where(item => item.TradeMoney > 0)
+                .Sum(item => item.TradeMoney ?? 0));
+            var savedExpenseTotal = RoundMoney(recordsToSave
+                .Where(item => item.TradeMoney < 0)
+                .Sum(item => Math.Abs(item.TradeMoney ?? 0)));
+            var savedFinalBalance = recordsToSave.LastOrDefault()?.Balance ?? previousOpeningBalance;
             StatusMessage = appendToExistingRecords
-                ? $"追加生成完成：新增 {result.Records.Count} 条，当前共 {recordsToSave.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}"
+                ? $"追加生成完成：新增 {result.Records.Count} 条，当前共 {recordsToSave.Count} 条，收入合计 {savedIncomeTotal:N2}，支出合计 {savedExpenseTotal:N2}，期末余额 {savedFinalBalance:N2}"
                 : $"生成完成：{result.Records.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}";
             MessageBox.Show(
                 appendToExistingRecords
@@ -789,6 +831,72 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
 
         return merged;
+    }
+
+    private void RecalculateCompleteStatement(
+        List<FlowRecord> records,
+        BankInterestSetting? interestSetting,
+        double openingBalance,
+        DateTime start,
+        DateTime end)
+    {
+        FlowRecordChronologicalOrder.SortInPlace(records);
+        if (BankUser?.AutoCalculateInterest == true)
+        {
+            BankInterestCalculationService.Recalculate(
+                Bank,
+                BankUser,
+                interestSetting,
+                records,
+                openingBalance,
+                start,
+                end);
+            FlowRecordChronologicalOrder.SortInPlace(records);
+        }
+
+        var balance = RoundMoney(openingBalance);
+        for (var index = 0; index < records.Count; index++)
+        {
+            var record = records[index];
+            var amount = RoundMoney(record.TradeMoney ?? 0);
+            balance = RoundMoney(balance + amount);
+            record.Index = index + 1;
+            record.TradeMoney = amount;
+            record.Balance = balance;
+            record.BalanceAmount = balance;
+            record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
+            record.CreditAmount = amount > 0 ? amount : null;
+            record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
+            record.IncomeFlag = amount >= 0 ? "C" : "D";
+        }
+    }
+
+    private static (DateTime Start, DateTime End) ResolveCompleteStatementRange(
+        IEnumerable<FlowRecord> existingRecords,
+        IEnumerable<FlowRecord> generatedRecords,
+        DateTime previousStart,
+        DateTime previousEnd,
+        DateTime generatedStart,
+        DateTime generatedEnd)
+    {
+        var recordTimes = existingRecords
+            .Concat(generatedRecords)
+            .Where(item => item.AccountTime.HasValue)
+            .Select(item => item.AccountTime!.Value)
+            .ToList();
+        var start = new[]
+        {
+            previousStart,
+            generatedStart,
+            recordTimes.Count > 0 ? recordTimes.Min() : generatedStart
+        }.Min();
+        var end = new[]
+        {
+            previousEnd,
+            generatedEnd,
+            recordTimes.Count > 0 ? recordTimes.Max() : generatedEnd
+        }.Max();
+        return (start.Date, end.TimeOfDay == TimeSpan.Zero ? end.Date : end);
     }
 
     private GenerationAttempt GenerateWithRequest(FlowAutoGenerationRequest request)
