@@ -367,8 +367,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
             RecalculateRecordBalances(currentOpeningBalance, normalizeTransactionFields: shouldCalculateInterest);
             var negativeBalance = FindFirstNegativeBalance();
             NegativeBalanceRepairResult? repairResult = null;
-            var canRepairNegativeBalance = shouldCalculateInterest;
-            if (negativeBalance is not null && canRepairNegativeBalance)
+            if (negativeBalance is not null)
             {
                 var choice = MessageBox.Show(
                     $"检测到第 {negativeBalance.Value.Index + 1} 行余额存在负值 " +
