@@ -184,6 +184,8 @@
                 <CheckBox Grid.Column="5"
                           Content="自动计算利息"
                           IsChecked="{Binding AutoCalculateInterest}"
+                          IsEnabled="{Binding CanAutoCalculateInterest}"
+                          ToolTip="微信、支付宝不计算利息"
                           VerticalAlignment="Center"
                           Margin="12,0,0,0" />
 

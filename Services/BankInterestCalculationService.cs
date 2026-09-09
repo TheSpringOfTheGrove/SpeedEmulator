@@ -90,6 +90,11 @@ public static class BankInterestCalculationService
         ArgumentNullException.ThrowIfNull(bankUser);
         ArgumentNullException.ThrowIfNull(records);
 
+        if (!BankInterestPolicy.ShouldCalculate(bank, bankUser))
+        {
+            return default;
+        }
+
         if (!TryParseConfiguration(setting, out var configuration))
         {
             return default;

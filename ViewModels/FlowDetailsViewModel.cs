@@ -49,7 +49,9 @@ public sealed class FlowDetailsViewModel : ObservableObject
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         CanUploadPdf = canUploadPdf;
         openingBalance = (double)bankUser.OpeningBalance;
-        autoCalculateInterest = bankUser.AutoCalculateInterest;
+        CanAutoCalculateInterest = BankInterestPolicy.SupportsAutomaticInterest(bank);
+        autoCalculateInterest = CanAutoCalculateInterest && bankUser.AutoCalculateInterest;
+        bankUser.AutoCalculateInterest = autoCalculateInterest;
 
         AddRecordCommand = new RelayCommand(AddRecord);
         CopyRecordCommand = new RelayCommand(CopyRecord);
@@ -90,6 +92,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
     public BankUser BankUser { get; }
 
     public bool CanUploadPdf { get; }
+
+    public bool CanAutoCalculateInterest { get; }
 
     public string WindowTitle => $"流水页-版本({AppVersion.DisplayVersion})-{Bank.Name}";
 
@@ -351,7 +355,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            BankUser.AutoCalculateInterest = AutoCalculateInterest;
+            BankUser.AutoCalculateInterest = CanAutoCalculateInterest && AutoCalculateInterest;
+            var shouldCalculateInterest = BankInterestPolicy.ShouldCalculate(Bank, BankUser);
             var currentOpeningBalance = RoundMoney(OpeningBalance);
             OpeningBalance = currentOpeningBalance;
             BankUser.OpeningBalance = (decimal)currentOpeningBalance;
@@ -359,10 +364,11 @@ public sealed class FlowDetailsViewModel : ObservableObject
             FlowRecordChronologicalOrder.SortInPlace(allRecords);
             var interestResult = await RecalculateInterestAsync(currentOpeningBalance);
             FlowRecordChronologicalOrder.SortInPlace(allRecords);
-            RecalculateRecordBalances(currentOpeningBalance);
+            RecalculateRecordBalances(currentOpeningBalance, normalizeTransactionFields: shouldCalculateInterest);
             var negativeBalance = FindFirstNegativeBalance();
             NegativeBalanceRepairResult? repairResult = null;
-            if (negativeBalance is not null)
+            var canRepairNegativeBalance = shouldCalculateInterest;
+            if (negativeBalance is not null && canRepairNegativeBalance)
             {
                 var choice = MessageBox.Show(
                     $"检测到第 {negativeBalance.Value.Index + 1} 行余额存在负值 " +
@@ -378,7 +384,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
                     repairResult = RepairNegativeBalancesByAdjustingOutflows(currentOpeningBalance);
                     interestResult = await RecalculateInterestAsync(currentOpeningBalance);
                     FlowRecordChronologicalOrder.SortInPlace(allRecords);
-                    RecalculateRecordBalances(currentOpeningBalance);
+                    RecalculateRecordBalances(currentOpeningBalance, normalizeTransactionFields: true);
                 }
             }
 
@@ -444,6 +450,18 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private async Task<BankInterestCalculationResult> RecalculateInterestAsync(double currentOpeningBalance)
     {
+        if (!CanAutoCalculateInterest)
+        {
+            return BankInterestCalculationService.Recalculate(
+                Bank,
+                BankUser,
+                null,
+                allRecords,
+                currentOpeningBalance,
+                BankUser.StartDate,
+                BankUser.EndDate);
+        }
+
         if (!AutoCalculateInterest)
         {
             return default;
@@ -469,6 +487,11 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private string CreateInterestStatusSuffix(BankInterestCalculationResult result)
     {
+        if (!CanAutoCalculateInterest)
+        {
+            return $"，{Bank.Name}不计算利息";
+        }
+
         if (!AutoCalculateInterest)
         {
             return string.Empty;
@@ -554,7 +577,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         return new NegativeBalanceRepairResult(adjustedRecords.Count, reducedAmount, lastAdjustedRecord);
     }
 
-    private void RecalculateRecordBalances(double openingBalance)
+    private void RecalculateRecordBalances(double openingBalance, bool normalizeTransactionFields)
     {
         var balance = RoundMoney(openingBalance);
         foreach (var record in allRecords)
@@ -562,7 +585,11 @@ public sealed class FlowDetailsViewModel : ObservableObject
             if (record.TradeMoney.HasValue)
             {
                 var amount = RoundMoney(record.TradeMoney.Value);
-                SetSignedAmount(record, amount);
+                if (normalizeTransactionFields)
+                {
+                    SetSignedAmount(record, amount);
+                }
+
                 balance = RoundMoney(balance + amount);
             }
 
@@ -982,7 +1009,8 @@ public sealed class FlowDetailsViewModel : ObservableObject
             {
                 ApplyImportedUserInfo(BankUser, result.User);
                 OpeningBalance = (double)BankUser.OpeningBalance;
-                AutoCalculateInterest = BankUser.AutoCalculateInterest;
+                AutoCalculateInterest = CanAutoCalculateInterest && BankUser.AutoCalculateInterest;
+                BankUser.AutoCalculateInterest = AutoCalculateInterest;
             }
 
             FlowRecord? lastImported = null;

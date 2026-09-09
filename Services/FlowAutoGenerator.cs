@@ -275,7 +275,7 @@ public sealed class FlowAutoGenerator
         RedistributeFirstMonthIncomeRecords(request, monthlyPlan, random, records, scheduleState);
         perfTrace.Mark("base generation", records);
 
-        if (request.BankUser.AutoCalculateInterest)
+        if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
         {
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
@@ -301,7 +301,7 @@ public sealed class FlowAutoGenerator
         }
 
         ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
-        if (request.BankUser.AutoCalculateInterest)
+        if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
         {
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
@@ -394,7 +394,7 @@ public sealed class FlowAutoGenerator
         if (!highVolumeAmountPostProcessing)
         {
             NormalizeReferenceAmountDistribution(records, random);
-            if (request.BankUser.AutoCalculateInterest)
+            if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
             {
                 RecalculateInterestRecords(records, request, openingBalance, start, end, random);
                 NormalizeReferenceAmountDistribution(records, random);
@@ -402,7 +402,7 @@ public sealed class FlowAutoGenerator
                 NormalizeReferenceAmountDistribution(records, random);
             }
         }
-        else if (request.BankUser.AutoCalculateInterest)
+        else if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
         {
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
@@ -1019,7 +1019,7 @@ public sealed class FlowAutoGenerator
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateRunSeed(request, start, end));
 
-        if (request.BankUser.AutoCalculateInterest)
+        if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
         {
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
@@ -1029,7 +1029,7 @@ public sealed class FlowAutoGenerator
         EnforceConfiguredTotals(records, request);
         BringFinalBalanceWithinTolerance(records, request, openingBalance);
 
-        if (request.BankUser.AutoCalculateInterest)
+        if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
         {
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
         }
@@ -1185,11 +1185,11 @@ public sealed class FlowAutoGenerator
             return;
         }
 
-        var maxAttempts = request.BankUser.AutoCalculateInterest ? 8 : 1;
+        var maxAttempts = BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser) ? 8 : 1;
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             var interestChanged = false;
-            if (request.BankUser.AutoCalculateInterest)
+            if (BankInterestPolicy.ShouldCalculate(request.Bank, request.BankUser))
             {
                 interestChanged = RecalculateInterestRecords(
                     records,

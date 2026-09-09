@@ -590,6 +590,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
             return;
         }
 
+        if (!BankInterestPolicy.SupportsAutomaticInterest(Bank))
+        {
+            BankUser.AutoCalculateInterest = false;
+        }
+
         Config.StartTime = BankUser.StartDate;
         Config.EndTime = BankUser.EndDate;
         Config.OpeningBalance = Convert.ToDouble(BankUser.OpeningBalance);
@@ -705,7 +710,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
             SetGenerationProgress(25, "正在读取结息配置");
             var interestSetting = await LoadInterestSettingForGenerationAsync();
-            if (BankUser.AutoCalculateInterest && !BankInterestSettingDefaults.HasEffectiveConfig(interestSetting))
+            if (BankInterestPolicy.ShouldCalculate(Bank, BankUser)
+                && !BankInterestSettingDefaults.HasEffectiveConfig(interestSetting))
             {
                 SetGenerationProgress(0, "请先设置利息配置");
                 MessageBox.Show("当前用户已勾选自动计算利息，请先设置利息配置", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -841,7 +847,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         DateTime end)
     {
         FlowRecordChronologicalOrder.SortInPlace(records);
-        if (BankUser?.AutoCalculateInterest == true)
+        if (BankUser is not null && BankInterestPolicy.ShouldCalculate(Bank, BankUser))
         {
             BankInterestCalculationService.Recalculate(
                 Bank,
@@ -991,7 +997,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         BankInterestSetting? interestSetting,
         out string reason)
     {
-        if (!bankUser.AutoCalculateInterest)
+        if (!BankInterestPolicy.ShouldCalculate(Bank, bankUser))
         {
             reason = string.Empty;
             return true;

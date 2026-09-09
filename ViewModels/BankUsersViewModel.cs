@@ -54,6 +54,7 @@ public sealed class BankUsersViewModel : ObservableObject
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         CanUploadPdf = canUploadPdf;
         editableUser = BankUser.CreateDraft(bank);
+        NormalizeInterestPreference(editableUser);
         statusMessage = $"正在维护 {bank.Name} 用户资料";
 
         NewCommand = new RelayCommand(StartNew);
@@ -206,6 +207,7 @@ public sealed class BankUsersViewModel : ObservableObject
             var recoveredFlowCount = await flowRecordRepository.RecoverTemporaryUserRecordsAsync(Bank.Id, users);
             foreach (var user in users)
             {
+                NormalizeInterestPreference(user);
                 Users.Add(user);
             }
 
@@ -285,6 +287,7 @@ public sealed class BankUsersViewModel : ObservableObject
         var draft = BankUser.CreateDraft(Bank);
         draft.Id = draftId--;
         draft.UserCode = string.Empty;
+        NormalizeInterestPreference(draft);
         ApplyAgriculturalNewUserDefaults(draft);
         Users.Add(draft);
         SelectedUser = draft;
@@ -418,6 +421,8 @@ public sealed class BankUsersViewModel : ObservableObject
 
     private void NormalizeEditableUserBeforeSave(BankUser user)
     {
+        NormalizeInterestPreference(user);
+
         if (string.IsNullOrWhiteSpace(user.AccountName))
         {
             user.AccountName = FindUserColumnValue(user, IsAccountNameColumn);
@@ -644,6 +649,7 @@ public sealed class BankUsersViewModel : ObservableObject
         copy.BackendId = 0;
         copy.UserCode = $"{SelectedUser.UserCode}-COPY";
         copy.AccountName = $"{SelectedUser.AccountName}-副本";
+        NormalizeInterestPreference(copy);
         Users.Add(copy);
         SelectedUser = copy;
         StatusMessage = $"已复制 {SelectedUser.AccountName} 到列表底部，保存后同步后台。";
@@ -664,12 +670,21 @@ public sealed class BankUsersViewModel : ObservableObject
 
     private void LoadEditor(BankUser source, bool isNew)
     {
+        NormalizeInterestPreference(source);
         EditableUser.PropertyChanged -= EditableUser_PropertyChanged;
         EditableUser = source;
         EditableUser.PropertyChanged += EditableUser_PropertyChanged;
         IsNewRecord = isNew;
         EditorMode = isNew ? "新增" : "编辑";
         ApplyAgriculturalChapterCodeFromPrintInstitution();
+    }
+
+    private void NormalizeInterestPreference(BankUser user)
+    {
+        if (!BankInterestPolicy.SupportsAutomaticInterest(Bank))
+        {
+            user.AutoCalculateInterest = false;
+        }
     }
 
     private void EditableUser_PropertyChanged(object? sender, PropertyChangedEventArgs e)
