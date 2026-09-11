@@ -5867,7 +5867,11 @@ public sealed partial class PdfImportService : IPdfImportService
         }
 
         var prefix = JoinGroupText(group.Take(startIndex));
-        var text = JoinGroupText(group.Skip(startIndex));
+        // In this CCB statement layout, PdfPig may insert a space after the
+        // decimal point in thousands-formatted amounts (for example,
+        // "-3,000. 00"). Normalize it before applying the row expression and
+        // parsing the monetary fields.
+        var text = NormalizeCcbMoneySpacing(JoinGroupText(group.Skip(startIndex)));
         var match = Regex.Match(text, @"^(?<seq>\d+)\s+(?<summary>.+?)\s+(?<date>\d{8})\s+(?<amount>[+-]?\d[\d,]*\.\d{2})\s+(?<balance>[+-]?\d[\d,]*\.\d{2})(?:\s+(?<rest>.*))?$");
         var hasSummaryColumn = match.Success;
         if (!match.Success)
@@ -6851,6 +6855,32 @@ public sealed partial class PdfImportService : IPdfImportService
             if (word.Text.Length < 2 || width <= 0)
             {
                 splitWords.Add(word);
+                continue;
+            }
+
+            // Some WeChat merchant-consumption rows are emitted as a single PDF word:
+            // "交易对方" immediately followed by its numeric merchant order.  Chinese and
+            // Latin/digit glyphs do not have a uniform width, so a proportional coordinate
+            // split can put the first merchant digits (for example, "87") into the
+            // counterparty.  When the word itself contains the unambiguous order boundary,
+            // prefer that semantic split and place the two pieces on their respective sides
+            // of the only affected column boundary.
+            var crossesMerchantBoundary = boundaries.Any(boundary => boundary > word.Left && boundary < word.Right);
+            var embeddedMerchantStart = crossesMerchantBoundary
+                ? FindEmbeddedWechatMerchantOrderStart(word.Text)
+                : -1;
+            if (embeddedMerchantStart > 0)
+            {
+                splitWords.Add(word with
+                {
+                    Text = word.Text[..embeddedMerchantStart],
+                    Right = 468d
+                });
+                splitWords.Add(word with
+                {
+                    Text = word.Text[embeddedMerchantStart..],
+                    Left = 468d
+                });
                 continue;
             }
 
@@ -8621,7 +8651,9 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool IsCcbRecordStart(string text)
     {
-        return Regex.IsMatch(text, @"^\d+\s+.+?\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
+        return Regex.IsMatch(
+            NormalizeCcbMoneySpacing(text),
+            @"^\d+\s+.+?\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
     }
 
     private static bool IsAbcRecordStart(string text)
@@ -8719,14 +8751,25 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool IsCcbRecordStartWithoutSummary(string text)
     {
-        return Regex.IsMatch(text, @"^\d+\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
+        return Regex.IsMatch(
+            NormalizeCcbMoneySpacing(text),
+            @"^\d+\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
     }
 
     private static bool IsCcbSplitRecordStart(string text, string nextText)
     {
-        return Regex.IsMatch(text, @"^\d+\s+\S+")
-            && !Regex.IsMatch(text, @"\d{8}\s+[+-]?\d[\d,]*\.\d{2}")
-            && Regex.IsMatch(nextText, @"^\S+\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
+        var normalizedText = NormalizeCcbMoneySpacing(text);
+        var normalizedNextText = NormalizeCcbMoneySpacing(nextText);
+        return Regex.IsMatch(normalizedText, @"^\d+\s+\S+")
+            && !Regex.IsMatch(normalizedText, @"\d{8}\s+[+-]?\d[\d,]*\.\d{2}")
+            && Regex.IsMatch(normalizedNextText, @"^\S+\s+\d{8}\s+[+-]?\d[\d,]*\.\d{2}\s+[+-]?\d[\d,]*\.\d{2}(?:\s+.*)?$");
+    }
+
+    private static string NormalizeCcbMoneySpacing(string value)
+    {
+        // This is intentionally CCB-specific. It repairs a PDF text-extraction
+        // artifact without relaxing numeric parsing for other bank formats.
+        return Regex.Replace(value ?? string.Empty, @"(?<=\d)\.\s+(?=\d{2}(?:\s|$))", ".");
     }
 
     private static bool IsCcbAnyRecordStart(IReadOnlyList<PdfTextLine> group, int index)
