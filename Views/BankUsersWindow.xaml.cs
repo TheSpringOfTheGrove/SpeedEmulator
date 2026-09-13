@@ -58,6 +58,7 @@ public partial class BankUsersWindow : Window
         viewModel.RequestOpenPrintPreview += ViewModel_RequestOpenPrintPreview;
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings += ViewModel_RequestOpenInterestSettings;
+        viewModel.RequestMergeFlows += ViewModel_RequestMergeFlows;
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -78,6 +79,7 @@ public partial class BankUsersWindow : Window
         viewModel.RequestOpenPrintPreview -= ViewModel_RequestOpenPrintPreview;
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings -= ViewModel_RequestOpenInterestSettings;
+        viewModel.RequestMergeFlows -= ViewModel_RequestMergeFlows;
         base.OnClosed(e);
     }
 
@@ -195,6 +197,49 @@ public partial class BankUsersWindow : Window
         {
             viewModel.NotifyInterestSettingsSaved();
         }
+    }
+
+    private async void ViewModel_RequestMergeFlows(object? sender, EventArgs e)
+    {
+        var selectedUsers = UsersGrid.SelectedItems
+            .OfType<BankUser>()
+            .GroupBy(user => user.Id)
+            .Select(group => group.First())
+            .ToList();
+        if (selectedUsers.Count < 2)
+        {
+            MessageBox.Show("请先在用户列表中选择至少两个用户，再点击合并流水。", "合并流水", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var recordCounts = await Task.WhenAll(selectedUsers.Select(async user => new
+        {
+            User = user,
+            RecordCount = (await flowRecordRepository.ListExistingByUserAsync(viewModel.Bank, user.Id)).Count
+        }));
+        var dialogViewModel = new MergeUserFlowsDialogViewModel(recordCounts
+            .Select(item => (item.User, item.RecordCount)));
+        var dialog = new MergeUserFlowsDialog(dialogViewModel)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true || dialogViewModel.TargetUser is not { } targetUser)
+        {
+            return;
+        }
+
+        await viewModel.MergeSelectedUserFlowsAsync(
+            selectedUsers,
+            targetUser,
+            dialogViewModel.ClearSourceUsersAndFlows);
+        if (viewModel.SelectedUser is null)
+        {
+            return;
+        }
+
+        UsersGrid.SelectedItems.Clear();
+        UsersGrid.SelectedItem = viewModel.SelectedUser;
+        UsersGrid.CurrentCell = default;
     }
 
     private void BuildDynamicColumns(Bank bank)

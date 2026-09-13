@@ -52,6 +52,22 @@ public sealed class InMemoryFlowRecordRepository : IFlowRecordRepository
         }
     }
 
+    public Task<IReadOnlyList<FlowRecord>> ListExistingByUserAsync(Bank bank, long bankUserId)
+    {
+        lock (syncRoot)
+        {
+            EnsureLoaded();
+            var records = FindRecords(bank, bankUserId) ?? [];
+            return Task.FromResult<IReadOnlyList<FlowRecord>>(records.Select(item =>
+            {
+                var copy = item.Clone();
+                copy.BankId = bank.Id;
+                copy.BankUserId = bankUserId;
+                return copy;
+            }).ToList());
+        }
+    }
+
     private List<FlowRecord>? FindRecords(Bank bank, long bankUserId)
     {
         foreach (var bankId in new[] { bank.Id }.Concat(bank.AlternateIds).Distinct())

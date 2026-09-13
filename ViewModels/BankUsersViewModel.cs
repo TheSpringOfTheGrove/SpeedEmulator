@@ -68,7 +68,7 @@ public sealed class BankUsersViewModel : ObservableObject
         AutoGenerateFlowCommand = new RelayCommand(OpenAutoGenerateFlow);
         SetColumnsCommand = new RelayCommand(() => RequestOpenColumnSettings?.Invoke(this, EventArgs.Empty));
         SetInterestCommand = new RelayCommand(() => RequestOpenInterestSettings?.Invoke(this, EventArgs.Empty));
-        MergeFlowCommand = new RelayCommand(() => MarkReserved("合并流水"));
+        MergeFlowCommand = new RelayCommand(() => RequestMergeFlows?.Invoke(this, EventArgs.Empty));
         SetSealImageCommand = new RelayCommand(SelectSealImage);
         CopySealPathCommand = new RelayCommand(CopySealPath);
         ClearSealCommand = new RelayCommand(ClearSealPath);
@@ -89,6 +89,8 @@ public sealed class BankUsersViewModel : ObservableObject
     public event EventHandler? RequestOpenColumnSettings;
 
     public event EventHandler? RequestOpenInterestSettings;
+
+    public event EventHandler? RequestMergeFlows;
 
     public Bank Bank { get; }
 
@@ -245,6 +247,96 @@ public sealed class BankUsersViewModel : ObservableObject
     public void NotifyInterestSettingsSaved()
     {
         StatusMessage = "利息设置已保存";
+    }
+
+    public async Task MergeSelectedUserFlowsAsync(
+        IReadOnlyList<BankUser> selectedUsers,
+        BankUser targetUser,
+        bool clearSourceUsersAndFlows)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var usersToMerge = selectedUsers
+            .Where(user => user is not null)
+            .GroupBy(user => user.Id)
+            .Select(group => group.First())
+            .ToList();
+        if (usersToMerge.Count < 2)
+        {
+            StatusMessage = "请至少选择两个用户后再合并流水。";
+            return;
+        }
+
+        if (usersToMerge.Any(user => user.Id <= 0))
+        {
+            StatusMessage = "请先保存选中的新增用户，再合并流水。";
+            MessageBox.Show(StatusMessage, "合并流水", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var persistedTarget = usersToMerge.FirstOrDefault(user => user.Id == targetUser.Id);
+        if (persistedTarget is null)
+        {
+            StatusMessage = "请选择本次已选用户中的目标用户。";
+            return;
+        }
+
+        var sourceUsers = usersToMerge
+            .Where(user => user.Id != persistedTarget.Id)
+            .ToList();
+
+        IsBusy = true;
+        try
+        {
+            var mergedRecords = (await flowRecordRepository.ListExistingByUserAsync(Bank, persistedTarget.Id))
+                .Select(record => record.Clone())
+                .ToList();
+            foreach (var sourceUser in sourceUsers)
+            {
+                mergedRecords.AddRange((await flowRecordRepository.ListExistingByUserAsync(Bank, sourceUser.Id))
+                    .Select(record => record.Clone()));
+            }
+
+            FlowRecordChronologicalOrder.SortInPlace(mergedRecords);
+            for (var index = 0; index < mergedRecords.Count; index++)
+            {
+                var record = mergedRecords[index];
+                record.Index = index + 1;
+                record.BankId = Bank.Id;
+                record.BankUserId = persistedTarget.Id;
+            }
+
+            // Persist the combined target first. The cleanup option is deliberately
+            // separate, so users can choose between aggregation and a destructive move.
+            await flowRecordRepository.SaveAllAsync(Bank.Id, persistedTarget.Id, mergedRecords);
+            if (clearSourceUsersAndFlows)
+            {
+                foreach (var sourceUser in sourceUsers)
+                {
+                    await flowRecordRepository.SaveAllAsync(Bank.Id, sourceUser.Id, []);
+                    await repository.DeleteAsync(sourceUser.Id);
+                    Users.Remove(sourceUser);
+                }
+            }
+
+            SelectedUser = persistedTarget;
+            StatusMessage = clearSourceUsersAndFlows
+                ? $"已合并 {mergedRecords.Count} 条流水到 {persistedTarget.AccountName}，并清空及删除 {sourceUsers.Count} 个非目标用户。"
+                : $"已合并 {mergedRecords.Count} 条流水到 {persistedTarget.AccountName}，非目标用户及原有流水已保留。";
+            MessageBox.Show(StatusMessage, "合并流水", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"合并流水失败：{ex.Message}";
+            MessageBox.Show(StatusMessage, "合并流水", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     private void ApplyColumnSettings(IReadOnlyList<BankUserColumnSetting> settings)
