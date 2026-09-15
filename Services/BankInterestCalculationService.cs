@@ -114,10 +114,19 @@ public static class BankInterestCalculationService
         var interestRows = new Dictionary<DateTime, FlowRecord>();
         var taxRows = new Dictionary<DateTime, FlowRecord>();
         var appendTaxRows = setting!.GenerateInterestTaxRow ?? ShouldAppendInterestTaxRecord(bank);
+        var timeRandom = random ?? Random.Shared;
 
         foreach (var settlementDate in settlementDates)
         {
-            var pairedAccountTime = appendTaxRows ? settlementDate.Date : (DateTime?)null;
+            var pairedAccountTime = appendTaxRows
+                ? ResolvePairedSettlementTime(
+                    bank,
+                    bankUser,
+                    records,
+                    settlementDate,
+                    configuration,
+                    timeRandom)
+                : (DateTime?)null;
             var interestRow = FindOrCreateScheduledRow(
                 bank,
                 bankUser,
@@ -127,7 +136,7 @@ public static class BankInterestCalculationService
                 FlowGeneratedRowKinds.Interest,
                 configuration,
                 recordFactory,
-                random,
+                timeRandom,
                 pairedAccountTime,
                 ref changed);
             interestRows[settlementDate] = interestRow;
@@ -143,7 +152,7 @@ public static class BankInterestCalculationService
                     FlowGeneratedRowKinds.InterestTax,
                     configuration,
                     recordFactory,
-                    random,
+                    timeRandom,
                     pairedAccountTime,
                     ref changed);
                 taxRows[settlementDate] = taxRow;
@@ -220,7 +229,7 @@ public static class BankInterestCalculationService
         InterestConfiguration configuration,
         Func<DateTime, string, FlowRecord>? recordFactory,
         Random? random,
-        DateTime? forcedAccountTime,
+        DateTime? pairedAccountTime,
         ref bool changed)
     {
         var existing = records.FirstOrDefault(record =>
@@ -234,22 +243,22 @@ public static class BankInterestCalculationService
             }
 
             FlowGeneratedRowKinds.SetKind(existing, rowKind);
-            if (forcedAccountTime.HasValue && existing.AccountTime != forcedAccountTime.Value)
+            if (pairedAccountTime.HasValue && existing.AccountTime != pairedAccountTime.Value)
             {
-                existing.AccountTime = forcedAccountTime.Value;
+                existing.AccountTime = pairedAccountTime.Value;
                 changed = true;
             }
 
             return existing;
         }
 
-        var accountTime = forcedAccountTime ?? CreateSettlementTime(
-                settlementDate,
-                configuration.StartHour,
-                configuration.EndHour,
-                bank.Id,
-                bankUser.Id,
-                random);
+        var accountTime = pairedAccountTime ?? CreateSettlementTime(
+            settlementDate,
+            configuration.StartHour,
+            configuration.EndHour,
+            bank.Id,
+            bankUser.Id,
+            random);
         var created = recordFactory?.Invoke(accountTime, rowKind)
             ?? CreateDefaultInterestRecord(bank, bankUser, setting, accountTime, rowKind);
         created.BankId = bank.Id;
@@ -260,6 +269,42 @@ public static class BankInterestCalculationService
         records.Add(created);
         changed = true;
         return created;
+    }
+
+    private static DateTime ResolvePairedSettlementTime(
+        Bank bank,
+        BankUser bankUser,
+        IReadOnlyList<FlowRecord> records,
+        DateTime settlementDate,
+        InterestConfiguration configuration,
+        Random random)
+    {
+        var interestTime = records.FirstOrDefault(record =>
+            record.AccountTime?.Date == settlementDate
+            && FlowGeneratedRowKinds.IsInterest(record))?.AccountTime;
+        var taxTime = records.FirstOrDefault(record =>
+            record.AccountTime?.Date == settlementDate
+            && FlowGeneratedRowKinds.IsInterestTax(record))?.AccountTime;
+
+        // Keep a valid existing pair stable. A mismatched pair, a legacy 00:00:00
+        // pair, or a time outside the configured hour range is regenerated once and
+        // then assigned to both rows.
+        if (interestTime.HasValue
+            && interestTime == taxTime
+            && interestTime.Value.TimeOfDay != TimeSpan.Zero
+            && interestTime.Value.Hour >= configuration.StartHour
+            && interestTime.Value.Hour <= configuration.EndHour)
+        {
+            return interestTime.Value;
+        }
+
+        return CreateSettlementTime(
+            settlementDate,
+            configuration.StartHour,
+            configuration.EndHour,
+            bank.Id,
+            bankUser.Id,
+            random);
     }
 
     private static bool MigrateRecognizableRows(List<FlowRecord> records, IReadOnlySet<DateTime> settlementDates)
