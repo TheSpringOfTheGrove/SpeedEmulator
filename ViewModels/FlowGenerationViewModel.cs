@@ -1008,6 +1008,17 @@ public sealed class FlowGenerationViewModel : ObservableObject
         var rows = result.Records
             .Where(item => IsSettlementInterestRecord(item, interestBrief))
             .ToList();
+        var requiresCurrentAccount = Bank.FlowColumns.Any(column =>
+        {
+            var field = column.Field?.Trim() ?? string.Empty;
+            if (field.StartsWith('[') && field.EndsWith(']') && field.Length > 2)
+            {
+                field = field[1..^1];
+            }
+
+            return column.Show
+                && string.Equals(field, nameof(FlowRecord.Account), StringComparison.Ordinal);
+        });
 
         if (rows.Count < expectedCount)
         {
@@ -1023,10 +1034,15 @@ public sealed class FlowGenerationViewModel : ObservableObject
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(row.Account)
-                || !row.Balance.HasValue)
+            if (!row.Balance.HasValue)
             {
-                reason = "结息流水字段不完整";
+                reason = "结息流水余额为空";
+                return false;
+            }
+
+            if (requiresCurrentAccount && string.IsNullOrWhiteSpace(row.Account))
+            {
+                reason = "结息流水账号为空";
                 return false;
             }
         }

@@ -117,6 +117,7 @@ public static class BankInterestCalculationService
 
         foreach (var settlementDate in settlementDates)
         {
+            var pairedAccountTime = appendTaxRows ? settlementDate.Date : (DateTime?)null;
             var interestRow = FindOrCreateScheduledRow(
                 bank,
                 bankUser,
@@ -127,6 +128,7 @@ public static class BankInterestCalculationService
                 configuration,
                 recordFactory,
                 random,
+                pairedAccountTime,
                 ref changed);
             interestRows[settlementDate] = interestRow;
 
@@ -142,6 +144,7 @@ public static class BankInterestCalculationService
                     configuration,
                     recordFactory,
                     random,
+                    pairedAccountTime,
                     ref changed);
                 taxRows[settlementDate] = taxRow;
             }
@@ -217,6 +220,7 @@ public static class BankInterestCalculationService
         InterestConfiguration configuration,
         Func<DateTime, string, FlowRecord>? recordFactory,
         Random? random,
+        DateTime? forcedAccountTime,
         ref bool changed)
     {
         var existing = records.FirstOrDefault(record =>
@@ -230,16 +234,22 @@ public static class BankInterestCalculationService
             }
 
             FlowGeneratedRowKinds.SetKind(existing, rowKind);
+            if (forcedAccountTime.HasValue && existing.AccountTime != forcedAccountTime.Value)
+            {
+                existing.AccountTime = forcedAccountTime.Value;
+                changed = true;
+            }
+
             return existing;
         }
 
-        var accountTime = CreateSettlementTime(
-            settlementDate,
-            configuration.StartHour,
-            configuration.EndHour,
-            bank.Id,
-            bankUser.Id,
-            random);
+        var accountTime = forcedAccountTime ?? CreateSettlementTime(
+                settlementDate,
+                configuration.StartHour,
+                configuration.EndHour,
+                bank.Id,
+                bankUser.Id,
+                random);
         var created = recordFactory?.Invoke(accountTime, rowKind)
             ?? CreateDefaultInterestRecord(bank, bankUser, setting, accountTime, rowKind);
         created.BankId = bank.Id;

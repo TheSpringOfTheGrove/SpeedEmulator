@@ -18959,7 +18959,22 @@ public sealed class FlowAutoGenerator
     private static int CompareRecordsForBalance(FlowRecord left, FlowRecord right)
     {
         var result = Nullable.Compare(left.AccountTime, right.AccountTime);
-        return result != 0 ? result : string.CompareOrdinal(left.SerialNum, right.SerialNum);
+        if (result != 0)
+        {
+            return result;
+        }
+
+        if (FlowGeneratedRowKinds.IsInterest(left) && FlowGeneratedRowKinds.IsInterestTax(right))
+        {
+            return -1;
+        }
+
+        if (FlowGeneratedRowKinds.IsInterestTax(left) && FlowGeneratedRowKinds.IsInterest(right))
+        {
+            return 1;
+        }
+
+        return string.CompareOrdinal(left.SerialNum, right.SerialNum);
     }
 
     private static double CalculateTargetExpense(double openingBalance, IEnumerable<FlowRecord> records, double lastMoney)

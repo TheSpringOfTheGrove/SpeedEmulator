@@ -8829,10 +8829,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var counterpartyName = source.IsDocumentImported
             ? NormalizeSingleLinePrintText(rawCounterpartyName)
             : LimitSingleLinePrintText(rawCounterpartyName, 10);
+        var hasNoCounterparty = string.IsNullOrWhiteSpace(counterpartyName)
+            || string.Equals(counterpartyName, "--", StringComparison.Ordinal);
         var channel = NormalizeAgriculturalElectronicTradeChannel(FirstNotBlank(
             source.TradeChannel,
             GetValue(values, nameof(FlowRecord.TradeChannel))));
-        Set(target, nameof(FlowRecord.OppositeUsername), counterpartyName);
+        // The vendor ABC personal electronic template renders its \"counterparty
+        // information\" column by combining OppositeAccount and OppositeUsername.
+        // An imported blank (or the PDF's \"--\" placeholder) must not therefore
+        // fall back to the account number. Keep this display-only adjustment scoped
+        // to this template bridge; it does not alter the persisted import record.
+        Set(target, nameof(FlowRecord.OppositeUsername), hasNoCounterparty ? "--" : counterpartyName);
+        if (hasNoCounterparty)
+        {
+            Set(target, nameof(FlowRecord.OppositeAccount), string.Empty);
+        }
         Set(target, nameof(FlowRecord.TradeChannel), channel);
         Set(target, nameof(FlowRecord.TradeChannelEn), channel);
         if (IsAgriculturalPersonalLatestElectronicTemplate(context)
