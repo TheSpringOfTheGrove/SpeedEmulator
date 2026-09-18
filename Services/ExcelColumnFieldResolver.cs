@@ -13,10 +13,21 @@ public static class ExcelColumnFieldResolver
             return (nameof(FlowRecord.CreditType), "Text");
         }
 
-        if (IsWechatBankName(bankName)
-            && normalizedName is "收支其他" or "收支其它" or "收入支出其他" or "收/支/其他")
+        if (IsWechatBankName(bankName))
         {
-            return (nameof(FlowRecord.IncomeAttribute), "Text");
+            if (normalizedName is "\u6536\u652f\u5176\u4ed6" or "\u6536\u652f\u5176\u5b83" or "\u6536\u5165\u652f\u51fa\u5176\u4ed6" or "\u6536/\u652f/\u5176\u4ed6")
+            {
+                // The flow-detail column keeps the original PDF classification,
+                // including values such as “其它”.
+                return (nameof(FlowRecord.IncomeAttribute), "Text");
+            }
+
+            if (normalizedName == "\u6536\u5165\u652f\u51fa")
+            {
+                // This export-only column is calculated from the signed amount.
+                // It must not share the source-classification field above.
+                return (nameof(FlowRecord.IncomeFlag), "Text");
+            }
         }
 
         if (string.Equals(bankName, "中行对公", StringComparison.Ordinal))
@@ -256,4 +267,5 @@ public static class ExcelColumnFieldResolver
     {
         return bankName.Contains("微信", StringComparison.Ordinal);
     }
+
 }

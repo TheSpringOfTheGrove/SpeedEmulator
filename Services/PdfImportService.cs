@@ -7109,8 +7109,8 @@ public sealed partial class PdfImportService : IPdfImportService
         record.OppositeUsername = CleanPdfValue(GetPositionedCell(row, "Counterparty"));
         record.MerchantName = CleanPdfValue(GetPositionedCell(row, "MerchantOrder"));
         ApplySignedAmountColumns(record, signedAmount);
-        // ApplySignedAmountColumns fills the debit/credit columns and also assigns a generic
-        // income/expense label. WeChat's 收/支/其他 column must retain the exact PDF value.
+        // Keep the exact PDF 收/支/其他 classification for the flow-detail column.
+        // IncomeFlag separately retains its resolved binary direction.
         record.IncomeAttribute = sourceDirection;
         record.IncomeFlag = directionResolved ? direction : string.Empty;
         if (!directionResolved)
@@ -7127,7 +7127,7 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "收支其他", sourceDirection);
         SetFlowRaw(record, "收支其它", sourceDirection);
         SetFlowRaw(record, "收入支出其他", sourceDirection);
-        SetFlowRaw(record, "收入支出", sourceDirection);
+        SetFlowRaw(record, "收入支出", record.IncomeFlag);
         SetFlowRaw(record, "交易方式", record.CashCheck);
         SetFlowRaw(record, "金额", amountText);
         SetFlowRaw(record, "交易对方", record.OppositeUsername);
@@ -7319,8 +7319,8 @@ public sealed partial class PdfImportService : IPdfImportService
         record.OppositeUsername = counterparty;
         record.MerchantName = merchantOrder;
         ApplySignedAmountColumns(record, signedAmount);
-        // ApplySignedAmountColumns fills the debit/credit columns and also assigns a generic
-        // income/expense label. WeChat's 收/支/其他 column must retain the exact PDF value.
+        // Keep the exact PDF 收/支/其他 classification for the flow-detail column.
+        // IncomeFlag separately retains its resolved binary direction.
         record.IncomeAttribute = sourceDirection;
         record.IncomeFlag = directionResolved ? direction : string.Empty;
         if (!directionResolved)
@@ -7337,7 +7337,7 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "收支其他", sourceDirection);
         SetFlowRaw(record, "收支其它", sourceDirection);
         SetFlowRaw(record, "收入支出其他", sourceDirection);
-        SetFlowRaw(record, "收入支出", sourceDirection);
+        SetFlowRaw(record, "收入支出", record.IncomeFlag);
         SetFlowRaw(record, "交易方式", record.CashCheck);
         SetFlowRaw(record, "金额", rawAmount);
         SetFlowRaw(record, "交易对方", record.OppositeUsername);

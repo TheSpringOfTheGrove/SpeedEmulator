@@ -570,6 +570,25 @@ public sealed class TableExcelService : ITableExcelService
 
     private static object? GetDerivedFlowValue(FlowRecord record, string field, Bank? bank)
     {
+        if (IsWechatBank(bank) && field == nameof(FlowRecord.IncomeAttribute))
+        {
+            // 收支其他 is a source column. Export exactly what the flow detail
+            // stores, including “其它”; never replace it with a calculated value.
+            return record.IncomeAttribute;
+        }
+
+        if (IsWechatBank(bank) && field == nameof(FlowRecord.IncomeFlag))
+        {
+            // 收入支出 is independent from 收支其他: only the signed amount decides
+            // its value, so its output can only be 收入 or 支出.
+            return record.TradeMoney switch
+            {
+                > 0 => "收入",
+                < 0 => "支出",
+                _ => string.Empty
+            };
+        }
+
         if (field == nameof(FlowRecord.TradeMoney))
         {
             return record.TradeMoney.HasValue
@@ -674,7 +693,9 @@ public sealed class TableExcelService : ITableExcelService
         record.BankUserId = bankUser.Id;
         var direction = IsIcbcPersonalBank(bank)
             ? ResolveIcbcFlowMoneyDirection(record.CreditType)
-            : ResolveFlowMoneyDirection(record.IncomeAttribute);
+            : IsWechatBank(bank)
+                ? ResolveFlowMoneyDirection(record.IncomeFlag)
+                : ResolveFlowMoneyDirection(record.IncomeAttribute);
 
         if (!record.TradeMoney.HasValue && IsAgriculturalBankPersonal(bank))
         {
@@ -800,6 +821,12 @@ public sealed class TableExcelService : ITableExcelService
         return bank is not null
             && string.Equals(bank.Name, "\u6c11\u751f", StringComparison.Ordinal)
             && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
+    }
+
+    private static bool IsWechatBank(Bank? bank)
+    {
+        return bank is not null
+            && bank.Name.Contains("微信", StringComparison.Ordinal);
     }
 
     private static double ApplyFlowMoneyDirection(double amount, FlowMoneyDirection direction)
@@ -1012,6 +1039,12 @@ public sealed class TableExcelService : ITableExcelService
         catch (System.Xml.XmlException ex)
         {
             throw new InvalidDataException(InvalidExcelFormatMessage, ex);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidDataException(
+                "Excel 文件正在被 Excel 或 WPS 占用，请关闭该文件后再导入。",
+                ex);
         }
     }
 
