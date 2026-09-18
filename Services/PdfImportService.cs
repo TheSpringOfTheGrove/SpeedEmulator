@@ -1214,7 +1214,7 @@ public sealed partial class PdfImportService : IPdfImportService
             IsAbcPersonalFooterWord,
             @"^\d{8}$",
             86,
-            125,
+            112,
             CleanAbcPersonalFieldValue,
             JoinAbcPersonalPositionedCellWords);
         var positionedRecords = new List<FlowRecord>(positionedRows.Count);
@@ -7178,7 +7178,10 @@ public sealed partial class PdfImportService : IPdfImportService
         string Cell(double left, double right, bool concatenate = false)
         {
             var values = words
-                .Where(word => (word.Left + word.Right) / 2d >= left && (word.Left + word.Right) / 2d < right)
+                // This statement's embedded Chinese fonts report inflated right
+                // bounds (sometimes beyond the page width). Left is stable and
+                // matches the printed column starts, so do not use the center.
+                .Where(word => word.Left >= left && word.Left < right)
                 .OrderBy(word => word.Top)
                 .ThenBy(word => word.Left)
                 .Select(word => CleanPdfValue(word.Text))
@@ -7198,10 +7201,10 @@ public sealed partial class PdfImportService : IPdfImportService
             return false;
         }
 
-        var oppositeName = CollapseChineseSeparatedWords(Cell(355d, 500d));
-        var oppositeAccount = Cell(500d, 600d, concatenate: true);
-        var summary = CollapseChineseSeparatedWords(Cell(600d, 650d));
-        var channel = CollapseChineseSeparatedWords(Cell(650d, 720d));
+        var oppositeName = CollapseChineseSeparatedWords(Cell(355d, 485d));
+        var oppositeAccount = Cell(485d, 580d, concatenate: true);
+        var summary = CollapseChineseSeparatedWords(Cell(580d, 640d));
+        var channel = CollapseChineseSeparatedWords(Cell(640d, 720d));
         var externalSerial = Cell(720d, double.MaxValue, concatenate: true);
 
         record.BankId = bank.Id;
