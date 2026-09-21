@@ -10,21 +10,58 @@
         ShowInTaskbar="False"
         Background="#F5F6F8">
     <Window.Resources>
-        <Style TargetType="TableCell">
-            <Setter Property="Padding" Value="10,7" />
-            <Setter Property="BorderBrush" Value="#D9DDE3" />
-            <Setter Property="BorderThickness" Value="0,0,1,1" />
-        </Style>
-        <Style x:Key="SectionHeadingStyle" TargetType="Paragraph">
+        <Style x:Key="SectionHeadingStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="20" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="#172033" />
             <Setter Property="Margin" Value="0,22,0,8" />
         </Style>
-        <Style x:Key="CodeStyle" TargetType="Run">
-            <Setter Property="FontFamily" Value="Consolas" />
-            <Setter Property="Foreground" Value="#174EA6" />
+        <Style x:Key="BodyTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#252A34" />
+            <Setter Property="LineHeight" Value="24" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="CompactHelpGridStyle" TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserResizeRows" Value="False" />
+            <Setter Property="CanUserReorderColumns" Value="False" />
+            <Setter Property="CanUserSortColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="RowHeaderWidth" Value="0" />
+            <Setter Property="RowHeight" Value="30" />
+            <Setter Property="ColumnHeaderHeight" Value="32" />
+            <Setter Property="GridLinesVisibility" Value="All" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#D9DDE3" />
+            <Setter Property="VerticalGridLinesBrush" Value="#D9DDE3" />
+            <Setter Property="BorderBrush" Value="#D9DDE3" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="AlternatingRowBackground" Value="#FAFBFC" />
+            <Setter Property="AlternationCount" Value="2" />
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#E9EEF6" />
+            <Setter Property="Foreground" Value="#172033" />
             <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="BorderBrush" Value="#D9DDE3" />
+            <Setter Property="BorderThickness" Value="0,0,1,1" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         </Style>
     </Window.Resources>
 
@@ -40,228 +77,115 @@
                 BorderBrush="#E1E4E8"
                 BorderThickness="1"
                 CornerRadius="6">
-            <FlowDocumentScrollViewer VerticalScrollBarVisibility="Auto"
-                                      IsToolBarVisible="False">
-                <FlowDocument PagePadding="4"
-                              FontFamily="Microsoft YaHei UI"
-                              FontSize="14"
-                              Foreground="#252A34"
-                              LineHeight="24">
-                    <Paragraph FontSize="27"
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False">
+                <StackPanel>
+                    <TextBlock Text="公式使用说明"
+                               FontFamily="Microsoft YaHei UI"
+                               FontSize="27"
                                FontWeight="Bold"
                                Foreground="#111827"
-                               Margin="0,0,0,14">公式使用说明</Paragraph>
+                               Margin="0,0,0,14" />
 
-                    <Section Background="#F1F3F5"
-                             Foreground="#4B5563"
-                             Padding="14,10"
-                             Margin="0,0,0,12">
-                        <Paragraph Margin="0">流水明细在保存时进行公式计算；自动生成后的保存、以及手工修改后的再次保存都会生效。</Paragraph>
-                        <Paragraph Margin="0">公式必须写在两侧各两个反斜杠中：<Run Style="{StaticResource CodeStyle}">\\公式内容\\</Run>。一个字段可写多个公式，也可在公式前后保留普通文字。</Paragraph>
-                    </Section>
+                    <Border Padding="14,10" Background="#F1F3F5" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="流水明细在保存时进行公式计算；自动生成后的保存、以及手工修改后的再次保存都会生效。"
+                                       Style="{StaticResource BodyTextStyle}" />
+                            <TextBlock Style="{StaticResource BodyTextStyle}">
+                                <Run Text="公式必须写在两侧各两个反斜杠中：" />
+                                <Run Text="\\公式内容\\" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                                <Run Text="。一个字段可写多个公式，也可在公式前后保留普通文字。" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
 
-                    <Paragraph Margin="0,0,0,10">匹配到公式后会替换为计算结果；Excel 列或流水字段找不到时替换为空并给出警告；不是公式的内容原样保留。</Paragraph>
+                    <TextBlock Text="匹配到公式后会替换为计算结果；Excel 列或流水字段找不到时替换为空并给出警告；不是公式的内容原样保留。"
+                               Style="{StaticResource BodyTextStyle}" />
 
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">一、支持的全部公式</Paragraph>
-                    <Table CellSpacing="0">
-                        <Table.Columns>
-                            <TableColumn Width="48" />
-                            <TableColumn Width="150" />
-                            <TableColumn Width="190" />
-                            <TableColumn Width="210" />
-                            <TableColumn Width="*" />
-                        </Table.Columns>
-                        <TableRowGroup>
-                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
-                                <TableCell><Paragraph Margin="0">序号</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">公式内容</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">生成范围</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">完整写法</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">示例结果</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">1</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">(n)</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">n 位纯数字</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\(12)\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 个随机数字</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">2</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">{n}</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">n 位小写字母</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\{12}\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 个随机小写字母</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">3</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">&lt;n&gt;</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">n 位大写字母</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\&lt;12&gt;\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 个随机大写字母</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">4</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">[n]</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">数字和大写字母</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\[12]\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 位 0-9/A-Z</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">5</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">@n@</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">数字和小写字母</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\@12@\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 位 0-9/a-z</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">6</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">#n#</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">数字、大小写字母</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\#12#\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">12 位 0-9/a-z/A-Z</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">7</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">%日期格式%</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">按本条流水交易时间格式化</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\%yyyyMMdd%\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">20250619</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">8</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">$Excel列名$</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">每次独立随机取一行</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\$姓名$\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">张三</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">9</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">^Excel列名^</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">本条流水的关联公式固定取 Excel 同一行</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\^姓名^\\ / \\^卡号^\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">同一人的姓名和卡号</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">10</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">&amp;字段名&amp;</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">复制本条流水另一显示列的值</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\&amp;对方账号&amp;\\</Run></Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">与对方账号完全一致</Paragraph></TableCell>
-                            </TableRow>
-                        </TableRowGroup>
-                    </Table>
+                    <TextBlock Text="一、支持的全部公式" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="FormulaGrid"
+                              Height="334"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="序号" Binding="{Binding Number}" Width="48" />
+                            <DataGridTextColumn Header="公式内容" Binding="{Binding Formula}" Width="140" />
+                            <DataGridTextColumn Header="生成范围" Binding="{Binding Meaning}" Width="220" />
+                            <DataGridTextColumn Header="完整写法" Binding="{Binding FullSyntax}" Width="210" />
+                            <DataGridTextColumn Header="示例结果" Binding="{Binding Example}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Text="n 必须是 0～4096 的整数（0 表示生成空内容）。未识别的片段按普通文字保留；未闭合定界符、无效日期格式、超长随机内容或超过 16384 个字符的结果会阻止保存。"
+                               Margin="0,8,0,0"
+                               Foreground="#5B6472"
+                               Style="{StaticResource BodyTextStyle}" />
 
-                    <Paragraph Margin="0,10,0,0" Foreground="#5B6472">n 必须是 0～4096 的整数（0 表示生成空内容）。未识别的片段按普通文字保留；未闭合定界符、无效日期格式、超长随机内容或超过 16384 个字符的结果会阻止保存，避免写入半成品数据。</Paragraph>
+                    <TextBlock Text="二、Excel 取值规则" Style="{StaticResource SectionHeadingStyle}" />
+                    <TextBlock Text="• 第一行必须是列标题，第二行开始是数据；标题不可为空、不可重复。"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Text="• 工商银行验证规则需要“姓名”和“卡号”两列。点击“下载示例”，编辑保存后，再点击“读取Excel”导入。"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Style="{StaticResource BodyTextStyle}">
+                        <Run Text="• $列名$" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                        <Run Text=" 每次独立抽取，适合无需对应关系的数据。" />
+                    </TextBlock>
+                    <TextBlock Style="{StaticResource BodyTextStyle}">
+                        <Run Text="• ^列名^" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                        <Run Text=" 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据。" />
+                    </TextBlock>
+                    <TextBlock Text="• 切换银行后需为当前银行重新读取随机分子 Excel；“清空”只清理当前银行的数据。"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <DataGrid x:Name="ExcelExampleGrid"
+                              Height="94"
+                              Margin="0,8,0,0"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="姓名" Binding="{Binding Name}" Width="180" />
+                            <DataGridTextColumn Header="卡号" Binding="{Binding CardNumber}" Width="260" />
+                            <DataGridTextColumn Header="开户行（可选）" Binding="{Binding BankName}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">二、Excel 取值规则</Paragraph>
-                    <List MarkerStyle="Disc" Margin="18,0,0,0">
-                        <ListItem><Paragraph Margin="0">第一行必须是列标题，第二行开始是数据；标题不可为空、不可重复。</Paragraph></ListItem>
-                        <ListItem><Paragraph Margin="0">内置工商银行验证规则需要“姓名”和“卡号”两列。可直接点击“加载Excel示例”测试，无需准备文件。</Paragraph></ListItem>
-                        <ListItem><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">$列名$</Run> 每出现一次都独立抽取，适合无需对应关系的数据。</Paragraph></ListItem>
-                        <ListItem><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">^列名^</Run> 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据。</Paragraph></ListItem>
-                        <ListItem><Paragraph Margin="0">切换银行后需为当前银行重新读取随机分子 Excel；“清空”只清理当前银行的数据。</Paragraph></ListItem>
-                    </List>
-                    <Table CellSpacing="0" Margin="0,10,0,0">
-                        <Table.Columns>
-                            <TableColumn Width="180" />
-                            <TableColumn Width="260" />
-                            <TableColumn Width="*" />
-                        </Table.Columns>
-                        <TableRowGroup>
-                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
-                                <TableCell><Paragraph Margin="0">姓名</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">卡号</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">开户行（可选）</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow>
-                                <TableCell><Paragraph Margin="0">张三</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">6222021001000000018</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">中国工商银行北京分行</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow Background="#FAFBFC">
-                                <TableCell><Paragraph Margin="0">李四</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">6222021001000000026</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">中国工商银行上海分行</Paragraph></TableCell>
-                            </TableRow>
-                        </TableRowGroup>
-                    </Table>
+                    <TextBlock Text="三、日期格式说明" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="DateFormatGrid"
+                              Height="454"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="格式符" Binding="{Binding Token}" Width="120" />
+                            <DataGridTextColumn Header="含义" Binding="{Binding Meaning}" Width="*" />
+                            <DataGridTextColumn Header="示例" Binding="{Binding Example}" Width="160" />
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">三、日期格式说明</Paragraph>
-                    <Table CellSpacing="0">
-                        <Table.Columns>
-                            <TableColumn Width="110" />
-                            <TableColumn Width="*" />
-                            <TableColumn Width="150" />
-                        </Table.Columns>
-                        <TableRowGroup>
-                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
-                                <TableCell><Paragraph Margin="0">格式符</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">含义</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">示例</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">yyyy</Paragraph></TableCell><TableCell><Paragraph Margin="0">年（四位）</Paragraph></TableCell><TableCell><Paragraph Margin="0">2025</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">yy</Paragraph></TableCell><TableCell><Paragraph Margin="0">年（两位）</Paragraph></TableCell><TableCell><Paragraph Margin="0">25</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">MM</Paragraph></TableCell><TableCell><Paragraph Margin="0">月（两位）</Paragraph></TableCell><TableCell><Paragraph Margin="0">06</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">M</Paragraph></TableCell><TableCell><Paragraph Margin="0">月（不补零）</Paragraph></TableCell><TableCell><Paragraph Margin="0">6</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">dd</Paragraph></TableCell><TableCell><Paragraph Margin="0">日（两位）</Paragraph></TableCell><TableCell><Paragraph Margin="0">19</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">d</Paragraph></TableCell><TableCell><Paragraph Margin="0">日（不补零）</Paragraph></TableCell><TableCell><Paragraph Margin="0">19</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">HH</Paragraph></TableCell><TableCell><Paragraph Margin="0">小时（24 小时制）</Paragraph></TableCell><TableCell><Paragraph Margin="0">14</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">hh</Paragraph></TableCell><TableCell><Paragraph Margin="0">小时（12 小时制）</Paragraph></TableCell><TableCell><Paragraph Margin="0">02</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">mm</Paragraph></TableCell><TableCell><Paragraph Margin="0">分钟</Paragraph></TableCell><TableCell><Paragraph Margin="0">30</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">ss</Paragraph></TableCell><TableCell><Paragraph Margin="0">秒</Paragraph></TableCell><TableCell><Paragraph Margin="0">15</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">fff</Paragraph></TableCell><TableCell><Paragraph Margin="0">毫秒（三位）</Paragraph></TableCell><TableCell><Paragraph Margin="0">123</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">tt</Paragraph></TableCell><TableCell><Paragraph Margin="0">上午/下午</Paragraph></TableCell><TableCell><Paragraph Margin="0">PM</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">dddd</Paragraph></TableCell><TableCell><Paragraph Margin="0">星期几全称</Paragraph></TableCell><TableCell><Paragraph Margin="0">Thursday</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">ddd</Paragraph></TableCell><TableCell><Paragraph Margin="0">星期几简称</Paragraph></TableCell><TableCell><Paragraph Margin="0">Thu</Paragraph></TableCell></TableRow>
-                        </TableRowGroup>
-                    </Table>
+                    <TextBlock Text="四、组合示例" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="CombinationExampleGrid"
+                              Height="184"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="填写内容" Binding="{Binding Input}" Width="390" />
+                            <DataGridTextColumn Header="可能结果" Binding="{Binding Output}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">四、组合示例</Paragraph>
-                    <Table CellSpacing="0">
-                        <Table.Columns>
-                            <TableColumn Width="360" />
-                            <TableColumn Width="*" />
-                        </Table.Columns>
-                        <TableRowGroup>
-                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
-                                <TableCell><Paragraph Margin="0">填写内容</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">可能结果</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">Na\\[5]%yyyy-MM-dd HH:mm:ss%#2#\\d</Run></Paragraph></TableCell><TableCell><Paragraph Margin="0">Na2341A2025-06-19 14:30:15xYd</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\$姓名$\\</Run></Paragraph></TableCell><TableCell><Paragraph Margin="0">张三（每次独立抽取）</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\^姓名^\\ + \\^卡号^\\</Run></Paragraph></TableCell><TableCell><Paragraph Margin="0">同一 Excel 行中的姓名与卡号</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\622230(13)\\</Run></Paragraph></TableCell><TableCell><Paragraph Margin="0">6222301653254896535</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">\\&amp;对方账号&amp;\\</Run></Paragraph></TableCell><TableCell><Paragraph Margin="0">复制本条流水已经生成的对方账号</Paragraph></TableCell></TableRow>
-                        </TableRowGroup>
-                    </Table>
+                    <TextBlock Text="五、固定日期选项" Style="{StaticResource SectionHeadingStyle}" />
+                    <TextBlock Text="以下内容填写在“固定日期增加项目”的固定日期列；“出现次数”可填单个整数或次数范围。"
+                               Margin="0,0,0,8"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <DataGrid x:Name="FixedDateGrid"
+                              Height="184"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="符号" Binding="{Binding Symbol}" Width="130" />
+                            <DataGridTextColumn Header="说明" Binding="{Binding Meaning}" Width="220" />
+                            <DataGridTextColumn Header="生成范围" Binding="{Binding Range}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
 
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">五、固定日期选项</Paragraph>
-                    <Paragraph Margin="0,0,0,10">以下内容填写在“固定日期增加项目”的固定日期列；“出现次数”可填单个整数或次数范围。</Paragraph>
-                    <Table CellSpacing="0">
-                        <Table.Columns>
-                            <TableColumn Width="120" />
-                            <TableColumn Width="*" />
-                            <TableColumn Width="230" />
-                        </Table.Columns>
-                        <TableRowGroup>
-                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
-                                <TableCell><Paragraph Margin="0">符号</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">说明</Paragraph></TableCell>
-                                <TableCell><Paragraph Margin="0">生成范围</Paragraph></TableCell>
-                            </TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">+</Paragraph></TableCell><TableCell><Paragraph Margin="0">全局模式</Paragraph></TableCell><TableCell><Paragraph Margin="0">整个账期内随机分布</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">*</Paragraph></TableCell><TableCell><Paragraph Margin="0">整月模式</Paragraph></TableCell><TableCell><Paragraph Margin="0">每个月分别随机分布</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">=</Paragraph></TableCell><TableCell><Paragraph Margin="0">每天模式</Paragraph></TableCell><TableCell><Paragraph Margin="0">每个可交易日生成</Paragraph></TableCell></TableRow>
-                            <TableRow Background="#FAFBFC"><TableCell><Paragraph Margin="0">3-6</Paragraph></TableCell><TableCell><Paragraph Margin="0">日期范围模式</Paragraph></TableCell><TableCell><Paragraph Margin="0">每月 3 日至 6 日内随机生成</Paragraph></TableCell></TableRow>
-                            <TableRow><TableCell><Paragraph Margin="0">1～31 整数</Paragraph></TableCell><TableCell><Paragraph Margin="0">固定日模式</Paragraph></TableCell><TableCell><Paragraph Margin="0">每月指定日期；短月自动取月末</Paragraph></TableCell></TableRow>
-                        </TableRowGroup>
-                    </Table>
-
-                    <Paragraph Style="{StaticResource SectionHeadingStyle}">六、工商银行内置验证示例</Paragraph>
-                    <Paragraph Margin="0">程序已在工商银行“参照明细”中内置一条未勾选的“公式功能验证”规则，覆盖上述 10 类公式。读取包含“姓名、卡号”列的随机分子 Excel 后，可勾选该规则生成并保存，查看各字段解析结果。示例默认不参与正常生成，不会改变现有流水配置。</Paragraph>
-                </FlowDocument>
-            </FlowDocumentScrollViewer>
+                    <TextBlock Text="六、工商银行内置验证示例" Style="{StaticResource SectionHeadingStyle}" />
+                    <TextBlock Text="程序已在工商银行“参照明细”中内置一条未勾选的“公式功能验证”规则，覆盖上述 10 类公式。下载示例 Excel，编辑并读取后，可勾选该规则生成并保存，查看各字段解析结果。示例默认不参与正常生成。"
+                               Style="{StaticResource BodyTextStyle}" />
+                </StackPanel>
+            </ScrollViewer>
         </Border>
 
         <Border Grid.Row="1" Background="#F5F6F8">

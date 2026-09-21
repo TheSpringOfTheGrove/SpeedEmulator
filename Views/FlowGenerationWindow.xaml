@@ -423,11 +423,6 @@
                                 FontWeight="Bold"
                                 Command="{Binding ShowFormulaHelpCommand}"
                                 ToolTip="查看公式使用说明" />
-                        <Button Content="加载Excel示例"
-                                Margin="10,0,0,0"
-                                Command="{Binding LoadExampleExcelCommand}"
-                                ToolTip="加载包含姓名、卡号等列的内置示例数据"
-                                Style="{StaticResource SmallButtonStyle}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1"
@@ -438,7 +433,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="#777777" />
                         <TextBox Text="{Binding ExcelStatus, Mode=OneWay}"
-                                 Width="180"
+                                 Width="150"
                                  Height="34"
                                  IsReadOnly="True"
                                  Foreground="#999999"
@@ -446,11 +441,19 @@
                                  BorderBrush="#D2D5D7"
                                  VerticalContentAlignment="Center"
                                  Padding="8,0" />
-                        <Button Content="读取Excel文件"
-                                Margin="20,0,10,0"
+                        <Button Content="读取Excel"
+                                Width="88"
+                                Margin="14,0,8,0"
                                 Command="{Binding ReadExcelCommand}"
                                 Style="{StaticResource SmallButtonStyle}" />
+                        <Button Content="下载示例"
+                                Width="88"
+                                Margin="0,0,8,0"
+                                Command="{Binding DownloadExampleExcelCommand}"
+                                ToolTip="下载真实的随机分子 Excel 示例，编辑后再读取"
+                                Style="{StaticResource SmallButtonStyle}" />
                         <Button Content="清空"
+                                Width="64"
                                 Command="{Binding ClearExcelCommand}"
                                 Style="{StaticResource SmallButtonStyle}" />
                     </StackPanel>

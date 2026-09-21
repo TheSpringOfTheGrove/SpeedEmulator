@@ -37,9 +37,11 @@ public interface IFormulaDataSetService
 {
     string? PickImportFile();
 
+    string? PickExampleExportFile();
+
     FormulaDataSetImportResult Import(long bankId, string path);
 
-    FormulaDataSetImportResult LoadBuiltInExample(long bankId);
+    void ExportBuiltInExample(string path);
 
     FormulaDataSet? Get(long bankId);
 
@@ -81,6 +83,21 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
             Filter = "Excel 文件 (*.xlsx)|*.xlsx",
             CheckFileExists = true,
             Multiselect = false
+        };
+
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? PickExampleExportFile()
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "下载随机分子 Excel 示例",
+            Filter = "Excel 文件 (*.xlsx)|*.xlsx",
+            FileName = "随机分子Excel示例.xlsx",
+            AddExtension = true,
+            DefaultExt = ".xlsx",
+            OverwritePrompt = true
         };
 
         return dialog.ShowDialog() == true ? dialog.FileName : null;
@@ -192,31 +209,20 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return new FormulaDataSetImportResult(dataSet, emptyRowsSkipped);
     }
 
-    public FormulaDataSetImportResult LoadBuiltInExample(long bankId)
+    public void ExportBuiltInExample(string path)
     {
-        var dataSet = new FormulaDataSet
+        if (string.IsNullOrWhiteSpace(path))
         {
-            FileName = "内置随机分子示例.xlsx",
-            ImportedAtUtc = DateTime.UtcNow,
-            Headers = ["姓名", "卡号", "开户行", "手机号", "备注"],
-            Rows =
-            [
-                CreateExampleRow("张三", "6222021001000000018", "中国工商银行北京分行", "13800000001", "示例一"),
-                CreateExampleRow("李四", "6222021001000000026", "中国工商银行上海分行", "13800000002", "示例二"),
-                CreateExampleRow("王五", "6222021001000000034", "中国工商银行广州分行", "13800000003", "示例三"),
-                CreateExampleRow("赵六", "6222021001000000042", "中国工商银行深圳分行", "13800000004", "示例四"),
-                CreateExampleRow("陈晨", "6222021001000000059", "中国工商银行杭州分行", "13800000005", "示例五"),
-                CreateExampleRow("周宁", "6222021001000000067", "中国工商银行成都分行", "13800000006", "示例六")
-            ]
-        };
-
-        lock (syncRoot)
-        {
-            Persist(bankId, dataSet);
-            cache[bankId] = dataSet;
+            throw new ArgumentException("导出路径不能为空。", nameof(path));
         }
 
-        return new FormulaDataSetImportResult(dataSet, 0);
+        if (!string.Equals(Path.GetExtension(path), ".xlsx", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("随机分子示例必须导出为 .xlsx 文件。");
+        }
+
+        var dataSet = CreateBuiltInExampleDataSet();
+        WriteWorkbook(path, dataSet.Headers, dataSet.Rows);
     }
 
     public FormulaDataSet? Get(long bankId)
@@ -240,6 +246,13 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
                 var dataSet = JsonSerializer.Deserialize<FormulaDataSet>(File.ReadAllText(path), JsonOptions)
                     ?? throw new InvalidDataException("随机分子数据文件内容为空。");
                 NormalizeRows(dataSet);
+                if (IsLegacyAutoLoadedExample(dataSet))
+                {
+                    File.Delete(path);
+                    cache[bankId] = null;
+                    return null;
+                }
+
                 cache[bankId] = dataSet;
                 return dataSet;
             }
@@ -300,6 +313,13 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         }
     }
 
+    private static bool IsLegacyAutoLoadedExample(FormulaDataSet dataSet)
+    {
+        return string.Equals(dataSet.FileName, "内置随机分子示例.xlsx", StringComparison.Ordinal)
+            && dataSet.Rows.Count == 6
+            && dataSet.Headers.SequenceEqual(["姓名", "卡号", "开户行", "手机号", "备注"], StringComparer.Ordinal);
+    }
+
     private static Dictionary<string, string> CreateExampleRow(
         string name,
         string cardNumber,
@@ -315,6 +335,136 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
             ["手机号"] = phoneNumber,
             ["备注"] = remark
         };
+    }
+
+    private static FormulaDataSet CreateBuiltInExampleDataSet()
+    {
+        return new FormulaDataSet
+        {
+            FileName = "随机分子Excel示例.xlsx",
+            ImportedAtUtc = DateTime.UtcNow,
+            Headers = ["姓名", "卡号", "开户行", "手机号", "备注"],
+            Rows =
+            [
+                CreateExampleRow("张三", "6222021001000000018", "中国工商银行北京分行", "13800000001", "示例一"),
+                CreateExampleRow("李四", "6222021001000000026", "中国工商银行上海分行", "13800000002", "示例二"),
+                CreateExampleRow("王五", "6222021001000000034", "中国工商银行广州分行", "13800000003", "示例三"),
+                CreateExampleRow("赵六", "6222021001000000042", "中国工商银行深圳分行", "13800000004", "示例四"),
+                CreateExampleRow("陈晨", "6222021001000000059", "中国工商银行杭州分行", "13800000005", "示例五"),
+                CreateExampleRow("周宁", "6222021001000000067", "中国工商银行成都分行", "13800000006", "示例六")
+            ]
+        };
+    }
+
+    private static void WriteWorkbook(
+        string path,
+        IReadOnlyList<string> headers,
+        IReadOnlyList<Dictionary<string, string>> rows)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var archive = ZipFile.Open(temporaryPath, ZipArchiveMode.Create))
+            {
+                WriteXmlEntry(archive, "[Content_Types].xml", new XDocument(
+                    new XElement(XName.Get("Types", "http://schemas.openxmlformats.org/package/2006/content-types"),
+                        new XElement(XName.Get("Default", "http://schemas.openxmlformats.org/package/2006/content-types"),
+                            new XAttribute("Extension", "rels"),
+                            new XAttribute("ContentType", "application/vnd.openxmlformats-package.relationships+xml")),
+                        new XElement(XName.Get("Default", "http://schemas.openxmlformats.org/package/2006/content-types"),
+                            new XAttribute("Extension", "xml"),
+                            new XAttribute("ContentType", "application/xml")),
+                        new XElement(XName.Get("Override", "http://schemas.openxmlformats.org/package/2006/content-types"),
+                            new XAttribute("PartName", "/xl/workbook.xml"),
+                            new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml")),
+                        new XElement(XName.Get("Override", "http://schemas.openxmlformats.org/package/2006/content-types"),
+                            new XAttribute("PartName", "/xl/worksheets/sheet1.xml"),
+                            new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml")))));
+
+                WriteXmlEntry(archive, "_rels/.rels", new XDocument(
+                    new XElement(XName.Get("Relationships", PackageRelationshipsNamespace),
+                        new XElement(XName.Get("Relationship", PackageRelationshipsNamespace),
+                            new XAttribute("Id", "rId1"),
+                            new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"),
+                            new XAttribute("Target", "xl/workbook.xml")))));
+
+                XNamespace mainNs = MainNamespace;
+                XNamespace relationshipNs = RelationshipsNamespace;
+                WriteXmlEntry(archive, "xl/workbook.xml", new XDocument(
+                    new XElement(mainNs + "workbook",
+                        new XAttribute(XNamespace.Xmlns + "r", relationshipNs),
+                        new XElement(mainNs + "sheets",
+                            new XElement(mainNs + "sheet",
+                                new XAttribute("name", "随机分子"),
+                                new XAttribute("sheetId", "1"),
+                                new XAttribute(relationshipNs + "id", "rId1"))))));
+
+                WriteXmlEntry(archive, "xl/_rels/workbook.xml.rels", new XDocument(
+                    new XElement(XName.Get("Relationships", PackageRelationshipsNamespace),
+                        new XElement(XName.Get("Relationship", PackageRelationshipsNamespace),
+                            new XAttribute("Id", "rId1"),
+                            new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"),
+                            new XAttribute("Target", "worksheets/sheet1.xml")))));
+
+                var sheetData = new XElement(mainNs + "sheetData");
+                sheetData.Add(CreateWorkbookRow(mainNs, 1, headers));
+                for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+                {
+                    var values = headers.Select(header => rows[rowIndex].GetValueOrDefault(header) ?? string.Empty);
+                    sheetData.Add(CreateWorkbookRow(mainNs, rowIndex + 2, values));
+                }
+
+                WriteXmlEntry(archive, "xl/worksheets/sheet1.xml", new XDocument(
+                    new XElement(mainNs + "worksheet", sheetData)));
+            }
+
+            File.Move(temporaryPath, path, true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static XElement CreateWorkbookRow(XNamespace ns, int rowIndex, IEnumerable<string> values)
+    {
+        return new XElement(
+            ns + "row",
+            new XAttribute("r", rowIndex),
+            values.Select((value, columnIndex) => new XElement(
+                ns + "c",
+                new XAttribute("r", $"{GetColumnName(columnIndex + 1)}{rowIndex}"),
+                new XAttribute("t", "inlineStr"),
+                new XElement(ns + "is", new XElement(ns + "t", value ?? string.Empty)))));
+    }
+
+    private static string GetColumnName(int columnIndex)
+    {
+        var result = string.Empty;
+        while (columnIndex > 0)
+        {
+            columnIndex--;
+            result = (char)('A' + (columnIndex % 26)) + result;
+            columnIndex /= 26;
+        }
+
+        return result;
+    }
+
+    private static void WriteXmlEntry(ZipArchive archive, string path, XDocument document)
+    {
+        var entry = archive.CreateEntry(path, CompressionLevel.Optimal);
+        using var stream = entry.Open();
+        document.Save(stream, SaveOptions.DisableFormatting);
     }
 
     private static IReadOnlyList<Dictionary<int, string>> ReadFirstSheet(string path)

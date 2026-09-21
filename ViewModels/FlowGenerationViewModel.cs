@@ -60,7 +60,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         ImportExcelCommand = new AsyncRelayCommand(ImportExcelAsync);
         ExportExcelCommand = new AsyncRelayCommand(ExportExcelAsync);
         ReadExcelCommand = new RelayCommand(ReadExcel);
-        LoadExampleExcelCommand = new RelayCommand(LoadExampleExcel);
+        DownloadExampleExcelCommand = new RelayCommand(DownloadExampleExcel);
         ClearExcelCommand = new RelayCommand(ClearExcel);
         ShowFormulaHelpCommand = new RelayCommand(() => RequestOpenFormulaHelp?.Invoke(this, EventArgs.Empty));
         ComputeCommand = new RelayCommand(Compute);
@@ -166,7 +166,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     public RelayCommand ReadExcelCommand { get; }
 
-    public RelayCommand LoadExampleExcelCommand { get; }
+    public RelayCommand DownloadExampleExcelCommand { get; }
 
     public RelayCommand ClearExcelCommand { get; }
 
@@ -692,18 +692,27 @@ public sealed class FlowGenerationViewModel : ObservableObject
         StatusMessage = "已清空当前银行的随机分子 Excel 数据";
     }
 
-    private void LoadExampleExcel()
+    private void DownloadExampleExcel()
     {
+        var path = formulaDataSetService.PickExampleExportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
         try
         {
-            var result = formulaDataSetService.LoadBuiltInExample(Bank.Id);
-            Bank.IsReadConfigExcel = true;
-            ExcelStatus = $"{result.DataSet.FileName}（{result.DataSet.Rows.Count} 行）";
-            StatusMessage = "已加载内置随机分子示例：姓名、卡号、开户行、手机号、备注";
+            formulaDataSetService.ExportBuiltInExample(path);
+            StatusMessage = $"示例已下载：{path}。编辑保存后，请点击“读取Excel”导入。";
+            MessageBox.Show(
+                $"示例 Excel 已保存：\n\n{path}\n\n请编辑数据并保存，然后点击“读取Excel”导入。",
+                "下载成功",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            StatusMessage = $"加载随机分子示例失败：{ex.Message}";
+            StatusMessage = $"下载随机分子示例失败：{ex.Message}";
             MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -735,7 +744,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
             {
                 StatusMessage = $"已勾选规则需要随机分子 Excel：{string.Join("、", requiredExcelColumns)}";
                 MessageBox.Show(
-                    $"当前规则使用了 Excel 公式，需要以下列：\n\n{string.Join("、", requiredExcelColumns)}\n\n请先点击“读取Excel文件”，或点击“加载Excel示例”进行功能测试。",
+                    $"当前规则使用了 Excel 公式，需要以下列：\n\n{string.Join("、", requiredExcelColumns)}\n\n可先点击“下载示例”，编辑保存后再点击“读取Excel”导入。",
                     "请先读取随机分子 Excel",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);

@@ -14,7 +14,7 @@ var tests = new (string Name, Action Run)[]
     ("缺失 Excel 列兼容并告警", TestMissingExcelColumn),
     ("未闭合和超长公式阻止保存", TestInvalidFormulas),
     ("Excel 导入、持久化和清空", TestFormulaDataSetImport),
-    ("内置 Excel 示例及公式依赖检查", TestBuiltInExcelExampleAndDependencies),
+    ("下载 Excel 示例及公式依赖检查", TestBuiltInExcelExampleAndDependencies),
     ("统一保存和二次保存幂等", TestSaveAndIdempotency),
     ("公式错误时保存保持原子性", TestAtomicSaveFailure),
     ("固定日期五种模式解析", TestFixedDateModes),
@@ -198,13 +198,33 @@ static void TestBuiltInExcelExampleAndDependencies()
 {
     WithTemporaryDirectory(directory =>
     {
-        var service = new FormulaDataSetService(Path.Combine(directory, "formula-data"));
-        var loaded = service.LoadBuiltInExample(4);
+        var storageDirectory = Path.Combine(directory, "formula-data");
+        Directory.CreateDirectory(storageDirectory);
+        var legacyPath = Path.Combine(storageDirectory, "4.json");
+        File.WriteAllText(legacyPath, """
+            {
+              "fileName": "内置随机分子示例.xlsx",
+              "headers": ["姓名", "卡号", "开户行", "手机号", "备注"],
+              "rows": [{}, {}, {}, {}, {}, {}]
+            }
+            """);
+
+        var service = new FormulaDataSetService(storageDirectory);
+        AssertTrue(service.Get(4) is null, "旧版自动加载的示例数据应在升级后清除");
+        AssertFalse(File.Exists(legacyPath), "旧版自动示例持久化文件应删除");
+
+        var workbookPath = Path.Combine(directory, "随机分子Excel示例.xlsx");
+        service.ExportBuiltInExample(workbookPath);
+        AssertTrue(File.Exists(workbookPath), "应下载真实的 xlsx 示例文件");
+        AssertTrue(service.Get(4) is null, "下载示例不能直接加载到当前银行");
+
+        var loaded = service.Import(4, workbookPath);
         AssertTrue(loaded.DataSet.Headers.Contains("姓名"), "示例应包含姓名列");
         AssertTrue(loaded.DataSet.Headers.Contains("卡号"), "示例应包含卡号列");
         AssertEqual(6, loaded.DataSet.Rows.Count);
         AssertEqual("张三", loaded.DataSet.Rows[0]["姓名"]);
-        AssertTrue(new FormulaDataSetService(Path.Combine(directory, "formula-data")).Get(4) is not null, "示例数据应持久化");
+        AssertEqual("6222021001000000018", loaded.DataSet.Rows[0]["卡号"]);
+        AssertTrue(new FormulaDataSetService(storageDirectory).Get(4) is not null, "编辑并读取后的数据应持久化");
 
         var rule = new GenerateReferenceRule
         {
