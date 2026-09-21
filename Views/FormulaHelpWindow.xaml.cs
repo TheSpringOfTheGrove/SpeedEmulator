@@ -17,7 +17,7 @@ public partial class FormulaHelpWindow : Window
             new FormulaHelpRow("5", "@n@", "数字和小写字母", @"\\@12@\\", "12 位 0-9/a-z"),
             new FormulaHelpRow("6", "#n#", "数字、大小写字母", @"\\#12#\\", "12 位 0-9/a-z/A-Z"),
             new FormulaHelpRow("7", "%日期格式%", "按本条流水交易时间格式化", @"\\%yyyyMMdd%\\", "20250619"),
-            new FormulaHelpRow("8", "$Excel列名$", "从该列非空数据中独立随机", @"\\$姓名$\\", "宋力"),
+            new FormulaHelpRow("8", "$Excel列名$", "非空数据随机无放回，用完后重洗", @"\\$姓名$\\", "宋力（每轮随机且覆盖）"),
             new FormulaHelpRow("9", "^Excel列名^", "同一条流水固定取 Excel 同一行", @"\\^姓名^\\ / \\^卡号^\\", "对应的姓名和卡号"),
             new FormulaHelpRow("10", "&字段名&", "复制本条流水另一显示列", @"\\&对方账号&\\", "与对方账号一致")
         };
@@ -41,7 +41,7 @@ public partial class FormulaHelpWindow : Window
         CombinationExampleGrid.ItemsSource = new[]
         {
             new CombinationExampleRow(@"Na\\[5]%yyyy-MM-dd HH:mm:ss%#2#\\d", "Na2341A2025-06-19 14:30:15xYd"),
-            new CombinationExampleRow(@"\\$姓名$\\", "宋力（每次独立抽取）"),
+            new CombinationExampleRow(@"\\$姓名$\\", "宋力（当前轮不重复）"),
             new CombinationExampleRow(@"\\^姓名^\\ + \\^卡号^\\", "同一 Excel 行中的姓名与卡号"),
             new CombinationExampleRow(@"\\622230(13)\\", "6222301653254896535"),
             new CombinationExampleRow(@"\\&对方账号&\\", "复制已生成的对方账号")

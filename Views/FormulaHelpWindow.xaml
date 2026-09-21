@@ -127,7 +127,7 @@
                                Style="{StaticResource BodyTextStyle}" />
                     <TextBlock Style="{StaticResource BodyTextStyle}">
                         <Run Text="• $列名$" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
-                        <Run Text=" 每次从该列的非空数据中独立抽取，适合无需对应关系的数据；整列无值时阻止保存。" />
+                        <Run Text=" 从该列非空数据中随机无放回抽取，当前轮用完后重新洗牌；流水数不足一轮时只抽取所需数量，不强求覆盖整列；整列无值时阻止保存。" />
                     </TextBlock>
                     <TextBlock Style="{StaticResource BodyTextStyle}">
                         <Run Text="• ^列名^" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />

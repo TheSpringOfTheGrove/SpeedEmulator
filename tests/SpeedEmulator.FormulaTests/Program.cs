@@ -10,6 +10,7 @@ var tests = new (string Name, Action Run)[]
     ("全部日期格式符", TestAllDateFormatTokens),
     ("Excel 独立随机与同行关联", TestExcelFormulas),
     ("Excel 独立随机跳过空值且同行关联允许空值", TestExcelEmptyValueRules),
+    ("Excel 独立随机每轮无放回覆盖", TestExcelRandomCycleCoverage),
     ("流水显示列复制", TestFlowColumnCopy),
     ("自定义字段公式与字段复制", TestCustomFieldFormula),
     ("独立 Excel 缺失列阻止保存", TestMissingExcelColumn),
@@ -167,6 +168,36 @@ static void TestExcelEmptyValueRules()
     var emptyRecord = new FlowRecord { Remark = @"\\$空列$\\" };
     var emptySummary = new FlowFormulaEvaluator(new SequenceRandomSource(0)).Evaluate(bank, [emptyRecord], dataSet);
     AssertTrue(emptySummary.HasErrors, "独立随机公式整列为空时必须报错，不能静默生成空值");
+}
+
+static void TestExcelRandomCycleCoverage()
+{
+    var bank = CreateBank(("交易对方", nameof(FlowRecord.MerchantName)));
+    var dataSet = new FormulaDataSet
+    {
+        FileName = "cycle-coverage.xlsx",
+        Headers = ["商户"],
+        Rows =
+        [
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["商户"] = "A" },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["商户"] = "" },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["商户"] = "B" },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["商户"] = "C" }
+        ]
+    };
+    var records = Enumerable.Range(0, 7)
+        .Select(_ => new FlowRecord { MerchantName = @"\\$商户$\\" })
+        .ToList();
+
+    var summary = new FlowFormulaEvaluator(new SequenceRandomSource(2, 0, 0, 1, 0, 0, 2))
+        .Evaluate(bank, records, dataSet);
+
+    AssertFalse(summary.HasErrors, "随机无放回抽取不应产生错误");
+    AssertTrue(records.Take(3).Select(item => item.MerchantName).ToHashSet().SetEquals(["A", "B", "C"]),
+        "第一轮应随机使用全部非空数据");
+    AssertTrue(records.Skip(3).Take(3).Select(item => item.MerchantName).ToHashSet().SetEquals(["A", "B", "C"]),
+        "第二轮应重新洗牌并使用全部非空数据");
+    AssertTrue(records[6].MerchantName is "A" or "B" or "C", "不足一轮时应只抽取所需数量");
 }
 
 static void TestFlowColumnCopy()

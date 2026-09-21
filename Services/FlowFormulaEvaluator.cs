@@ -93,7 +93,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         var changedRecordCount = 0;
         var changedFieldCount = 0;
         var replacedBlockCount = 0;
-        var rowSelectionCache = new ExcelRowSelectionCache(dataSet);
+        var rowSelectionCache = new ExcelRowSelectionCache(dataSet, random);
 
         for (var recordOffset = 0; recordOffset < records.Count; recordOffset++)
         {
@@ -427,8 +427,8 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         }
         else
         {
-            var candidateRows = rowSelectionCache.GetRowsWithValue(normalizedColumnName);
-            if (candidateRows.Count == 0)
+            rowIndex = rowSelectionCache.TakeRandomRowWithValue(normalizedColumnName);
+            if (rowIndex < 0)
             {
                 AddDiagnostic(
                     diagnostics,
@@ -439,8 +439,6 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
                     $"随机分子 Excel 的列“{normalizedColumnName}”没有非空数据。");
                 return string.Empty;
             }
-
-            rowIndex = candidateRows[random.Next(candidateRows.Count)];
         }
 
         if (!dataSet.TryGetValue(rowIndex, normalizedColumnName, out var value))
@@ -654,12 +652,16 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
     private sealed class ExcelRowSelectionCache
     {
         private readonly FormulaDataSet? dataSet;
+        private readonly IFormulaRandomSource random;
         private readonly Dictionary<string, IReadOnlyList<int>> rowsByColumn =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<int>> remainingRowsByColumn =
+            new(StringComparer.OrdinalIgnoreCase);
 
-        public ExcelRowSelectionCache(FormulaDataSet? dataSet)
+        public ExcelRowSelectionCache(FormulaDataSet? dataSet, IFormulaRandomSource random)
         {
             this.dataSet = dataSet;
+            this.random = random;
         }
 
         public bool ContainsColumn(string columnName)
@@ -684,6 +686,30 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
                     .ToArray();
             rowsByColumn[normalizedColumnName] = rows;
             return rows;
+        }
+
+        public int TakeRandomRowWithValue(string columnName)
+        {
+            var normalizedColumnName = columnName.Trim();
+            var candidateRows = GetRowsWithValue(normalizedColumnName);
+            if (candidateRows.Count == 0)
+            {
+                return -1;
+            }
+
+            if (!remainingRowsByColumn.TryGetValue(normalizedColumnName, out var remainingRows)
+                || remainingRows.Count == 0)
+            {
+                remainingRows = new List<int>(candidateRows);
+                remainingRowsByColumn[normalizedColumnName] = remainingRows;
+            }
+
+            var selectedOffset = random.Next(remainingRows.Count);
+            var selectedRow = remainingRows[selectedOffset];
+            var lastOffset = remainingRows.Count - 1;
+            remainingRows[selectedOffset] = remainingRows[lastOffset];
+            remainingRows.RemoveAt(lastOffset);
+            return selectedRow;
         }
 
     }
