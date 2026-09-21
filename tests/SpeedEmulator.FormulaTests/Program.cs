@@ -300,6 +300,23 @@ static void TestBuiltInExcelExampleAndDependencies()
         AssertEqual("陈伟", loaded.DataSet.Rows[25]["姓名"]);
         AssertTrue(new FormulaDataSetService(storageDirectory).Get(4) is not null, "编辑并读取后的数据应持久化");
 
+        var wechatWorkbookPath = Path.Combine(directory, "微信随机分子Excel示例.xlsx");
+        service.ExportBuiltInExample(wechatWorkbookPath, "微信");
+        using (var archive = ZipFile.OpenRead(wechatWorkbookPath))
+        {
+            AssertTrue(archive.GetEntry("xl/worksheets/sheet2.xml") is not null, "微信示例应保留原模板的第二张工作表");
+        }
+
+        var wechatLoaded = service.Import(5, wechatWorkbookPath);
+        AssertTrue(
+            wechatLoaded.DataSet.Headers.SequenceEqual(
+                ["早餐", "包子", "面包", "午餐", "晚餐", "炸鸡汉堡", "饮料", "超市", "便利店", "服装", "停车", "加油", "理发店", "扫二维码支", "转账支", "转账收", "二维码收款"],
+                StringComparer.Ordinal),
+            "微信示例列顺序应与临沂模板一致");
+        AssertEqual(187, wechatLoaded.DataSet.Rows.Count);
+        AssertEqual("费县程式早餐店", wechatLoaded.DataSet.Rows[0]["早餐"]);
+        AssertEqual("泓业庆丰包子铺(金雀山路店)", wechatLoaded.DataSet.Rows[0]["包子"]);
+
         var rule = new GenerateReferenceRule
         {
             OppositeUsername = @"\\$姓名$\\",

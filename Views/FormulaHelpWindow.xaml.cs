@@ -21,11 +21,6 @@ public partial class FormulaHelpWindow : Window
             new FormulaHelpRow("9", "^Excel列名^", "同一条流水固定取 Excel 同一行", @"\\^姓名^\\ / \\^卡号^\\", "对应的姓名和卡号"),
             new FormulaHelpRow("10", "&字段名&", "复制本条流水另一显示列", @"\\&对方账号&\\", "与对方账号一致")
         };
-        ExcelExampleGrid.ItemsSource = new[]
-        {
-            new ExcelExampleRow("宋力", "6217001540007157926", "中国建设银行"),
-            new ExcelExampleRow("姜小青", "6228480619772268576", "中国农业银行")
-        };
         DateFormatGrid.ItemsSource = new[]
         {
             new DateFormatRow("yyyy", "年（四位）", "2025"),
@@ -73,8 +68,6 @@ public partial class FormulaHelpWindow : Window
     }
 
     private sealed record FormulaHelpRow(string Number, string Formula, string Meaning, string FullSyntax, string Example);
-
-    private sealed record ExcelExampleRow(string Name, string CardNumber, string BankName);
 
     private sealed record DateFormatRow(string Token, string Meaning, string Example);
 

@@ -225,7 +225,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
             Bank.IsReadConfigExcel = formulaDataSet is not null;
             ExcelStatus = formulaDataSet is null
                 ? "未读取"
-                : $"{formulaDataSet.FileName}（{formulaDataSet.Rows.Count} 行）";
+                : "已读取";
             StatusMessage = $"已载入参照明细 {References.Count} 条，固定日期增加项目 {ConstItems.Count} 条，月明细 {Config.MonthGenData.Count} 条";
         }
         catch (Exception ex)
@@ -670,7 +670,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         {
             var result = formulaDataSetService.Import(Bank.Id, path);
             Bank.IsReadConfigExcel = true;
-            ExcelStatus = $"{result.DataSet.FileName}（{result.DataSet.Rows.Count} 行）";
+            ExcelStatus = "已读取";
             StatusMessage = $"随机分子 Excel 已读取：{result.DataSet.Headers.Count} 列、{result.DataSet.Rows.Count} 行";
             if (result.EmptyRowsSkipped > 0)
             {
@@ -694,7 +694,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     private void DownloadExampleExcel()
     {
-        var path = formulaDataSetService.PickExampleExportFile();
+        var path = formulaDataSetService.PickExampleExportFile(Bank.Name);
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -702,7 +702,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         try
         {
-            formulaDataSetService.ExportBuiltInExample(path);
+            formulaDataSetService.ExportBuiltInExample(path, Bank.Name);
             StatusMessage = $"示例已下载：{path}。编辑保存后，请点击“读取Excel”导入。";
             MessageBox.Show(
                 $"示例 Excel 已保存：\n\n{path}\n\n请编辑数据并保存，然后点击“读取Excel”导入。",

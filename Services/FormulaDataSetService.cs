@@ -37,11 +37,11 @@ public interface IFormulaDataSetService
 {
     string? PickImportFile();
 
-    string? PickExampleExportFile();
+    string? PickExampleExportFile(string? bankName = null);
 
     FormulaDataSetImportResult Import(long bankId, string path);
 
-    void ExportBuiltInExample(string path);
+    void ExportBuiltInExample(string path, string? bankName = null);
 
     FormulaDataSet? Get(long bankId);
 
@@ -50,6 +50,7 @@ public interface IFormulaDataSetService
 
 public sealed class FormulaDataSetService : IFormulaDataSetService
 {
+    private const string WechatExampleResourceName = "SpeedEmulator.FormulaExamples.WeChat.xlsx";
     private const long MaximumFileBytes = 20L * 1024 * 1024;
     private const long MaximumExpandedBytes = 100L * 1024 * 1024;
     private const int MaximumRows = 100_000;
@@ -88,13 +89,15 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    public string? PickExampleExportFile()
+    public string? PickExampleExportFile(string? bankName = null)
     {
         var dialog = new SaveFileDialog
         {
             Title = "下载随机分子 Excel 示例",
             Filter = "Excel 文件 (*.xlsx)|*.xlsx",
-            FileName = "随机分子Excel示例.xlsx",
+            FileName = IsWechatBank(bankName)
+                ? "微信随机分子Excel示例.xlsx"
+                : "随机分子Excel示例.xlsx",
             AddExtension = true,
             DefaultExt = ".xlsx",
             OverwritePrompt = true
@@ -209,7 +212,7 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return new FormulaDataSetImportResult(dataSet, emptyRowsSkipped);
     }
 
-    public void ExportBuiltInExample(string path)
+    public void ExportBuiltInExample(string path, string? bankName = null)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -221,8 +224,49 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
             throw new InvalidDataException("随机分子示例必须导出为 .xlsx 文件。");
         }
 
-        var dataSet = CreateBuiltInExampleDataSet();
-        WriteWorkbook(path, dataSet.Headers, dataSet.Rows);
+        if (IsWechatBank(bankName))
+        {
+            WriteEmbeddedWorkbook(path, WechatExampleResourceName);
+        }
+        else
+        {
+            var dataSet = CreateBuiltInExampleDataSet();
+            WriteWorkbook(path, dataSet.Headers, dataSet.Rows);
+        }
+    }
+
+    private static bool IsWechatBank(string? bankName)
+    {
+        return bankName?.Contains("微信", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static void WriteEmbeddedWorkbook(string path, string resourceName)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using var source = typeof(FormulaDataSetService).Assembly.GetManifestResourceStream(resourceName)
+                ?? throw new InvalidOperationException("未找到内置的微信随机分子 Excel 示例。");
+            using (var destination = File.Create(temporaryPath))
+            {
+                source.CopyTo(destination);
+            }
+
+            File.Move(temporaryPath, path, true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
 
     public FormulaDataSet? Get(long bankId)

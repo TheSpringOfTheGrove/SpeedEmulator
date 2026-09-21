@@ -125,8 +125,6 @@
                     <TextBlock Text="二、Excel 取值规则" Style="{StaticResource SectionHeadingStyle}" />
                     <TextBlock Text="• 第一行必须是列标题，第二行开始是数据；标题不可为空、不可重复。"
                                Style="{StaticResource BodyTextStyle}" />
-                    <TextBlock Text="• 工商银行验证规则需要“姓名”和“卡号”两列。点击“下载示例”，编辑保存后，再点击“读取Excel”导入。"
-                               Style="{StaticResource BodyTextStyle}" />
                     <TextBlock Style="{StaticResource BodyTextStyle}">
                         <Run Text="• $列名$" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
                         <Run Text=" 每次从该列的非空数据中独立抽取，适合无需对应关系的数据；整列无值时阻止保存。" />
@@ -135,18 +133,8 @@
                         <Run Text="• ^列名^" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
                         <Run Text=" 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据，允许对应单元格为空。" />
                     </TextBlock>
-                    <TextBlock Text="• 切换银行后需为当前银行重新读取随机分子 Excel；“清空”只清理当前银行的数据。"
+                    <TextBlock Text="• 以上公式适用于所有银行；随机分子 Excel 按银行独立保存，切换银行后需重新读取，“清空”只清理当前银行的数据。"
                                Style="{StaticResource BodyTextStyle}" />
-                    <DataGrid x:Name="ExcelExampleGrid"
-                              Height="94"
-                              Margin="0,8,0,0"
-                              Style="{StaticResource CompactHelpGridStyle}">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="姓名" Binding="{Binding Name}" Width="180" />
-                            <DataGridTextColumn Header="卡号" Binding="{Binding CardNumber}" Width="260" />
-                            <DataGridTextColumn Header="开户行（可选）" Binding="{Binding BankName}" Width="*" />
-                        </DataGrid.Columns>
-                    </DataGrid>
 
                     <TextBlock Text="三、日期格式说明" Style="{StaticResource SectionHeadingStyle}" />
                     <DataGrid x:Name="DateFormatGrid"
