@@ -8,6 +8,7 @@
         MinHeight="620"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
+        PreviewMouseWheel="Window_PreviewMouseWheel"
         Background="#F5F6F8">
     <Window.Resources>
         <Style x:Key="SectionHeadingStyle" TargetType="TextBlock">
@@ -77,7 +78,8 @@
                 BorderBrush="#E1E4E8"
                 BorderThickness="1"
                 CornerRadius="6">
-            <ScrollViewer VerticalScrollBarVisibility="Auto"
+            <ScrollViewer x:Name="HelpScrollViewer"
+                          VerticalScrollBarVisibility="Hidden"
                           HorizontalScrollBarVisibility="Disabled"
                           CanContentScroll="False">
                 <StackPanel>
@@ -181,9 +183,6 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <TextBlock Text="六、工商银行内置验证示例" Style="{StaticResource SectionHeadingStyle}" />
-                    <TextBlock Text="程序已在工商银行“参照明细”中内置一条未勾选的“公式功能验证”规则，覆盖上述 10 类公式。下载示例 Excel，编辑并读取后，可勾选该规则生成并保存，查看各字段解析结果。示例默认不参与正常生成。"
-                               Style="{StaticResource BodyTextStyle}" />
                 </StackPanel>
             </ScrollViewer>
         </Border>

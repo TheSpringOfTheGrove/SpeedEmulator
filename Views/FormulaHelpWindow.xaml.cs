@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 
 namespace SpeedEmulator.Views;
 
@@ -63,6 +64,12 @@ public partial class FormulaHelpWindow : Window
     private void Close_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        HelpScrollViewer.ScrollToVerticalOffset(HelpScrollViewer.VerticalOffset - e.Delta);
+        e.Handled = true;
     }
 
     private sealed record FormulaHelpRow(string Number, string Formula, string Meaning, string FullSyntax, string Example);
