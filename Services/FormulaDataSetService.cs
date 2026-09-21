@@ -39,6 +39,8 @@ public interface IFormulaDataSetService
 
     FormulaDataSetImportResult Import(long bankId, string path);
 
+    FormulaDataSetImportResult LoadBuiltInExample(long bankId);
+
     FormulaDataSet? Get(long bankId);
 
     bool Clear(long bankId);
@@ -190,6 +192,33 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return new FormulaDataSetImportResult(dataSet, emptyRowsSkipped);
     }
 
+    public FormulaDataSetImportResult LoadBuiltInExample(long bankId)
+    {
+        var dataSet = new FormulaDataSet
+        {
+            FileName = "内置随机分子示例.xlsx",
+            ImportedAtUtc = DateTime.UtcNow,
+            Headers = ["姓名", "卡号", "开户行", "手机号", "备注"],
+            Rows =
+            [
+                CreateExampleRow("张三", "6222021001000000018", "中国工商银行北京分行", "13800000001", "示例一"),
+                CreateExampleRow("李四", "6222021001000000026", "中国工商银行上海分行", "13800000002", "示例二"),
+                CreateExampleRow("王五", "6222021001000000034", "中国工商银行广州分行", "13800000003", "示例三"),
+                CreateExampleRow("赵六", "6222021001000000042", "中国工商银行深圳分行", "13800000004", "示例四"),
+                CreateExampleRow("陈晨", "6222021001000000059", "中国工商银行杭州分行", "13800000005", "示例五"),
+                CreateExampleRow("周宁", "6222021001000000067", "中国工商银行成都分行", "13800000006", "示例六")
+            ]
+        };
+
+        lock (syncRoot)
+        {
+            Persist(bankId, dataSet);
+            cache[bankId] = dataSet;
+        }
+
+        return new FormulaDataSetImportResult(dataSet, 0);
+    }
+
     public FormulaDataSet? Get(long bankId)
     {
         lock (syncRoot)
@@ -269,6 +298,23 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
                 dataSet.Rows[index],
                 StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    private static Dictionary<string, string> CreateExampleRow(
+        string name,
+        string cardNumber,
+        string bankName,
+        string phoneNumber,
+        string remark)
+    {
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["姓名"] = name,
+            ["卡号"] = cardNumber,
+            ["开户行"] = bankName,
+            ["手机号"] = phoneNumber,
+            ["备注"] = remark
+        };
     }
 
     private static IReadOnlyList<Dictionary<int, string>> ReadFirstSheet(string path)

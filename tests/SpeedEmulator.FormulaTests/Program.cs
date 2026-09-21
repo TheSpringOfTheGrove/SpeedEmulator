@@ -14,6 +14,7 @@ var tests = new (string Name, Action Run)[]
     ("缺失 Excel 列兼容并告警", TestMissingExcelColumn),
     ("未闭合和超长公式阻止保存", TestInvalidFormulas),
     ("Excel 导入、持久化和清空", TestFormulaDataSetImport),
+    ("内置 Excel 示例及公式依赖检查", TestBuiltInExcelExampleAndDependencies),
     ("统一保存和二次保存幂等", TestSaveAndIdempotency),
     ("公式错误时保存保持原子性", TestAtomicSaveFailure),
     ("固定日期五种模式解析", TestFixedDateModes),
@@ -190,6 +191,31 @@ static void TestFormulaDataSetImport()
         AssertEqual("222", reloaded!.Rows[1]["卡号"]);
         AssertTrue(service.Clear(8), "清空应删除当前银行数据");
         AssertTrue(service.Get(8) is null, "清空后不应再返回数据");
+    });
+}
+
+static void TestBuiltInExcelExampleAndDependencies()
+{
+    WithTemporaryDirectory(directory =>
+    {
+        var service = new FormulaDataSetService(Path.Combine(directory, "formula-data"));
+        var loaded = service.LoadBuiltInExample(4);
+        AssertTrue(loaded.DataSet.Headers.Contains("姓名"), "示例应包含姓名列");
+        AssertTrue(loaded.DataSet.Headers.Contains("卡号"), "示例应包含卡号列");
+        AssertEqual(6, loaded.DataSet.Rows.Count);
+        AssertEqual("张三", loaded.DataSet.Rows[0]["姓名"]);
+        AssertTrue(new FormulaDataSetService(Path.Combine(directory, "formula-data")).Get(4) is not null, "示例数据应持久化");
+
+        var rule = new GenerateReferenceRule
+        {
+            OppositeUsername = @"\\$姓名$\\",
+            OppositeAccount = @"前缀\\^卡号^\\",
+            Remark = "$公式外不应识别$"
+        };
+        var requiredColumns = FormulaExcelDependencyAnalyzer.GetRequiredColumns([rule]);
+        AssertEqual(2, requiredColumns.Count);
+        AssertTrue(requiredColumns.Contains("姓名"), "应识别独立随机 Excel 列");
+        AssertTrue(requiredColumns.Contains("卡号"), "应识别同行关联 Excel 列");
     });
 }
 

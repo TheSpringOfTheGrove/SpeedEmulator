@@ -60,6 +60,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         ImportExcelCommand = new AsyncRelayCommand(ImportExcelAsync);
         ExportExcelCommand = new AsyncRelayCommand(ExportExcelAsync);
         ReadExcelCommand = new RelayCommand(ReadExcel);
+        LoadExampleExcelCommand = new RelayCommand(LoadExampleExcel);
         ClearExcelCommand = new RelayCommand(ClearExcel);
         ShowFormulaHelpCommand = new RelayCommand(() => RequestOpenFormulaHelp?.Invoke(this, EventArgs.Empty));
         ComputeCommand = new RelayCommand(Compute);
@@ -164,6 +165,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
     public AsyncRelayCommand ExportExcelCommand { get; }
 
     public RelayCommand ReadExcelCommand { get; }
+
+    public RelayCommand LoadExampleExcelCommand { get; }
 
     public RelayCommand ClearExcelCommand { get; }
 
@@ -689,6 +692,22 @@ public sealed class FlowGenerationViewModel : ObservableObject
         StatusMessage = "已清空当前银行的随机分子 Excel 数据";
     }
 
+    private void LoadExampleExcel()
+    {
+        try
+        {
+            var result = formulaDataSetService.LoadBuiltInExample(Bank.Id);
+            Bank.IsReadConfigExcel = true;
+            ExcelStatus = $"{result.DataSet.FileName}（{result.DataSet.Rows.Count} 行）";
+            StatusMessage = "已加载内置随机分子示例：姓名、卡号、开户行、手机号、备注";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"加载随机分子示例失败：{ex.Message}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private async Task StartGenerateAsync()
     {
         if (BankUser is null)
@@ -705,6 +724,37 @@ public sealed class FlowGenerationViewModel : ObservableObject
             StatusMessage = "请至少勾选一条参照明细或固定日期增加项目";
             MessageBox.Show("请至少勾选一条参照明细或固定日期增加项目", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
+        }
+
+        var requiredExcelColumns = FormulaExcelDependencyAnalyzer.GetRequiredColumns(
+            selectedReferences.Cast<FlowRuleBase>().Concat(selectedConstItems));
+        if (requiredExcelColumns.Count > 0)
+        {
+            var formulaDataSet = formulaDataSetService.Get(Bank.Id);
+            if (formulaDataSet is null)
+            {
+                StatusMessage = $"已勾选规则需要随机分子 Excel：{string.Join("、", requiredExcelColumns)}";
+                MessageBox.Show(
+                    $"当前规则使用了 Excel 公式，需要以下列：\n\n{string.Join("、", requiredExcelColumns)}\n\n请先点击“读取Excel文件”，或点击“加载Excel示例”进行功能测试。",
+                    "请先读取随机分子 Excel",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var missingColumns = requiredExcelColumns
+                .Where(required => !formulaDataSet.Headers.Contains(required, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (missingColumns.Length > 0)
+            {
+                StatusMessage = $"随机分子 Excel 缺少列：{string.Join("、", missingColumns)}";
+                MessageBox.Show(
+                    $"当前随机分子 Excel 缺少以下列：\n\n{string.Join("、", missingColumns)}\n\n请修改第一行列标题后重新读取。",
+                    "Excel 列不完整",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
         }
 
         if (Config.EndTime < Config.StartTime)

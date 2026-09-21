@@ -423,6 +423,11 @@
                                 FontWeight="Bold"
                                 Command="{Binding ShowFormulaHelpCommand}"
                                 ToolTip="查看公式使用说明" />
+                        <Button Content="加载Excel示例"
+                                Margin="10,0,0,0"
+                                Command="{Binding LoadExampleExcelCommand}"
+                                ToolTip="加载包含姓名、卡号等列的内置示例数据"
+                                Style="{StaticResource SmallButtonStyle}" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1"

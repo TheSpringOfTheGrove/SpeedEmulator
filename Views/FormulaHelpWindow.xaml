@@ -157,10 +157,35 @@
                     <Paragraph Style="{StaticResource SectionHeadingStyle}">二、Excel 取值规则</Paragraph>
                     <List MarkerStyle="Disc" Margin="18,0,0,0">
                         <ListItem><Paragraph Margin="0">第一行必须是列标题，第二行开始是数据；标题不可为空、不可重复。</Paragraph></ListItem>
+                        <ListItem><Paragraph Margin="0">内置工商银行验证规则需要“姓名”和“卡号”两列。可直接点击“加载Excel示例”测试，无需准备文件。</Paragraph></ListItem>
                         <ListItem><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">$列名$</Run> 每出现一次都独立抽取，适合无需对应关系的数据。</Paragraph></ListItem>
                         <ListItem><Paragraph Margin="0"><Run Style="{StaticResource CodeStyle}">^列名^</Run> 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据。</Paragraph></ListItem>
                         <ListItem><Paragraph Margin="0">切换银行后需为当前银行重新读取随机分子 Excel；“清空”只清理当前银行的数据。</Paragraph></ListItem>
                     </List>
+                    <Table CellSpacing="0" Margin="0,10,0,0">
+                        <Table.Columns>
+                            <TableColumn Width="180" />
+                            <TableColumn Width="260" />
+                            <TableColumn Width="*" />
+                        </Table.Columns>
+                        <TableRowGroup>
+                            <TableRow Background="#E9EEF6" FontWeight="SemiBold">
+                                <TableCell><Paragraph Margin="0">姓名</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">卡号</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">开户行（可选）</Paragraph></TableCell>
+                            </TableRow>
+                            <TableRow>
+                                <TableCell><Paragraph Margin="0">张三</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">6222021001000000018</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">中国工商银行北京分行</Paragraph></TableCell>
+                            </TableRow>
+                            <TableRow Background="#FAFBFC">
+                                <TableCell><Paragraph Margin="0">李四</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">6222021001000000026</Paragraph></TableCell>
+                                <TableCell><Paragraph Margin="0">中国工商银行上海分行</Paragraph></TableCell>
+                            </TableRow>
+                        </TableRowGroup>
+                    </Table>
 
                     <Paragraph Style="{StaticResource SectionHeadingStyle}">三、日期格式说明</Paragraph>
                     <Table CellSpacing="0">
