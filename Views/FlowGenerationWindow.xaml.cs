@@ -18,6 +18,7 @@ public partial class FlowGenerationWindow : Window
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly IBankUserRepository bankUserRepository;
     private readonly ITableExcelService tableExcelService;
     private readonly IPdfImportService pdfImportService;
@@ -29,6 +30,7 @@ public partial class FlowGenerationWindow : Window
         IBankUserColumnSettingsRepository columnSettingsRepository,
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowRecordRepository flowRecordRepository,
+        IFlowRecordSaveService flowRecordSaveService,
         IBankUserRepository bankUserRepository,
         ITableExcelService tableExcelService,
         IPdfImportService pdfImportService,
@@ -40,6 +42,7 @@ public partial class FlowGenerationWindow : Window
         this.columnSettingsRepository = columnSettingsRepository;
         this.interestSettingsRepository = interestSettingsRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.flowRecordSaveService = flowRecordSaveService;
         this.bankUserRepository = bankUserRepository;
         this.tableExcelService = tableExcelService;
         this.pdfImportService = pdfImportService;
@@ -139,7 +142,7 @@ public partial class FlowGenerationWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, canUploadPdf);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, flowRecordSaveService, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, canUploadPdf);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this

@@ -15,6 +15,7 @@ namespace SpeedEmulator.ViewModels;
 public sealed class FlowDetailsViewModel : ObservableObject
 {
     private readonly IFlowRecordRepository repository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly ITableExcelService tableExcelService;
     private readonly IBankUserRepository? bankUserRepository;
     private readonly IBankInterestSettingsRepository? interestSettingsRepository;
@@ -32,6 +33,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         Bank bank,
         BankUser bankUser,
         IFlowRecordRepository repository,
+        IFlowRecordSaveService flowRecordSaveService,
         ITableExcelService tableExcelService,
         IBankUserRepository? bankUserRepository = null,
         IPdfImportService? pdfImportService = null,
@@ -42,6 +44,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         Bank = bank;
         BankUser = bankUser;
         this.repository = repository;
+        this.flowRecordSaveService = flowRecordSaveService;
         this.tableExcelService = tableExcelService;
         this.bankUserRepository = bankUserRepository;
         this.interestSettingsRepository = interestSettingsRepository;
@@ -66,7 +69,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
         ExportRecordCommand = new RelayCommand(() => MarkReserved("导出xlsx"));
         OpenFilterCommand = new RelayCommand(() => RequestOpenFilter?.Invoke(this, EventArgs.Empty));
         SetColumnFieldCommand = new RelayCommand(() => RequestOpenColumnSettings?.Invoke(this, EventArgs.Empty));
-        ConvertFormulaCommand = new RelayCommand(() => MarkReserved("转换公式"));
+        ConvertFormulaCommand = new RelayCommand(ConvertFormula);
         ShowStaticCommand = new RelayCommand(() => RequestOpenStatistics?.Invoke(this, EventArgs.Empty));
         ReComputeBalanceCommand = new AsyncRelayCommand(RecomputeBalanceAsync);
         CloseCommand = new RelayCommand(() => RequestClose?.Invoke(this, EventArgs.Empty));
@@ -333,16 +336,83 @@ public sealed class FlowDetailsViewModel : ObservableObject
         {
             var selected = SelectedRecord;
             ReindexAllRecords();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, allRecords);
             RefreshDisplay(selected);
-            StatusMessage = $"已保存全部流水：{allRecords.Count} 条";
-            MessageBox.Show("保存成功", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage = $"已保存全部流水：{allRecords.Count} 条" + CreateFormulaStatusSuffix(saveResult.FormulaSummary);
+            var warningText = CreateFormulaWarningText(saveResult.FormulaSummary);
+            MessageBox.Show(
+                string.IsNullOrWhiteSpace(warningText) ? "保存成功" : $"保存成功\n\n{warningText}",
+                "提示",
+                MessageBoxButton.OK,
+                saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
             StatusMessage = $"保存失败：{ex.Message}";
             MessageBox.Show($"保存失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void ConvertFormula()
+    {
+        try
+        {
+            var selected = SelectedRecord;
+            var summary = flowRecordSaveService.ConvertInPlace(Bank, allRecords);
+            RefreshDisplay(selected);
+            if (summary.ChangedFieldCount == 0)
+            {
+                StatusMessage = "没有发现可转换的公式";
+                MessageBox.Show(StatusMessage, "转换公式", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            StatusMessage = $"已转换 {summary.ChangedRecordCount} 条流水、{summary.ChangedFieldCount} 个字段" +
+                (summary.WarningCount > 0 ? $"，警告 {summary.WarningCount} 项" : string.Empty) +
+                "；请点击“保存全部”完成保存";
+            var warningText = CreateFormulaWarningText(summary);
+            MessageBox.Show(
+                string.IsNullOrWhiteSpace(warningText)
+                    ? StatusMessage
+                    : $"{StatusMessage}\n\n{warningText}",
+                "转换公式",
+                MessageBoxButton.OK,
+                summary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"转换公式失败：{ex.Message}";
+            MessageBox.Show(StatusMessage, "转换公式", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static string CreateFormulaStatusSuffix(FlowFormulaEvaluationSummary summary)
+    {
+        var changedSuffix = summary.ChangedFieldCount > 0
+            ? $"，已转换公式字段 {summary.ChangedFieldCount} 个"
+            : string.Empty;
+        var warningSuffix = summary.WarningCount > 0
+            ? $"，警告 {summary.WarningCount} 项"
+            : string.Empty;
+        return changedSuffix + warningSuffix;
+    }
+
+    private static string CreateFormulaWarningText(FlowFormulaEvaluationSummary summary)
+    {
+        var warnings = summary.Diagnostics
+            .Where(item => item.Severity == FormulaDiagnosticSeverity.Warning)
+            .Take(5)
+            .Select(item => $"第 {item.RecordIndex} 行/{item.ColumnName}：{item.Message}")
+            .ToList();
+        if (warnings.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var suffix = summary.WarningCount > warnings.Count
+            ? $"\n另有 {summary.WarningCount - warnings.Count} 项警告。"
+            : string.Empty;
+        return "注意：\n" + string.Join("\n", warnings) + suffix;
     }
 
     private async Task RecomputeBalanceAsync()
@@ -392,7 +462,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 : negativeBalance?.Record ?? SelectedRecord;
 
             ReindexAllRecords();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            var formulaSaveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, allRecords);
             if (bankUserRepository is not null)
             {
                 await bankUserRepository.SaveAsync(BankUser);
@@ -435,6 +505,7 @@ public sealed class FlowDetailsViewModel : ObservableObject
                 StatusMessage = "重新计算成功" + CreateInterestStatusSuffix(interestResult);
                 MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             }
+            StatusMessage += CreateFormulaStatusSuffix(formulaSaveResult.FormulaSummary);
         }
         catch (Exception ex)
         {
@@ -930,15 +1001,19 @@ public sealed class FlowDetailsViewModel : ObservableObject
             }
 
             ReindexAllRecords();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, allRecords);
             if (bankUserRepository is not null)
             {
                 await bankUserRepository.SaveAsync(BankUser);
             }
 
             RefreshDisplay(lastImported);
-            StatusMessage = $"导入成功：{imported.Count} 条流水";
-            MessageBox.Show($"导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage = $"导入成功：{imported.Count} 条流水" + CreateFormulaStatusSuffix(saveResult.FormulaSummary);
+            MessageBox.Show(
+                $"导入成功：{imported.Count} 条" + (saveResult.FormulaSummary.WarningCount > 0 ? $"\n\n公式警告：{saveResult.FormulaSummary.WarningCount} 项" : string.Empty),
+                "提示",
+                MessageBoxButton.OK,
+                saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -1024,15 +1099,19 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
             FlowRecordChronologicalOrder.SortInPlace(allRecords);
             ReindexAllRecords();
-            await repository.SaveAllAsync(Bank.Id, BankUser.Id, allRecords);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, allRecords);
             if (bankUserRepository is not null)
             {
                 await bankUserRepository.SaveAsync(BankUser);
             }
 
             RefreshDisplay(lastImported);
-            StatusMessage = $"PDF导入成功：{imported.Count} 条流水";
-            MessageBox.Show($"PDF导入成功：{imported.Count} 条", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage = $"PDF导入成功：{imported.Count} 条流水" + CreateFormulaStatusSuffix(saveResult.FormulaSummary);
+            MessageBox.Show(
+                $"PDF导入成功：{imported.Count} 条" + (saveResult.FormulaSummary.WarningCount > 0 ? $"\n\n公式警告：{saveResult.FormulaSummary.WarningCount} 项" : string.Empty),
+                "提示",
+                MessageBoxButton.OK,
+                saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (InvalidDataException ex)
         {

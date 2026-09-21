@@ -411,15 +411,18 @@
                                    VerticalAlignment="Center"
                                    Foreground="#777777"
                                    FontSize="13" />
-                        <TextBlock Text="i"
-                                   Width="18"
-                                   Height="18"
-                                   Margin="20,0,0,0"
-                                   TextAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Foreground="White"
-                                   Background="#2568C5"
-                                   FontWeight="Bold" />
+                        <Button Content="i"
+                                Width="22"
+                                Height="22"
+                                Margin="20,0,0,0"
+                                Padding="0"
+                                VerticalAlignment="Center"
+                                Foreground="White"
+                                Background="#2568C5"
+                                BorderThickness="0"
+                                FontWeight="Bold"
+                                Command="{Binding ShowFormulaHelpCommand}"
+                                ToolTip="查看公式使用说明" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1"
@@ -430,7 +433,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="#777777" />
                         <TextBox Text="{Binding ExcelStatus, Mode=OneWay}"
-                                 Width="80"
+                                 Width="180"
                                  Height="34"
                                  IsReadOnly="True"
                                  Foreground="#999999"

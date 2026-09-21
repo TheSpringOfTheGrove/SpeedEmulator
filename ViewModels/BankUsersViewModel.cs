@@ -20,6 +20,7 @@ public sealed class BankUsersViewModel : ObservableObject
     private readonly IImageFilePickerService imageFilePickerService;
     private readonly ITableExcelService tableExcelService;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly IPdfImportService pdfImportService;
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
     private BankUser editableUser;
@@ -39,6 +40,7 @@ public sealed class BankUsersViewModel : ObservableObject
         IImageFilePickerService imageFilePickerService,
         ITableExcelService tableExcelService,
         IFlowRecordRepository flowRecordRepository,
+        IFlowRecordSaveService flowRecordSaveService,
         IPdfImportService? pdfImportService = null,
         IPdfImportPreviewDialogService? pdfImportPreviewDialogService = null,
         bool canUploadPdf = true)
@@ -50,6 +52,7 @@ public sealed class BankUsersViewModel : ObservableObject
         this.imageFilePickerService = imageFilePickerService;
         this.tableExcelService = tableExcelService;
         this.flowRecordRepository = flowRecordRepository;
+        this.flowRecordSaveService = flowRecordSaveService;
         this.pdfImportService = pdfImportService ?? new PdfImportService();
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService ?? new PdfImportPreviewDialogService();
         CanUploadPdf = canUploadPdf;
@@ -311,12 +314,12 @@ public sealed class BankUsersViewModel : ObservableObject
 
             // Persist the combined target first. The cleanup option is deliberately
             // separate, so users can choose between aggregation and a destructive move.
-            await flowRecordRepository.SaveAllAsync(Bank.Id, persistedTarget.Id, mergedRecords);
+            var mergeSaveResult = await flowRecordSaveService.SaveAllAsync(Bank, persistedTarget.Id, mergedRecords);
             if (clearSourceUsersAndFlows)
             {
                 foreach (var sourceUser in sourceUsers)
                 {
-                    await flowRecordRepository.SaveAllAsync(Bank.Id, sourceUser.Id, []);
+                    await flowRecordSaveService.SaveAllAsync(Bank, sourceUser.Id, []);
                     await repository.DeleteAsync(sourceUser.Id);
                     Users.Remove(sourceUser);
                 }
@@ -326,7 +329,12 @@ public sealed class BankUsersViewModel : ObservableObject
             StatusMessage = clearSourceUsersAndFlows
                 ? $"已合并 {mergedRecords.Count} 条流水到 {persistedTarget.AccountName}，并清空及删除 {sourceUsers.Count} 个非目标用户。"
                 : $"已合并 {mergedRecords.Count} 条流水到 {persistedTarget.AccountName}，非目标用户及原有流水已保留。";
-            MessageBox.Show(StatusMessage, "合并流水", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage += CreateFormulaWarningSuffix(mergeSaveResult.FormulaSummary);
+            MessageBox.Show(
+                StatusMessage,
+                "合并流水",
+                MessageBoxButton.OK,
+                mergeSaveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -996,14 +1004,15 @@ public sealed class BankUsersViewModel : ObservableObject
             }
 
             ReindexFlowRecords(nextRecords);
-            await flowRecordRepository.SaveAllAsync(Bank.Id, savedUser.Id, nextRecords);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, savedUser.Id, nextRecords);
             ReplaceUserInList(targetUser, originalUserId, savedUser);
             _ = SyncBackendUserAsync(savedUser);
 
             StatusMessage = isNewUser
                 ? $"导入成功：新建用户并导入 {imported.Count} 条流水"
                 : $"导入成功：已覆盖 {savedUser.AccountName} 的 {imported.Count} 条流水";
-            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage += CreateFormulaWarningSuffix(saveResult.FormulaSummary);
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -1077,14 +1086,15 @@ public sealed class BankUsersViewModel : ObservableObject
 
             FlowRecordChronologicalOrder.SortInPlace(nextRecords);
             ReindexFlowRecords(nextRecords);
-            await flowRecordRepository.SaveAllAsync(Bank.Id, savedUser.Id, nextRecords);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, savedUser.Id, nextRecords);
             ReplaceUserInList(sourceUser, originalUserId, savedUser);
             _ = SyncBackendUserAsync(savedUser);
 
             StatusMessage = isNewUser
                 ? $"PDF导入成功：新建用户并导入 {imported.Count} 条流水"
                 : $"PDF导入成功：已覆盖 {savedUser.AccountName} 的用户信息和 {imported.Count} 条流水";
-            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusMessage += CreateFormulaWarningSuffix(saveResult.FormulaSummary);
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (InvalidDataException ex)
         {
@@ -1255,6 +1265,13 @@ public sealed class BankUsersViewModel : ObservableObject
         var target = SelectedUser?.AccountName ?? EditableUser.AccountName;
         var suffix = string.IsNullOrWhiteSpace(target) ? string.Empty : $"：{target}";
         StatusMessage = $"{featureName}入口已预留{suffix}";
+    }
+
+    private static string CreateFormulaWarningSuffix(FlowFormulaEvaluationSummary summary)
+    {
+        return summary.WarningCount > 0
+            ? $"；公式警告 {summary.WarningCount} 项"
+            : string.Empty;
     }
 
     private void CopySealPath()

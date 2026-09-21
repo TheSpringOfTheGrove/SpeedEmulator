@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
     <Resource Include="Assets\SpeedEmulatorIcon.ico" />
     <Resource Include="Assets\SpeedEmulatorIcon.png" />
     <Resource Include="Assets\jisu-theme-app-icon-with-year.ico" />

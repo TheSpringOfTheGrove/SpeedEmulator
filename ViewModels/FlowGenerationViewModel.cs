@@ -14,8 +14,10 @@ public sealed class FlowGenerationViewModel : ObservableObject
     private readonly IFlowGenerationRepository repository;
     private readonly IBankUserRepository bankUserRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRuleExcelService excelService;
+    private readonly IFormulaDataSetService formulaDataSetService;
     private readonly FlowAutoGenerator flowAutoGenerator = new();
     private FlowGenerationConfig config = new();
     private GenerateReferenceRule? selectedReference;
@@ -34,16 +36,20 @@ public sealed class FlowGenerationViewModel : ObservableObject
         IFlowGenerationRepository repository,
         IBankUserRepository bankUserRepository,
         IFlowRecordRepository flowRecordRepository,
+        IFlowRecordSaveService flowRecordSaveService,
         IBankInterestSettingsRepository interestSettingsRepository,
-        IFlowRuleExcelService excelService)
+        IFlowRuleExcelService excelService,
+        IFormulaDataSetService formulaDataSetService)
     {
         Bank = bank;
         BankUser = bankUser;
         this.repository = repository;
         this.bankUserRepository = bankUserRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.flowRecordSaveService = flowRecordSaveService;
         this.interestSettingsRepository = interestSettingsRepository;
         this.excelService = excelService;
+        this.formulaDataSetService = formulaDataSetService;
 
         NewCommand = new RelayCommand(AddCurrentRule);
         DeleteCommand = new RelayCommand(DeleteCurrentRule);
@@ -54,6 +60,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         ExportExcelCommand = new AsyncRelayCommand(ExportExcelAsync);
         ReadExcelCommand = new RelayCommand(ReadExcel);
         ClearExcelCommand = new RelayCommand(ClearExcel);
+        ShowFormulaHelpCommand = new RelayCommand(ShowFormulaHelp);
         ComputeCommand = new RelayCommand(Compute);
         StartGenerateCommand = new AsyncRelayCommand(StartGenerateAsync);
         OpenMonthDetailSettingsCommand = new RelayCommand(() => RequestOpenMonthDetails?.Invoke(this, EventArgs.Empty));
@@ -157,6 +164,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     public RelayCommand ClearExcelCommand { get; }
 
+    public RelayCommand ShowFormulaHelpCommand { get; }
+
     public RelayCommand ComputeCommand { get; }
 
     public AsyncRelayCommand StartGenerateCommand { get; }
@@ -205,6 +214,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
             SelectedReference = References.FirstOrDefault();
             SelectedConst = ConstItems.FirstOrDefault();
             SelectedMonthDetail = Config.MonthGenData.FirstOrDefault();
+            var formulaDataSet = formulaDataSetService.Get(Bank.Id);
+            Bank.IsReadConfigExcel = formulaDataSet is not null;
+            ExcelStatus = formulaDataSet is null
+                ? "未读取"
+                : $"{formulaDataSet.FileName}（{formulaDataSet.Rows.Count} 行）";
             StatusMessage = $"已载入参照明细 {References.Count} 条，固定日期增加项目 {ConstItems.Count} 条，月明细 {Config.MonthGenData.Count} 条";
         }
         catch (Exception ex)
@@ -638,14 +652,57 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     private void ReadExcel()
     {
-        ExcelStatus = "已读取";
-        StatusMessage = "读取Excel文件入口已预留，当前使用内存样例数据";
+        var path = formulaDataSetService.PickImportFile();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var result = formulaDataSetService.Import(Bank.Id, path);
+            Bank.IsReadConfigExcel = true;
+            ExcelStatus = $"{result.DataSet.FileName}（{result.DataSet.Rows.Count} 行）";
+            StatusMessage = $"随机分子 Excel 已读取：{result.DataSet.Headers.Count} 列、{result.DataSet.Rows.Count} 行";
+            if (result.EmptyRowsSkipped > 0)
+            {
+                StatusMessage += $"，跳过空行 {result.EmptyRowsSkipped} 行";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"读取随机分子 Excel 失败：{ex.Message}";
+            MessageBox.Show(StatusMessage, "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void ClearExcel()
     {
+        formulaDataSetService.Clear(Bank.Id);
+        Bank.IsReadConfigExcel = false;
         ExcelStatus = "未读取";
-        StatusMessage = "已清空Excel读取状态";
+        StatusMessage = "已清空当前银行的随机分子 Excel 数据";
+    }
+
+    private static void ShowFormulaHelp()
+    {
+        MessageBox.Show(
+            """
+            公式必须放在两侧各两个反斜杠中，例如：\\618580(13)\\
+
+            (n)  n 位数字              {n}  n 位小写字母
+            <n>  n 位大写字母          [n]  数字和大写字母
+            @n@  数字和小写字母        #n#  数字、大小写字母
+            %格式%  按交易时间格式化
+            $列名$  从 Excel 独立随机取值
+            ^列名^  同一条流水固定使用 Excel 同一行
+            &流水列名&  复制当前流水的另一个显示列
+
+            Excel 第一行必须是唯一且非空的列标题，第二行开始为数据。
+            """,
+            "公式使用说明",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private async Task StartGenerateAsync()
@@ -781,7 +838,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
                     completeRange.End);
             }
 
-            await flowRecordRepository.SaveAllAsync(Bank.Id, BankUser.Id, recordsToSave);
+            var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, recordsToSave);
             await SaveBankUserValuesAsync();
             await Task.Yield();
 
@@ -796,13 +853,25 @@ public sealed class FlowGenerationViewModel : ObservableObject
             StatusMessage = appendToExistingRecords
                 ? $"追加生成完成：新增 {result.Records.Count} 条，当前共 {recordsToSave.Count} 条，收入合计 {savedIncomeTotal:N2}，支出合计 {savedExpenseTotal:N2}，期末余额 {savedFinalBalance:N2}"
                 : $"生成完成：{result.Records.Count} 条，收入合计 {result.IncomeTotal:N2}，支出合计 {result.ExpenseTotal:N2}，期末余额 {result.FinalBalance:N2}";
+            if (saveResult.FormulaSummary.ChangedFieldCount > 0)
+            {
+                StatusMessage += $"；已转换公式字段 {saveResult.FormulaSummary.ChangedFieldCount} 个";
+            }
+            if (saveResult.FormulaSummary.WarningCount > 0)
+            {
+                StatusMessage += $"；公式警告 {saveResult.FormulaSummary.WarningCount} 项";
+            }
+            var successMessage = appendToExistingRecords
+                ? $"生成成功\n\n新增流水条数：{result.Records.Count}\n当前流水总数：{recordsToSave.Count}"
+                : $"生成成功\n\n流水条数：{result.Records.Count}";
+            var formulaWarningText = CreateFormulaWarningText(saveResult.FormulaSummary);
             MessageBox.Show(
-                appendToExistingRecords
-                    ? $"生成成功\n\n新增流水条数：{result.Records.Count}\n当前流水总数：{recordsToSave.Count}"
-                    : $"生成成功\n\n流水条数：{result.Records.Count}",
+                string.IsNullOrWhiteSpace(formulaWarningText)
+                    ? successMessage
+                    : $"{successMessage}\n\n{formulaWarningText}",
                 "提示",
                 MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                saveResult.FormulaSummary.WarningCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
 
             SetGenerationProgress(100, "生成完成，正在打开流水明细");
             RequestOpenGeneratedFlowDetails?.Invoke(this, EventArgs.Empty);
@@ -837,6 +906,24 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
 
         return merged;
+    }
+
+    private static string CreateFormulaWarningText(FlowFormulaEvaluationSummary summary)
+    {
+        var warnings = summary.Diagnostics
+            .Where(item => item.Severity == FormulaDiagnosticSeverity.Warning)
+            .Take(5)
+            .Select(item => $"第 {item.RecordIndex} 行/{item.ColumnName}：{item.Message}")
+            .ToList();
+        if (warnings.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var suffix = summary.WarningCount > warnings.Count
+            ? $"\n另有 {summary.WarningCount - warnings.Count} 项警告。"
+            : string.Empty;
+        return "公式警告：\n" + string.Join("\n", warnings) + suffix;
     }
 
     private void RecalculateCompleteStatement(

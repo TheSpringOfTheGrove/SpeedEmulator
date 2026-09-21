@@ -23,6 +23,8 @@ public partial class BankUsersWindow : Window
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowGenerationRepository flowGenerationRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
+    private readonly IFormulaDataSetService formulaDataSetService;
     private readonly ITableExcelService tableExcelService;
     private readonly IPdfImportService pdfImportService;
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService;
@@ -37,6 +39,8 @@ public partial class BankUsersWindow : Window
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowGenerationRepository flowGenerationRepository,
         IFlowRecordRepository flowRecordRepository,
+        IFlowRecordSaveService flowRecordSaveService,
+        IFormulaDataSetService formulaDataSetService,
         ITableExcelService tableExcelService,
         IPdfImportService pdfImportService,
         IPdfImportPreviewDialogService pdfImportPreviewDialogService)
@@ -48,6 +52,8 @@ public partial class BankUsersWindow : Window
         this.interestSettingsRepository = interestSettingsRepository;
         this.flowGenerationRepository = flowGenerationRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.flowRecordSaveService = flowRecordSaveService;
+        this.formulaDataSetService = formulaDataSetService;
         this.tableExcelService = tableExcelService;
         this.pdfImportService = pdfImportService;
         this.pdfImportPreviewDialogService = pdfImportPreviewDialogService;
@@ -98,10 +104,12 @@ public partial class BankUsersWindow : Window
                 flowGenerationRepository,
                 bankUserRepository,
                 flowRecordRepository,
+                flowRecordSaveService,
                 interestSettingsRepository,
-                new FlowRuleExcelService());
+                new FlowRuleExcelService(),
+                formulaDataSetService);
 
-            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, bankUserRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService, viewModel.CanUploadPdf)
+            var window = new FlowGenerationWindow(autoGenerateViewModel, columnSettingsRepository, interestSettingsRepository, flowRecordRepository, flowRecordSaveService, bankUserRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService, viewModel.CanUploadPdf)
             {
                 Owner = this
             };
@@ -121,7 +129,7 @@ public partial class BankUsersWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, viewModel.CanUploadPdf);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, targetUser, flowRecordRepository, flowRecordSaveService, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, viewModel.CanUploadPdf);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
