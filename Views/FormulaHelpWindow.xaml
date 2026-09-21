@@ -102,7 +102,7 @@
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Text="匹配到公式后会替换为计算结果；Excel 列或流水字段找不到时替换为空并给出警告；不是公式的内容原样保留。"
+                    <TextBlock Text="匹配到公式后会替换为计算结果；独立 Excel 公式没有非空数据时会报错并阻止保存；同行关联公式允许取到空值；不是公式的内容原样保留。"
                                Style="{StaticResource BodyTextStyle}" />
 
                     <TextBlock Text="一、支持的全部公式" Style="{StaticResource SectionHeadingStyle}" />
@@ -129,11 +129,11 @@
                                Style="{StaticResource BodyTextStyle}" />
                     <TextBlock Style="{StaticResource BodyTextStyle}">
                         <Run Text="• $列名$" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
-                        <Run Text=" 每次独立抽取，适合无需对应关系的数据。" />
+                        <Run Text=" 每次从该列的非空数据中独立抽取，适合无需对应关系的数据；整列无值时阻止保存。" />
                     </TextBlock>
                     <TextBlock Style="{StaticResource BodyTextStyle}">
                         <Run Text="• ^列名^" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
-                        <Run Text=" 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据。" />
+                        <Run Text=" 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据，允许对应单元格为空。" />
                     </TextBlock>
                     <TextBlock Text="• 切换银行后需为当前银行重新读取随机分子 Excel；“清空”只清理当前银行的数据。"
                                Style="{StaticResource BodyTextStyle}" />

@@ -17,7 +17,7 @@ public partial class FormulaHelpWindow : Window
             new FormulaHelpRow("5", "@n@", "数字和小写字母", @"\\@12@\\", "12 位 0-9/a-z"),
             new FormulaHelpRow("6", "#n#", "数字、大小写字母", @"\\#12#\\", "12 位 0-9/a-z/A-Z"),
             new FormulaHelpRow("7", "%日期格式%", "按本条流水交易时间格式化", @"\\%yyyyMMdd%\\", "20250619"),
-            new FormulaHelpRow("8", "$Excel列名$", "每次独立随机取一行", @"\\$姓名$\\", "宋力"),
+            new FormulaHelpRow("8", "$Excel列名$", "从该列非空数据中独立随机", @"\\$姓名$\\", "宋力"),
             new FormulaHelpRow("9", "^Excel列名^", "同一条流水固定取 Excel 同一行", @"\\^姓名^\\ / \\^卡号^\\", "对应的姓名和卡号"),
             new FormulaHelpRow("10", "&字段名&", "复制本条流水另一显示列", @"\\&对方账号&\\", "与对方账号一致")
         };

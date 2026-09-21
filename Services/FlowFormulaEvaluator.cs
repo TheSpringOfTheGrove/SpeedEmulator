@@ -93,6 +93,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         var changedRecordCount = 0;
         var changedFieldCount = 0;
         var replacedBlockCount = 0;
+        var rowSelectionCache = new ExcelRowSelectionCache(dataSet);
 
         for (var recordOffset = 0; recordOffset < records.Count; recordOffset++)
         {
@@ -114,6 +115,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
                     field,
                     currentValue,
                     dataSet,
+                    rowSelectionCache,
                     diagnostics);
                 replacedBlockCount += result.ReplacedBlockCount;
                 if (!string.Equals(result.Value, currentValue, StringComparison.Ordinal))
@@ -159,6 +161,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         FormulaField field,
         string input,
         FormulaDataSet? dataSet,
+        ExcelRowSelectionCache rowSelectionCache,
         List<FormulaDiagnostic> diagnostics)
     {
         var output = new StringBuilder(Math.Min(input.Length + 32, MaximumFieldLength));
@@ -190,7 +193,15 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
             }
 
             var content = input.Substring(contentStart, end - contentStart);
-            output.Append(EvaluateBlock(bank, record, recordOffset, field, content, dataSet, diagnostics));
+            output.Append(EvaluateBlock(
+                bank,
+                record,
+                recordOffset,
+                field,
+                content,
+                dataSet,
+                rowSelectionCache,
+                diagnostics));
             replacedBlockCount++;
             cursor = end + OuterDelimiter.Length;
 
@@ -241,6 +252,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         FormulaField field,
         string content,
         FormulaDataSet? dataSet,
+        ExcelRowSelectionCache rowSelectionCache,
         List<FormulaDiagnostic> diagnostics)
     {
         var output = new StringBuilder(content.Length + 16);
@@ -313,6 +325,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
                     record,
                     recordOffset,
                     field,
+                    rowSelectionCache,
                     diagnostics));
                 index += consumed;
                 continue;
@@ -327,6 +340,7 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
                     record,
                     recordOffset,
                     field,
+                    rowSelectionCache,
                     diagnostics));
                 index += consumed;
                 continue;
@@ -369,38 +383,89 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
         FlowRecord record,
         int recordOffset,
         FormulaField field,
+        ExcelRowSelectionCache rowSelectionCache,
         List<FormulaDiagnostic> diagnostics)
     {
         if (dataSet is null || dataSet.Rows.Count == 0)
         {
             AddDiagnostic(
                 diagnostics,
-                FormulaDiagnosticSeverity.Warning,
+                correlated ? FormulaDiagnosticSeverity.Warning : FormulaDiagnosticSeverity.Error,
                 record,
                 recordOffset,
                 field,
-                $"尚未读取随机分子 Excel，“{columnName}”已替换为空。");
+                correlated
+                    ? $"尚未读取随机分子 Excel，“{columnName}”已替换为空。"
+                    : $"尚未读取随机分子 Excel，无法为“{columnName}”生成非空内容。");
             return string.Empty;
         }
 
-        var rowIndex = correlated
-            ? record.ReplaceIndex
-            : random.Next(dataSet.Rows.Count);
-        if (correlated && (rowIndex < 0 || rowIndex >= dataSet.Rows.Count))
-        {
-            rowIndex = random.Next(dataSet.Rows.Count);
-            record.ReplaceIndex = rowIndex;
-        }
-
-        if (!dataSet.TryGetValue(rowIndex, columnName, out var value))
+        var normalizedColumnName = columnName.Trim();
+        if (!rowSelectionCache.ContainsColumn(normalizedColumnName))
         {
             AddDiagnostic(
                 diagnostics,
-                FormulaDiagnosticSeverity.Warning,
+                correlated ? FormulaDiagnosticSeverity.Warning : FormulaDiagnosticSeverity.Error,
                 record,
                 recordOffset,
                 field,
-                $"随机分子 Excel 不存在列“{columnName}”，已替换为空。");
+                correlated
+                    ? $"随机分子 Excel 不存在列“{normalizedColumnName}”，已替换为空。"
+                    : $"随机分子 Excel 不存在列“{normalizedColumnName}”，无法生成非空内容。");
+            return string.Empty;
+        }
+
+        int rowIndex;
+        if (correlated)
+        {
+            rowIndex = record.ReplaceIndex;
+            if (rowIndex < 0 || rowIndex >= dataSet.Rows.Count)
+            {
+                rowIndex = random.Next(dataSet.Rows.Count);
+                record.ReplaceIndex = rowIndex;
+            }
+        }
+        else
+        {
+            var candidateRows = rowSelectionCache.GetRowsWithValue(normalizedColumnName);
+            if (candidateRows.Count == 0)
+            {
+                AddDiagnostic(
+                    diagnostics,
+                    FormulaDiagnosticSeverity.Error,
+                    record,
+                    recordOffset,
+                    field,
+                    $"随机分子 Excel 的列“{normalizedColumnName}”没有非空数据。");
+                return string.Empty;
+            }
+
+            rowIndex = candidateRows[random.Next(candidateRows.Count)];
+        }
+
+        if (!dataSet.TryGetValue(rowIndex, normalizedColumnName, out var value))
+        {
+            AddDiagnostic(
+                diagnostics,
+                correlated ? FormulaDiagnosticSeverity.Warning : FormulaDiagnosticSeverity.Error,
+                record,
+                recordOffset,
+                field,
+                correlated
+                    ? $"随机分子 Excel 不存在列“{normalizedColumnName}”，已替换为空。"
+                    : $"随机分子 Excel 的列“{normalizedColumnName}”未能生成非空内容。");
+            return string.Empty;
+        }
+
+        if (!correlated && string.IsNullOrWhiteSpace(value))
+        {
+            AddDiagnostic(
+                diagnostics,
+                FormulaDiagnosticSeverity.Error,
+                record,
+                recordOffset,
+                field,
+                $"随机分子 Excel 的列“{normalizedColumnName}”未能生成非空内容。");
             return string.Empty;
         }
 
@@ -584,6 +649,43 @@ public sealed class FlowFormulaEvaluator : IFlowFormulaEvaluator
             field.ColumnName,
             field.Field,
             message));
+    }
+
+    private sealed class ExcelRowSelectionCache
+    {
+        private readonly FormulaDataSet? dataSet;
+        private readonly Dictionary<string, IReadOnlyList<int>> rowsByColumn =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public ExcelRowSelectionCache(FormulaDataSet? dataSet)
+        {
+            this.dataSet = dataSet;
+        }
+
+        public bool ContainsColumn(string columnName)
+        {
+            return dataSet?.Headers.Contains(columnName.Trim(), StringComparer.OrdinalIgnoreCase) == true;
+        }
+
+        public IReadOnlyList<int> GetRowsWithValue(string columnName)
+        {
+            var normalizedColumnName = columnName.Trim();
+            if (rowsByColumn.TryGetValue(normalizedColumnName, out var cached))
+            {
+                return cached;
+            }
+
+            IReadOnlyList<int> rows = dataSet is null
+                ? []
+                : Enumerable.Range(0, dataSet.Rows.Count)
+                    .Where(rowIndex =>
+                        dataSet.TryGetValue(rowIndex, normalizedColumnName, out var value)
+                        && !string.IsNullOrWhiteSpace(value))
+                    .ToArray();
+            rowsByColumn[normalizedColumnName] = rows;
+            return rows;
+        }
+
     }
 
     private readonly record struct FormulaField(string ColumnName, string Field);

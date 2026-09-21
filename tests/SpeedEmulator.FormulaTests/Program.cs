@@ -9,9 +9,10 @@ var tests = new (string Name, Action Run)[]
     ("六类随机公式、日期和外层定界符", TestRandomAndDateFormulas),
     ("全部日期格式符", TestAllDateFormatTokens),
     ("Excel 独立随机与同行关联", TestExcelFormulas),
+    ("Excel 独立随机跳过空值且同行关联允许空值", TestExcelEmptyValueRules),
     ("流水显示列复制", TestFlowColumnCopy),
     ("自定义字段公式与字段复制", TestCustomFieldFormula),
-    ("缺失 Excel 列兼容并告警", TestMissingExcelColumn),
+    ("独立 Excel 缺失列阻止保存", TestMissingExcelColumn),
     ("未闭合和超长公式阻止保存", TestInvalidFormulas),
     ("Excel 导入、持久化和清空", TestFormulaDataSetImport),
     ("下载 Excel 示例及公式依赖检查", TestBuiltInExcelExampleAndDependencies),
@@ -106,6 +107,68 @@ static void TestExcelFormulas()
     AssertFalse(summary.HasErrors, "Excel 公式不应产生错误");
 }
 
+static void TestExcelEmptyValueRules()
+{
+    var bank = CreateBank(
+        ("交易对方", nameof(FlowRecord.MerchantName)),
+        ("对方户名", nameof(FlowRecord.OppositeUsername)),
+        ("对方账号", nameof(FlowRecord.OppositeAccount)),
+        ("备注", nameof(FlowRecord.Remark)));
+    var dataSet = new FormulaDataSet
+    {
+        FileName = "empty-values.xlsx",
+        Headers = ["商户", "同行值", "同行空值", "空列"],
+        Rows =
+        [
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["商户"] = "",
+                ["同行值"] = "第一行",
+                ["同行空值"] = "",
+                ["空列"] = ""
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["商户"] = "便利店A",
+                ["同行值"] = "第二行",
+                ["同行空值"] = "关联值",
+                ["空列"] = " "
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["商户"] = "",
+                ["同行值"] = "第三行",
+                ["同行空值"] = "",
+                ["空列"] = ""
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["商户"] = "便利店B",
+                ["同行值"] = "第四行",
+                ["同行空值"] = "",
+                ["空列"] = ""
+            }
+        ]
+    };
+    var record = new FlowRecord
+    {
+        MerchantName = @"\\$商户$\\",
+        OppositeUsername = @"\\^同行值^\\",
+        OppositeAccount = @"\\^同行空值^\\"
+    };
+
+    var summary = new FlowFormulaEvaluator(new SequenceRandomSource(1, 0)).Evaluate(bank, [record], dataSet);
+
+    AssertEqual("便利店B", record.MerchantName);
+    AssertEqual("第一行", record.OppositeUsername);
+    AssertEqual("", record.OppositeAccount);
+    AssertFalse(summary.HasErrors, "同行关联公式允许同行单元格为空");
+
+    var emptyRecord = new FlowRecord { Remark = @"\\$空列$\\" };
+    var emptySummary = new FlowFormulaEvaluator(new SequenceRandomSource(0)).Evaluate(bank, [emptyRecord], dataSet);
+    AssertTrue(emptySummary.HasErrors, "独立随机公式整列为空时必须报错，不能静默生成空值");
+}
+
 static void TestFlowColumnCopy()
 {
     var bank = CreateBank(
@@ -148,8 +211,8 @@ static void TestMissingExcelColumn()
     var summary = new FlowFormulaEvaluator(new SequenceRandomSource(0)).Evaluate(bank, [record], CreateDataSet());
 
     AssertEqual("AB", record.OppositeUsername);
-    AssertEqual(1, summary.WarningCount);
-    AssertFalse(summary.HasErrors, "缺失列按兼容规则仅告警");
+    AssertEqual(1, summary.Diagnostics.Count(item => item.Severity == FormulaDiagnosticSeverity.Error));
+    AssertTrue(summary.HasErrors, "独立随机公式缺失列时必须报错，不能静默生成空值");
 }
 
 static void TestInvalidFormulas()
