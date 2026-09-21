@@ -26569,6 +26569,43 @@
           "oppositeAccount": "0",
           "tradePlace": "冯春艳",
           "oppositeBank": "6222080302012227788"
+        },
+        {
+          "id": 102,
+          "index": 102,
+          "bankId": 4,
+          "extraFields": {
+            "RuleField_57CBB1CEF31C": "0",
+            "__BuiltInFormulaDemoVersion": "1"
+          },
+          "isCheck": false,
+          "incomeAttribute": "支出",
+          "minMoney": 10.0,
+          "maxMoney": 10.0,
+          "floutLength": 0,
+          "startDay": 9,
+          "endDay": 17,
+          "percentMonth": 0,
+          "tradeHoliday": true,
+          "tradeWeekend": true,
+          "account": "",
+          "appNum": "\\\\{12}\\\\",
+          "sequenceNum": "\\\\<12>\\\\",
+          "currency": "\\\\[12]\\\\",
+          "cashCheck": "\\\\@12@\\\\",
+          "tradeCode": "\\\\#12#\\\\",
+          "tradeExplain": "公式功能验证-\\\\%yyyy-MM-dd HH:mm:ss%\\\\",
+          "depositTerm": "000",
+          "agreedTerm": "不转存",
+          "noticeType": "\\\\(12)\\\\",
+          "areaNum": "0226",
+          "netNum": "",
+          "operator": "\\\\^姓名^\\\\",
+          "interfacePage": "\\\\^卡号^\\\\",
+          "oppositeUsername": "\\\\$姓名$\\\\",
+          "oppositeAccount": "\\\\622230(13)\\\\",
+          "tradePlace": "公式功能验证",
+          "oppositeBank": "\\\\&对方账号&\\\\"
         }
       ],
       "constItems": [

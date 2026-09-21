@@ -29,6 +29,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
     private bool isBusy;
     private int generationProgress;
     private bool isReorderingRules;
+    private List<string> appliedMigrations = [];
 
     public FlowGenerationViewModel(
         Bank bank,
@@ -60,7 +61,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         ExportExcelCommand = new AsyncRelayCommand(ExportExcelAsync);
         ReadExcelCommand = new RelayCommand(ReadExcel);
         ClearExcelCommand = new RelayCommand(ClearExcel);
-        ShowFormulaHelpCommand = new RelayCommand(ShowFormulaHelp);
+        ShowFormulaHelpCommand = new RelayCommand(() => RequestOpenFormulaHelp?.Invoke(this, EventArgs.Empty));
         ComputeCommand = new RelayCommand(Compute);
         StartGenerateCommand = new AsyncRelayCommand(StartGenerateAsync);
         OpenMonthDetailSettingsCommand = new RelayCommand(() => RequestOpenMonthDetails?.Invoke(this, EventArgs.Empty));
@@ -79,6 +80,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
     public event EventHandler? RequestOpenInterestSettings;
 
     public event EventHandler? RequestOpenGeneratedFlowDetails;
+
+    public event EventHandler? RequestOpenFormulaHelp;
 
     public Bank Bank { get; }
 
@@ -192,6 +195,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         try
         {
             var snapshot = await repository.LoadAsync(Bank, BankUser?.Id);
+            appliedMigrations = snapshot.AppliedMigrations.ToList();
             Config = snapshot.Config;
             ApplyBankUserValuesToConfig();
 
@@ -430,6 +434,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
         NormalizeRuleIndexes();
         var snapshot = new FlowGenerationSnapshot
         {
+            AppliedMigrations = appliedMigrations.ToList(),
             Config = Config.Clone(),
             References = References.Select(item => item.Clone()).ToList(),
             ConstItems = ConstItems.Select(item => item.Clone()).ToList()
@@ -682,27 +687,6 @@ public sealed class FlowGenerationViewModel : ObservableObject
         Bank.IsReadConfigExcel = false;
         ExcelStatus = "未读取";
         StatusMessage = "已清空当前银行的随机分子 Excel 数据";
-    }
-
-    private static void ShowFormulaHelp()
-    {
-        MessageBox.Show(
-            """
-            公式必须放在两侧各两个反斜杠中，例如：\\618580(13)\\
-
-            (n)  n 位数字              {n}  n 位小写字母
-            <n>  n 位大写字母          [n]  数字和大写字母
-            @n@  数字和小写字母        #n#  数字、大小写字母
-            %格式%  按交易时间格式化
-            $列名$  从 Excel 独立随机取值
-            ^列名^  同一条流水固定使用 Excel 同一行
-            &流水列名&  复制当前流水的另一个显示列
-
-            Excel 第一行必须是唯一且非空的列标题，第二行开始为数据。
-            """,
-            "公式使用说明",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
     }
 
     private async Task StartGenerateAsync()

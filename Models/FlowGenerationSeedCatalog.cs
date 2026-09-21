@@ -97,6 +97,7 @@ public static class FlowGenerationSeedCatalog
 
         return new FlowGenerationSnapshot
         {
+            AppliedMigrations = source.AppliedMigrations.ToList(),
             Config = source.Config.Clone(),
             References = references,
             ConstItems = constItems

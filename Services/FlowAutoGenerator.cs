@@ -14289,12 +14289,12 @@ public sealed class FlowAutoGenerator
 
     private static FixedRuleScheduleMode ResolveFixedRuleScheduleMode(string? value)
     {
-        return value?.Trim() switch
+        return FixedDateRuleParser.Parse(value).Kind switch
         {
-            "+" => FixedRuleScheduleMode.Statement,
-            "*" => FixedRuleScheduleMode.Monthly,
-            "=" => FixedRuleScheduleMode.Daily,
-            "-" => FixedRuleScheduleMode.Range,
+            FixedDateRuleKind.Global => FixedRuleScheduleMode.Statement,
+            FixedDateRuleKind.Monthly => FixedRuleScheduleMode.Monthly,
+            FixedDateRuleKind.Daily => FixedRuleScheduleMode.Daily,
+            FixedDateRuleKind.DayRange => FixedRuleScheduleMode.Range,
             _ => FixedRuleScheduleMode.Legacy
         };
     }
@@ -14308,133 +14308,43 @@ public sealed class FlowAutoGenerator
         NativeScheduleState scheduleState,
         IReadOnlyDictionary<DateTime, int> plannedDayUsage)
     {
-        var normalizedEnd = NormalizeEndDate(end);
-        var cursor = start.Date;
-        var result = new List<DateTime>();
-        while (cursor <= normalizedEnd.Date)
-        {
-            var remainingDays = (normalizedEnd.Date - cursor).Days + 1;
-            var windowDays = SelectNativeRangeWindowDays(
-                rule,
-                cursor,
-                remainingDays,
-                scheduleState,
-                random);
-            var windowEnd = cursor.AddDays(windowDays - 1);
-            var candidates = scheduleState.GetCandidateDates(cursor, windowEnd, rule);
-            result.AddRange(DistributeNativeRangeOccurrences(
-                candidates,
-                repeatCount,
-                scheduleState,
-                plannedDayUsage,
-                random));
-            cursor = windowEnd.AddDays(1);
-        }
-
-        return result;
-    }
-
-    private static int SelectNativeRangeWindowDays(
-        GenerateConstRule rule,
-        DateTime windowStart,
-        int remainingDays,
-        NativeScheduleState scheduleState,
-        Random random)
-    {
-        if (remainingDays <= 5)
-        {
-            return Math.Max(1, remainingDays);
-        }
-
-        var candidates = Enumerable.Range(3, 3)
-            .Where(windowDays =>
-            {
-                var remainingAfterWindow = remainingDays - windowDays;
-                return remainingAfterWindow == 0 || remainingAfterWindow >= 3;
-            })
-            .Select(windowDays => new
-            {
-                WindowDays = windowDays,
-                EligibleDayCount = scheduleState
-                    .GetCandidateDates(
-                        windowStart,
-                        windowStart.AddDays(windowDays - 1),
-                        rule)
-                    .Select(item => item.Date)
-                    .Distinct()
-                    .Count()
-            })
-            .ToArray();
-        if (candidates.Length == 0)
-        {
-            return Math.Min(5, remainingDays);
-        }
-
-        var maximumEligibleDays = candidates.Max(item => item.EligibleDayCount);
-        var minimumPreferredEligibleDays = Math.Min(2, maximumEligibleDays);
-        var preferred = candidates
-            .Where(item => item.EligibleDayCount >= minimumPreferredEligibleDays)
-            .ToArray();
-        return preferred[random.Next(preferred.Length)].WindowDays;
-    }
-
-    private static IReadOnlyList<DateTime> DistributeNativeRangeOccurrences(
-        IReadOnlyList<DateTime> sourceDates,
-        int occurrenceCount,
-        NativeScheduleState scheduleState,
-        IReadOnlyDictionary<DateTime, int> plannedDayUsage,
-        Random random)
-    {
-        if (occurrenceCount <= 0 || sourceDates.Count == 0)
+        var option = FixedDateRuleParser.Parse(rule.FixDay);
+        if (option.Kind != FixedDateRuleKind.DayRange)
         {
             return [];
         }
 
-        var dates = sourceDates
-            .Select(item => item.Date)
-            .Distinct()
-            .OrderBy(item => item)
-            .ToArray();
-        var maximumActiveDays = Math.Min(dates.Length, occurrenceCount);
-        var minimumActiveDays = Math.Min(
-            maximumActiveDays,
-            Math.Max(1, Math.Min(2, occurrenceCount)));
-        if (maximumActiveDays >= 3)
+        var result = new List<DateTime>();
+        foreach (var month in EnumerateMonths(start, end))
         {
-            minimumActiveDays = Math.Max(minimumActiveDays, (maximumActiveDays + 1) / 2);
-        }
-
-        var activeDayCount = minimumActiveDays == maximumActiveDays
-            ? maximumActiveDays
-            : random.Next(minimumActiveDays, maximumActiveDays + 1);
-        var activeDates = dates
-            .OrderBy(date =>
-                scheduleState.GetTotalCount(date) + plannedDayUsage.GetValueOrDefault(date))
-            .ThenBy(_ => random.Next())
-            .Take(activeDayCount)
-            .ToArray();
-        var assigned = activeDates.ToDictionary(date => date, _ => 1);
-        var result = activeDates.ToList();
-        var maximumPerDay = Math.Max(
-            1,
-            (int)Math.Ceiling(occurrenceCount * 0.45d));
-
-        while (result.Count < occurrenceCount)
-        {
-            var available = activeDates
-                .Where(date => assigned.GetValueOrDefault(date) < maximumPerDay)
-                .ToArray();
-            if (available.Length == 0)
+            var daysInMonth = DateTime.DaysInMonth(month.Start.Year, month.Start.Month);
+            var rangeStart = new DateTime(
+                month.Start.Year,
+                month.Start.Month,
+                Math.Min(option.StartDay, daysInMonth));
+            var rangeEnd = new DateTime(
+                month.Start.Year,
+                month.Start.Month,
+                Math.Min(option.EndDay, daysInMonth),
+                23,
+                59,
+                59);
+            var windowStart = rangeStart < month.Start ? month.Start : rangeStart;
+            var windowEnd = rangeEnd > month.End ? month.End : rangeEnd;
+            if (windowEnd < windowStart)
             {
-                available = activeDates;
+                continue;
             }
 
-            var selected = available[random.Next(available.Length)];
-            assigned[selected] = assigned.GetValueOrDefault(selected) + 1;
-            result.Add(selected);
+            result.AddRange(SpreadNativeFixedOccurrences(
+                scheduleState.GetCandidateDates(windowStart, windowEnd, rule),
+                repeatCount,
+                scheduleState,
+                plannedDayUsage,
+                random));
         }
 
-        return result.OrderBy(item => item).ToArray();
+        return result;
     }
 
     private static IReadOnlyList<DateTime> SpreadNativeFixedOccurrences(

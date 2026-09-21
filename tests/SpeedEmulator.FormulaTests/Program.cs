@@ -7,6 +7,7 @@ using SpeedEmulator.Services;
 var tests = new (string Name, Action Run)[]
 {
     ("六类随机公式、日期和外层定界符", TestRandomAndDateFormulas),
+    ("全部日期格式符", TestAllDateFormatTokens),
     ("Excel 独立随机与同行关联", TestExcelFormulas),
     ("流水显示列复制", TestFlowColumnCopy),
     ("自定义字段公式与字段复制", TestCustomFieldFormula),
@@ -14,7 +15,11 @@ var tests = new (string Name, Action Run)[]
     ("未闭合和超长公式阻止保存", TestInvalidFormulas),
     ("Excel 导入、持久化和清空", TestFormulaDataSetImport),
     ("统一保存和二次保存幂等", TestSaveAndIdempotency),
-    ("公式错误时保存保持原子性", TestAtomicSaveFailure)
+    ("公式错误时保存保持原子性", TestAtomicSaveFailure),
+    ("固定日期五种模式解析", TestFixedDateModes),
+    ("固定日期区间按月生成", TestFixedDateRangeGeneration),
+    ("工商银行公式参照明细一次性迁移", TestIcbcFormulaReferenceMigration),
+    ("工商银行参照明细全公式端到端", TestIcbcFormulaReferenceEndToEnd)
 };
 
 var failed = 0;
@@ -59,6 +64,21 @@ static void TestRandomAndDateFormulas()
     AssertFalse(record.ExtraFields.ContainsKey(nameof(FlowRecord.Index)), "非字符串属性不能写入自定义字段");
     AssertEqual(2, summary.ChangedFieldCount);
     AssertFalse(summary.HasErrors, "有效公式不应产生错误");
+}
+
+static void TestAllDateFormatTokens()
+{
+    var bank = CreateBank(("备注", nameof(FlowRecord.Remark)));
+    var record = new FlowRecord
+    {
+        AccountTime = new DateTime(2025, 6, 19, 14, 30, 15, 123),
+        Remark = @"\\%yyyy|yy|MM|M|dd|d|HH|hh|mm|ss|fff|tt|dddd|ddd%\\"
+    };
+
+    var summary = new FlowFormulaEvaluator(new SequenceRandomSource(0)).Evaluate(bank, [record], null);
+
+    AssertEqual("2025|25|06|6|19|19|14|02|30|15|123|PM|Thursday|Thu", record.Remark);
+    AssertFalse(summary.HasErrors, "全部日期格式符都应正常解析");
 }
 
 static void TestExcelFormulas()
@@ -220,6 +240,299 @@ static void TestAtomicSaveFailure()
         AssertEqual(original, record.OppositeAccount);
         AssertEqual(0, repository.ListExistingByUserAsync(bank, 100).GetAwaiter().GetResult().Count);
     });
+}
+
+static void TestFixedDateModes()
+{
+    AssertFixedDateOption("+", FixedDateRuleKind.Global);
+    AssertFixedDateOption("*", FixedDateRuleKind.Monthly);
+    AssertFixedDateOption("=", FixedDateRuleKind.Daily);
+    AssertFixedDateOption("3-6", FixedDateRuleKind.DayRange, 3, 6);
+    AssertFixedDateOption(" 6 - 3 ", FixedDateRuleKind.DayRange, 3, 6);
+    AssertFixedDateOption("19", FixedDateRuleKind.FixedDay, 19, 19);
+    AssertFixedDateOption("0", FixedDateRuleKind.Invalid);
+    AssertFixedDateOption("32", FixedDateRuleKind.Invalid);
+    AssertFixedDateOption("-", FixedDateRuleKind.Invalid);
+
+    AssertEqual(5, new GenerateConstRule { FixDay = "+" }.FixType);
+    AssertEqual(4, new GenerateConstRule { FixDay = "*" }.FixType);
+    AssertEqual(3, new GenerateConstRule { FixDay = "=" }.FixType);
+    AssertEqual(2, new GenerateConstRule { FixDay = "3-6" }.FixType);
+    AssertEqual(1, new GenerateConstRule { FixDay = "19" }.FixType);
+}
+
+static void TestFixedDateRangeGeneration()
+{
+    var bank = CreateBank(
+        ("记账时间", nameof(FlowRecord.AccountTime)),
+        ("交易金额", nameof(FlowRecord.TradeMoney)),
+        ("账户余额", nameof(FlowRecord.Balance)));
+    bank.Id = 4;
+    bank.Name = "固定日期测试银行";
+    var rule = new GenerateConstRule
+    {
+        Id = 1,
+        Index = 1,
+        BankId = bank.Id,
+        IsCheck = true,
+        IncomeAttribute = "收入",
+        MinMoney = 1,
+        MaxMoney = 1,
+        FloutLength = 0,
+        StartDay = 9,
+        EndDay = 17,
+        TradeHoliday = true,
+        TradeWeekend = true,
+        FixDay = "3-6",
+        ReCnt = "2"
+    };
+    var result = new FlowAutoGenerator().Generate(new FlowAutoGenerationRequest
+    {
+        Bank = bank,
+        BankUser = new BankUser
+        {
+            Id = 902,
+            BankId = bank.Id,
+            BankName = bank.Name,
+            AccountName = "固定日期测试",
+            AccountNo = "1",
+            AutoCalculateInterest = false
+        },
+        Config = new FlowGenerationConfig
+        {
+            StartTime = new DateTime(2025, 1, 1),
+            EndTime = new DateTime(2025, 2, 28, 23, 59, 59),
+            OpeningBalance = 0,
+            AllInMoney = 4,
+            LastMoney = 4,
+            MinInMoneyMonth1 = 2,
+            MaxInMoneyMonth1 = 2,
+            MinOutMoneyMonth1 = 0,
+            MaxOutMoneyMonth1 = 0,
+            MinInMoneyMonth2 = 2,
+            MaxInMoneyMonth2 = 2,
+            MinOutMoneyMonth2 = 0,
+            MaxOutMoneyMonth2 = 0
+        },
+        References = [],
+        ConstItems = [rule]
+    });
+
+    var fixedRecords = result.Records
+        .Where(record => record.ExtraFields.TryGetValue("__GeneratedSourceKind", out var sourceKind)
+            && sourceKind == "Const")
+        .ToList();
+    AssertEqual(4, fixedRecords.Count);
+    AssertTrue(fixedRecords.All(record => record.AccountTime?.Day is >= 3 and <= 6), "区间规则只能在每月 3～6 日内生成");
+    AssertEqual(2, fixedRecords.Count(record => record.AccountTime?.Month == 1));
+    AssertEqual(2, fixedRecords.Count(record => record.AccountTime?.Month == 2));
+}
+
+static void TestIcbcFormulaReferenceEndToEnd()
+{
+    AssertTrue(
+        FlowGenerationSeedCatalog.TryCreateBankSeed(4, "工行", out var snapshot),
+        "应能读取工商银行内置参照明细");
+    var demo = snapshot.References.Single(rule =>
+        rule.ExtraFields.TryGetValue("__BuiltInFormulaDemoVersion", out var version)
+        && version == "1");
+    demo.IsCheck = true;
+    demo.IncomeAttribute = "收入";
+    demo.PercentMonth = 1;
+    demo.MinMoney = 10;
+    demo.MaxMoney = 10;
+
+    var bank = CreateIcbcFormulaTestBank();
+    var request = new FlowAutoGenerationRequest
+    {
+        Bank = bank,
+        BankUser = new BankUser
+        {
+            Id = 901,
+            BankId = bank.Id,
+            BankName = bank.Name,
+            AccountName = "公式测试用户",
+            AccountNo = "6212345678901234567",
+            Currency = "RMB",
+            OpeningBalance = 0,
+            AutoCalculateInterest = false
+        },
+        Config = new FlowGenerationConfig
+        {
+            StartTime = new DateTime(2025, 6, 1),
+            EndTime = new DateTime(2025, 6, 30, 23, 59, 59),
+            OpeningBalance = 0,
+            AllInMoney = 10,
+            AllOutMoney = 0,
+            LastMoney = 10,
+            MinInMoneyMonth1 = 10,
+            MaxInMoneyMonth1 = 10,
+            MinOutMoneyMonth1 = 0,
+            MaxOutMoneyMonth1 = 0,
+            MinInMoneyMonth2 = 10,
+            MaxInMoneyMonth2 = 10,
+            MinOutMoneyMonth2 = 0,
+            MaxOutMoneyMonth2 = 0
+        },
+        References = [demo],
+        ConstItems = []
+    };
+
+    var generated = new FlowAutoGenerator().Generate(request);
+    var demoRecords = generated.Records
+        .Where(record => record.ExtraFields.TryGetValue("__GeneratedSourceIndex", out var sourceIndex)
+            && sourceIndex == demo.Index.ToString())
+        .ToList();
+    AssertTrue(demoRecords.Count > 0, "工商银行公式参照明细应生成至少一条流水");
+
+    var summary = new FlowFormulaEvaluator(new SequenceRandomSource(0, 1, 1, 0, 1))
+        .Evaluate(bank, demoRecords, CreateDataSet());
+    AssertFalse(summary.HasErrors, "工商银行公式参照明细不应产生解析错误");
+    AssertEqual(0, summary.WarningCount);
+
+    foreach (var record in demoRecords)
+    {
+        AssertMatches("^[a-z]{12}$", record.AppNum, "小写字母公式");
+        AssertMatches("^[A-Z]{12}$", record.SequenceNum, "大写字母公式");
+        AssertMatches("^[0-9A-Z]{12}$", record.Currency, "数字加大写字母公式");
+        AssertMatches("^[0-9a-z]{12}$", record.CashCheck, "数字加小写字母公式");
+        AssertMatches("^[0-9a-zA-Z]{12}$", record.TradeCode, "数字大小写混合公式");
+        AssertMatches("^\\d{12}$", record.NoticeType, "纯数字公式");
+        AssertMatches("^622230\\d{13}$", record.OppositeAccount, "带固定前缀的数字公式");
+        AssertEqual(record.OppositeAccount, record.OppositeBank);
+        AssertEqual($"公式功能验证-{record.AccountTime:yyyy-MM-dd HH:mm:ss}", record.TradeExplain);
+        AssertTrue(record.OppositeUsername is "张一" or "李二", "Excel 独立随机公式结果不正确");
+        AssertTrue(
+            (record.Operator == "张一" && record.InterfacePage == "111")
+            || (record.Operator == "李二" && record.InterfacePage == "222"),
+            "Excel 同行关联公式必须保持姓名与卡号对应");
+        AssertFalse(ContainsFormulaDelimiter(record), "公式参照明细保存前应全部解析完成");
+    }
+}
+
+static void TestIcbcFormulaReferenceMigration()
+{
+    WithTemporaryDirectory(directory =>
+    {
+        var repository = new InMemoryFlowGenerationRepository(Path.Combine(directory, "generation.json"));
+        var bank = new Bank { Id = 4, Name = "工行", Type = BankTypes.Personal };
+        repository.SaveAsync(bank.Id, null, new FlowGenerationSnapshot
+        {
+            References =
+            [
+                new GenerateReferenceRule
+                {
+                    Id = 1,
+                    Index = 1,
+                    BankId = bank.Id,
+                    OppositeUsername = "保留用户原规则"
+                }
+            ]
+        }).GetAwaiter().GetResult();
+
+        var migrated = repository.LoadAsync(bank, null).GetAwaiter().GetResult();
+        AssertEqual(2, migrated.References.Count);
+        AssertTrue(migrated.References.Any(rule => rule.OppositeUsername == "保留用户原规则"), "迁移不能覆盖用户原规则");
+        AssertEqual(1, migrated.References.Count(IsFormulaDemoRule));
+
+        var withoutDemo = new FlowGenerationSnapshot
+        {
+            AppliedMigrations = migrated.AppliedMigrations.ToList(),
+            Config = migrated.Config.Clone(),
+            References = migrated.References.Where(rule => !IsFormulaDemoRule(rule)).Select(rule => rule.Clone()).ToList(),
+            ConstItems = migrated.ConstItems.Select(rule => rule.Clone()).ToList()
+        };
+        repository.SaveAsync(bank.Id, null, withoutDemo).GetAwaiter().GetResult();
+
+        var afterUserDelete = new InMemoryFlowGenerationRepository(Path.Combine(directory, "generation.json"))
+            .LoadAsync(bank, null)
+            .GetAwaiter()
+            .GetResult();
+        AssertEqual(0, afterUserDelete.References.Count(IsFormulaDemoRule));
+    });
+}
+
+static bool IsFormulaDemoRule(GenerateReferenceRule rule)
+{
+    return rule.ExtraFields.TryGetValue("__BuiltInFormulaDemoVersion", out var version)
+        && version == "1";
+}
+
+static Bank CreateIcbcFormulaTestBank()
+{
+    var bank = new Bank { Id = 4, Name = "工行", Type = BankTypes.Personal };
+    AddTextColumns(
+        bank.FlowColumns,
+        ("ID", nameof(FlowRecord.Index)),
+        ("记账时间", nameof(FlowRecord.AccountTime)),
+        ("交易金额", nameof(FlowRecord.TradeMoney)),
+        ("账户余额", nameof(FlowRecord.Balance)),
+        ("应用号", nameof(FlowRecord.AppNum)),
+        ("序号", nameof(FlowRecord.SequenceNum)),
+        ("币种", nameof(FlowRecord.Currency)),
+        ("钞汇", nameof(FlowRecord.CashCheck)),
+        ("交易代码", nameof(FlowRecord.TradeCode)),
+        ("注释", nameof(FlowRecord.TradeExplain)),
+        ("通知种类发行代", nameof(FlowRecord.NoticeType)),
+        ("操作员", nameof(FlowRecord.Operator)),
+        ("界面", nameof(FlowRecord.InterfacePage)),
+        ("对方户名", nameof(FlowRecord.OppositeUsername)),
+        ("对方账号", nameof(FlowRecord.OppositeAccount)),
+        ("交易场所", nameof(FlowRecord.TradePlace)),
+        ("对方开户行", nameof(FlowRecord.OppositeBank)));
+    return bank;
+}
+
+static void AddTextColumns(List<ColumnDefinition> target, params (string Name, string Field)[] columns)
+{
+    foreach (var (name, field) in columns)
+    {
+        target.Add(new ColumnDefinition
+        {
+            Name = name,
+            Field = field,
+            Type = "Text"
+        });
+    }
+}
+
+static bool ContainsFormulaDelimiter(FlowRecord record)
+{
+    return new[]
+    {
+        record.AppNum,
+        record.SequenceNum,
+        record.Currency,
+        record.CashCheck,
+        record.TradeCode,
+        record.TradeExplain,
+        record.NoticeType,
+        record.Operator,
+        record.InterfacePage,
+        record.OppositeUsername,
+        record.OppositeAccount,
+        record.OppositeBank
+    }.Any(value => value?.Contains(@"\\", StringComparison.Ordinal) == true);
+}
+
+static void AssertFixedDateOption(
+    string value,
+    FixedDateRuleKind expectedKind,
+    int expectedStartDay = 0,
+    int expectedEndDay = 0)
+{
+    var option = FixedDateRuleParser.Parse(value);
+    AssertEqual(expectedKind, option.Kind);
+    AssertEqual(expectedStartDay, option.StartDay);
+    AssertEqual(expectedEndDay, option.EndDay);
+}
+
+static void AssertMatches(string pattern, string? value, string formulaName)
+{
+    if (value is null || !System.Text.RegularExpressions.Regex.IsMatch(value, pattern))
+    {
+        throw new InvalidOperationException($"{formulaName}结果不匹配：{value ?? "<null>"}");
+    }
 }
 
 static Bank CreateBank(params (string Name, string Field)[] columns)

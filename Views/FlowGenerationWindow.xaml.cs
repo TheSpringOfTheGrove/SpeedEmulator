@@ -54,6 +54,7 @@ public partial class FlowGenerationWindow : Window
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings += ViewModel_RequestOpenInterestSettings;
         viewModel.RequestOpenGeneratedFlowDetails += ViewModel_RequestOpenGeneratedFlowDetails;
+        viewModel.RequestOpenFormulaHelp += ViewModel_RequestOpenFormulaHelp;
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -72,6 +73,7 @@ public partial class FlowGenerationWindow : Window
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings -= ViewModel_RequestOpenInterestSettings;
         viewModel.RequestOpenGeneratedFlowDetails -= ViewModel_RequestOpenGeneratedFlowDetails;
+        viewModel.RequestOpenFormulaHelp -= ViewModel_RequestOpenFormulaHelp;
         base.OnClosed(e);
     }
 
@@ -149,6 +151,14 @@ public partial class FlowGenerationWindow : Window
         };
 
         WindowNavigation.ShowAsCurrent(this, window);
+    }
+
+    private void ViewModel_RequestOpenFormulaHelp(object? sender, EventArgs e)
+    {
+        new FormulaHelpWindow
+        {
+            Owner = this
+        }.ShowDialog();
     }
 
     private async Task ApplyColumnSettingsAsync(string scope, IEnumerable<SpeedEmulator.Models.ColumnDefinition> columns)
