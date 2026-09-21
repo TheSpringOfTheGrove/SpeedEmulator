@@ -37,11 +37,11 @@ public interface IFormulaDataSetService
 {
     string? PickImportFile();
 
-    string? PickExampleExportFile(string? bankName = null);
+    string? PickExampleExportFile(string? bankName = null, long? bankId = null);
 
     FormulaDataSetImportResult Import(long bankId, string path);
 
-    void ExportBuiltInExample(string path, string? bankName = null);
+    void ExportBuiltInExample(string path, string? bankName = null, long? bankId = null);
 
     FormulaDataSet? Get(long bankId);
 
@@ -89,13 +89,13 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
-    public string? PickExampleExportFile(string? bankName = null)
+    public string? PickExampleExportFile(string? bankName = null, long? bankId = null)
     {
         var dialog = new SaveFileDialog
         {
             Title = "下载随机分子 Excel 示例",
             Filter = "Excel 文件 (*.xlsx)|*.xlsx",
-            FileName = IsWechatBank(bankName)
+            FileName = IsWechatBank(bankName, bankId)
                 ? "微信随机分子Excel示例.xlsx"
                 : "随机分子Excel示例.xlsx",
             AddExtension = true,
@@ -212,7 +212,7 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         return new FormulaDataSetImportResult(dataSet, emptyRowsSkipped);
     }
 
-    public void ExportBuiltInExample(string path, string? bankName = null)
+    public void ExportBuiltInExample(string path, string? bankName = null, long? bankId = null)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -224,7 +224,7 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
             throw new InvalidDataException("随机分子示例必须导出为 .xlsx 文件。");
         }
 
-        if (IsWechatBank(bankName))
+        if (IsWechatBank(bankName, bankId))
         {
             WriteEmbeddedWorkbook(path, WechatExampleResourceName);
         }
@@ -235,9 +235,10 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         }
     }
 
-    private static bool IsWechatBank(string? bankName)
+    private static bool IsWechatBank(string? bankName, long? bankId)
     {
-        return bankName?.Contains("微信", StringComparison.OrdinalIgnoreCase) == true;
+        return bankId == 2
+            || bankName?.Contains("微信", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static void WriteEmbeddedWorkbook(string path, string resourceName)

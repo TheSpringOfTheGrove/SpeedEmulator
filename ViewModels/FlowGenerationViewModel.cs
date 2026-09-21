@@ -694,7 +694,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
     private void DownloadExampleExcel()
     {
-        var path = formulaDataSetService.PickExampleExportFile(Bank.Name);
+        var path = formulaDataSetService.PickExampleExportFile(Bank.Name, Bank.Id);
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -702,7 +702,7 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         try
         {
-            formulaDataSetService.ExportBuiltInExample(path, Bank.Name);
+            formulaDataSetService.ExportBuiltInExample(path, Bank.Name, Bank.Id);
             StatusMessage = $"示例已下载：{path}。编辑保存后，请点击“读取Excel”导入。";
             MessageBox.Show(
                 $"示例 Excel 已保存：\n\n{path}\n\n请编辑数据并保存，然后点击“读取Excel”导入。",

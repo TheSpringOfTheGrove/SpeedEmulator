@@ -301,7 +301,7 @@ static void TestBuiltInExcelExampleAndDependencies()
         AssertTrue(new FormulaDataSetService(storageDirectory).Get(4) is not null, "编辑并读取后的数据应持久化");
 
         var wechatWorkbookPath = Path.Combine(directory, "微信随机分子Excel示例.xlsx");
-        service.ExportBuiltInExample(wechatWorkbookPath, "微信");
+        service.ExportBuiltInExample(wechatWorkbookPath, bankId: 2);
         using (var archive = ZipFile.OpenRead(wechatWorkbookPath))
         {
             AssertTrue(archive.GetEntry("xl/worksheets/sheet2.xml") is not null, "微信示例应保留原模板的第二张工作表");
