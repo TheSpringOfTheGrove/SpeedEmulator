@@ -4,6 +4,8 @@ obj/
 publish/
 tmp/
 artifacts/
+.codex-build/
+output/
 
 # Local tool caches
 .tools/
