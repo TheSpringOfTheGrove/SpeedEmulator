@@ -321,19 +321,27 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
     }
 
     private static Dictionary<string, string> CreateExampleRow(
+        string sequence,
         string name,
         string cardNumber,
         string bankName,
-        string phoneNumber,
-        string remark)
+        string convenienceStore = "",
+        string supermarket = "",
+        string fruitStore = "",
+        string breakfastStore = "",
+        string gasStation = "")
     {
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            ["排序"] = sequence,
             ["姓名"] = name,
             ["卡号"] = cardNumber,
             ["开户行"] = bankName,
-            ["手机号"] = phoneNumber,
-            ["备注"] = remark
+            ["便利店"] = convenienceStore,
+            ["超市"] = supermarket,
+            ["水果店"] = fruitStore,
+            ["早餐店"] = breakfastStore,
+            ["加油站"] = gasStation
         };
     }
 
@@ -343,15 +351,35 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
         {
             FileName = "随机分子Excel示例.xlsx",
             ImportedAtUtc = DateTime.UtcNow,
-            Headers = ["姓名", "卡号", "开户行", "手机号", "备注"],
+            Headers = ["排序", "姓名", "卡号", "开户行", "便利店", "超市", "水果店", "早餐店", "加油站"],
             Rows =
             [
-                CreateExampleRow("张三", "6222021001000000018", "中国工商银行北京分行", "13800000001", "示例一"),
-                CreateExampleRow("李四", "6222021001000000026", "中国工商银行上海分行", "13800000002", "示例二"),
-                CreateExampleRow("王五", "6222021001000000034", "中国工商银行广州分行", "13800000003", "示例三"),
-                CreateExampleRow("赵六", "6222021001000000042", "中国工商银行深圳分行", "13800000004", "示例四"),
-                CreateExampleRow("陈晨", "6222021001000000059", "中国工商银行杭州分行", "13800000005", "示例五"),
-                CreateExampleRow("周宁", "6222021001000000067", "中国工商银行成都分行", "13800000006", "示例六")
+                CreateExampleRow("1", "宋力", "6217001540007157926", "中国建设银行", "罗森便利店", "永辉超市", "百乐园", "煎饺王子", "中国石油"),
+                CreateExampleRow("2", "姜小青", "6228480619772268576", "中国农业银行", "芙蓉兴盛便利店", "沃尔玛超市", "鲜丰水果", "柳州螺蛳粉", "中国石化"),
+                CreateExampleRow("3", "潘伟源", "6228480618096445779", "中国农业银行", "美宜佳便利店", "盒马生鲜超市", "绿叶水果", "桂林米粉"),
+                CreateExampleRow("4", "黄绍莲", "6230522320045079876", "中国农业银行", "7-ELEVEN便利店", "合物美超市", "果多美", "香光早餐店"),
+                CreateExampleRow("5", "黄晓军", "6228480030399499711", "中国农业银行", "全家便利店", "麦德龙超市", "叶氏兄弟", "严氏烧卖"),
+                CreateExampleRow("6", "刘元杰", "6221884520021492156", "中国邮政储蓄银行", "快客便利店", "开市客(Costco)", "洪九果品", "狗不理包子铺"),
+                CreateExampleRow("7", "宋斌", "6217755017000363320", "徽商银行", "红旗连锁便利店", "华润万家超市", "花果鲜苏洪鲜鹤原素水果店", "丽华早点"),
+                CreateExampleRow("8", "张璐颖", "6217001210049401704", "中国建设银行", "365便利店", "家乐福超市", "奇果鲜生天天果园诚实果品"),
+                CreateExampleRow("9", "雷中能", "6217002730013191584", "中国建设银行", "便利蜂便利店", "大润发超市"),
+                CreateExampleRow("10", "张铃", "6222600110000471396", "交通银行", "喜士多便利店", "美特好超市"),
+                CreateExampleRow("11", "汤小苏", "6215581110007368188", "中国工商银行", "银座CC便利店", "奥乐齐超市"),
+                CreateExampleRow("12", "林辉", "6228480128081087370", "中国农业银行", "天福便利店", "山姆会员店"),
+                CreateExampleRow("13", "上官杨平", "6222081202013744378", "中国工商银行", "盒马NB便利店"),
+                CreateExampleRow("14", "高伟成", "6226732400013853", "中国工商银行", "奥乐齐便利店"),
+                CreateExampleRow("15", "林辉", "6222084000005743102", "中国工商银行"),
+                CreateExampleRow("16", "吴祝芳", "6008450388012778374", "中国农业银行"),
+                CreateExampleRow("17", "王曼曼", "6086732400013853", "光大银行"),
+                CreateExampleRow("18", "谢师友", "6222623210003954506", "交通银行"),
+                CreateExampleRow("19", "何邦云", "6228480316092902063", "中国农业银行"),
+                CreateExampleRow("20", "孔毅荣", "6228480248271214574", "中国农业银行"),
+                CreateExampleRow("21", "王跃翠", "6217002220018548152", "中国建设银行"),
+                CreateExampleRow("22", "朱建琴", "6228480310475340611", "中国农业银行"),
+                CreateExampleRow("23", "朱秀年", "62284803183889624772", "中国农业银行"),
+                CreateExampleRow("24", "范正英", "6230521980078496270", "中国农业银行"),
+                CreateExampleRow("25", "陈彩凤", "6013826111004237578", "中国银行"),
+                CreateExampleRow("26", "陈伟", "6228480031414122114", "中国农业银行")
             ]
         };
     }
@@ -421,7 +449,20 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
                 }
 
                 WriteXmlEntry(archive, "xl/worksheets/sheet1.xml", new XDocument(
-                    new XElement(mainNs + "worksheet", sheetData)));
+                    new XElement(
+                        mainNs + "worksheet",
+                        new XElement(
+                            mainNs + "cols",
+                            CreateWorkbookColumn(mainNs, 1, 7),
+                            CreateWorkbookColumn(mainNs, 2, 18),
+                            CreateWorkbookColumn(mainNs, 3, 25),
+                            CreateWorkbookColumn(mainNs, 4, 22),
+                            CreateWorkbookColumn(mainNs, 5, 18),
+                            CreateWorkbookColumn(mainNs, 6, 17),
+                            CreateWorkbookColumn(mainNs, 7, 26),
+                            CreateWorkbookColumn(mainNs, 8, 17),
+                            CreateWorkbookColumn(mainNs, 9, 15)),
+                        sheetData)));
             }
 
             File.Move(temporaryPath, path, true);
@@ -433,6 +474,16 @@ public sealed class FormulaDataSetService : IFormulaDataSetService
                 File.Delete(temporaryPath);
             }
         }
+    }
+
+    private static XElement CreateWorkbookColumn(XNamespace ns, int columnIndex, double width)
+    {
+        return new XElement(
+            ns + "col",
+            new XAttribute("min", columnIndex),
+            new XAttribute("max", columnIndex),
+            new XAttribute("width", width.ToString(CultureInfo.InvariantCulture)),
+            new XAttribute("customWidth", "1"));
     }
 
     private static XElement CreateWorkbookRow(XNamespace ns, int rowIndex, IEnumerable<string> values)

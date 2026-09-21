@@ -219,11 +219,22 @@ static void TestBuiltInExcelExampleAndDependencies()
         AssertTrue(service.Get(4) is null, "下载示例不能直接加载到当前银行");
 
         var loaded = service.Import(4, workbookPath);
-        AssertTrue(loaded.DataSet.Headers.Contains("姓名"), "示例应包含姓名列");
-        AssertTrue(loaded.DataSet.Headers.Contains("卡号"), "示例应包含卡号列");
-        AssertEqual(6, loaded.DataSet.Rows.Count);
-        AssertEqual("张三", loaded.DataSet.Rows[0]["姓名"]);
-        AssertEqual("6222021001000000018", loaded.DataSet.Rows[0]["卡号"]);
+        AssertTrue(
+            loaded.DataSet.Headers.SequenceEqual(
+                ["排序", "姓名", "卡号", "开户行", "便利店", "超市", "水果店", "早餐店", "加油站"],
+                StringComparer.Ordinal),
+            "示例列顺序应与截图一致");
+        AssertEqual(26, loaded.DataSet.Rows.Count);
+        AssertEqual("1", loaded.DataSet.Rows[0]["排序"]);
+        AssertEqual("宋力", loaded.DataSet.Rows[0]["姓名"]);
+        AssertEqual("6217001540007157926", loaded.DataSet.Rows[0]["卡号"]);
+        AssertEqual("罗森便利店", loaded.DataSet.Rows[0]["便利店"]);
+        AssertEqual("中国石油", loaded.DataSet.Rows[0]["加油站"]);
+        AssertEqual("开市客(Costco)", loaded.DataSet.Rows[5]["超市"]);
+        AssertEqual("奇果鲜生天天果园诚实果品", loaded.DataSet.Rows[7]["水果店"]);
+        AssertEqual("62284803183889624772", loaded.DataSet.Rows[22]["卡号"]);
+        AssertEqual("26", loaded.DataSet.Rows[25]["排序"]);
+        AssertEqual("陈伟", loaded.DataSet.Rows[25]["姓名"]);
         AssertTrue(new FormulaDataSetService(storageDirectory).Get(4) is not null, "编辑并读取后的数据应持久化");
 
         var rule = new GenerateReferenceRule
