@@ -411,15 +411,18 @@
                                    VerticalAlignment="Center"
                                    Foreground="#777777"
                                    FontSize="13" />
-                        <TextBlock Text="i"
-                                   Width="18"
-                                   Height="18"
-                                   Margin="20,0,0,0"
-                                   TextAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Foreground="White"
-                                   Background="#2568C5"
-                                   FontWeight="Bold" />
+                        <Button Content="i"
+                                Width="22"
+                                Height="22"
+                                Margin="20,0,0,0"
+                                Padding="0"
+                                VerticalAlignment="Center"
+                                Foreground="White"
+                                Background="#2568C5"
+                                BorderThickness="0"
+                                FontWeight="Bold"
+                                Command="{Binding ShowFormulaHelpCommand}"
+                                ToolTip="查看公式使用说明" />
                     </StackPanel>
 
                     <StackPanel Grid.Row="1"
@@ -430,7 +433,7 @@
                                    VerticalAlignment="Center"
                                    Foreground="#777777" />
                         <TextBox Text="{Binding ExcelStatus, Mode=OneWay}"
-                                 Width="80"
+                                 Width="150"
                                  Height="34"
                                  IsReadOnly="True"
                                  Foreground="#999999"
@@ -438,11 +441,19 @@
                                  BorderBrush="#D2D5D7"
                                  VerticalContentAlignment="Center"
                                  Padding="8,0" />
-                        <Button Content="读取Excel文件"
-                                Margin="20,0,10,0"
+                        <Button Content="读取Excel"
+                                Width="88"
+                                Margin="14,0,8,0"
                                 Command="{Binding ReadExcelCommand}"
                                 Style="{StaticResource SmallButtonStyle}" />
+                        <Button Content="下载示例"
+                                Width="88"
+                                Margin="0,0,8,0"
+                                Command="{Binding DownloadExampleExcelCommand}"
+                                ToolTip="下载真实的随机分子 Excel 示例，编辑后再读取"
+                                Style="{StaticResource SmallButtonStyle}" />
                         <Button Content="清空"
+                                Width="64"
                                 Command="{Binding ClearExcelCommand}"
                                 Style="{StaticResource SmallButtonStyle}" />
                     </StackPanel>

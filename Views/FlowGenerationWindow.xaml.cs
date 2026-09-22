@@ -18,6 +18,7 @@ public partial class FlowGenerationWindow : Window
     private readonly IBankUserColumnSettingsRepository columnSettingsRepository;
     private readonly IBankInterestSettingsRepository interestSettingsRepository;
     private readonly IFlowRecordRepository flowRecordRepository;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly IBankUserRepository bankUserRepository;
     private readonly ITableExcelService tableExcelService;
     private readonly IPdfImportService pdfImportService;
@@ -29,6 +30,7 @@ public partial class FlowGenerationWindow : Window
         IBankUserColumnSettingsRepository columnSettingsRepository,
         IBankInterestSettingsRepository interestSettingsRepository,
         IFlowRecordRepository flowRecordRepository,
+        IFlowRecordSaveService flowRecordSaveService,
         IBankUserRepository bankUserRepository,
         ITableExcelService tableExcelService,
         IPdfImportService pdfImportService,
@@ -40,6 +42,7 @@ public partial class FlowGenerationWindow : Window
         this.columnSettingsRepository = columnSettingsRepository;
         this.interestSettingsRepository = interestSettingsRepository;
         this.flowRecordRepository = flowRecordRepository;
+        this.flowRecordSaveService = flowRecordSaveService;
         this.bankUserRepository = bankUserRepository;
         this.tableExcelService = tableExcelService;
         this.pdfImportService = pdfImportService;
@@ -51,6 +54,7 @@ public partial class FlowGenerationWindow : Window
         viewModel.RequestOpenColumnSettings += ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings += ViewModel_RequestOpenInterestSettings;
         viewModel.RequestOpenGeneratedFlowDetails += ViewModel_RequestOpenGeneratedFlowDetails;
+        viewModel.RequestOpenFormulaHelp += ViewModel_RequestOpenFormulaHelp;
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -69,6 +73,7 @@ public partial class FlowGenerationWindow : Window
         viewModel.RequestOpenColumnSettings -= ViewModel_RequestOpenColumnSettings;
         viewModel.RequestOpenInterestSettings -= ViewModel_RequestOpenInterestSettings;
         viewModel.RequestOpenGeneratedFlowDetails -= ViewModel_RequestOpenGeneratedFlowDetails;
+        viewModel.RequestOpenFormulaHelp -= ViewModel_RequestOpenFormulaHelp;
         base.OnClosed(e);
     }
 
@@ -139,13 +144,21 @@ public partial class FlowGenerationWindow : Window
             return;
         }
 
-        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, canUploadPdf);
+        var flowDetailsViewModel = new FlowDetailsViewModel(viewModel.Bank, viewModel.BankUser, flowRecordRepository, flowRecordSaveService, tableExcelService, bankUserRepository, pdfImportService, pdfImportPreviewDialogService, interestSettingsRepository, canUploadPdf);
         var window = new FlowDetailsWindow(flowDetailsViewModel, columnSettingsRepository)
         {
             Owner = this
         };
 
         WindowNavigation.ShowAsCurrent(this, window);
+    }
+
+    private void ViewModel_RequestOpenFormulaHelp(object? sender, EventArgs e)
+    {
+        new FormulaHelpWindow
+        {
+            Owner = this
+        }.ShowDialog();
     }
 
     private async Task ApplyColumnSettingsAsync(string scope, IEnumerable<SpeedEmulator.Models.ColumnDefinition> columns)

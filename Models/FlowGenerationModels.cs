@@ -487,25 +487,7 @@ public sealed class GenerateConstRule : FlowRuleBase
 
     public int FixType
     {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(FixDay))
-            {
-                return -1;
-            }
-
-            if (FixDay.Contains(','))
-            {
-                return 2;
-            }
-
-            if (int.TryParse(FixDay, out _))
-            {
-                return 1;
-            }
-
-            return 0;
-        }
+        get => (int)FixedDateRuleParser.Parse(FixDay).Kind;
     }
 
     public GenerateConstRule Clone()
@@ -537,6 +519,8 @@ public sealed class GenerateConstRule : FlowRuleBase
 
 public sealed class FlowGenerationSnapshot
 {
+    public List<string> AppliedMigrations { get; init; } = [];
+
     public FlowGenerationConfig Config { get; init; } = new();
 
     public List<GenerateReferenceRule> References { get; init; } = [];

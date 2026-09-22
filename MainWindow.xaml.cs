@@ -17,6 +17,8 @@ public partial class MainWindow : Window
     private readonly IBankInterestSettingsRepository bankInterestSettingsRepository = new JsonBankInterestSettingsRepository();
     private readonly IFlowGenerationRepository flowGenerationRepository = new InMemoryFlowGenerationRepository();
     private readonly IFlowRecordRepository flowRecordRepository = new InMemoryFlowRecordRepository();
+    private readonly IFormulaDataSetService formulaDataSetService;
+    private readonly IFlowRecordSaveService flowRecordSaveService;
     private readonly ITableExcelService tableExcelService = new TableExcelService();
     private readonly IPdfImportService pdfImportService = new PdfImportService();
     private readonly IPdfImportPreviewDialogService pdfImportPreviewDialogService = new PdfImportPreviewDialogService();
@@ -32,6 +34,11 @@ public partial class MainWindow : Window
     public MainWindow(FrontSession session, IFrontApiClient frontApiClient)
     {
         InitializeComponent();
+        formulaDataSetService = new FormulaDataSetService();
+        flowRecordSaveService = new FlowRecordSaveService(
+            flowRecordRepository,
+            new FlowFormulaEvaluator(),
+            formulaDataSetService);
         this.session = session;
         this.frontApiClient = frontApiClient;
         onlineTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -157,10 +164,11 @@ public partial class MainWindow : Window
             new ImageFilePickerService(),
             tableExcelService,
             flowRecordRepository,
+            flowRecordSaveService,
             pdfImportService,
             pdfImportPreviewDialogService,
             session.CanUploadPdf);
-        var window = new BankUsersWindow(viewModel, bankUserRepository, bankUserColumnSettingsRepository, bankInterestSettingsRepository, flowGenerationRepository, flowRecordRepository, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
+        var window = new BankUsersWindow(viewModel, bankUserRepository, bankUserColumnSettingsRepository, bankInterestSettingsRepository, flowGenerationRepository, flowRecordRepository, flowRecordSaveService, formulaDataSetService, tableExcelService, pdfImportService, pdfImportPreviewDialogService)
         {
             Owner = this
         };

@@ -1,0 +1,189 @@
+<Window x:Class="SpeedEmulator.Views.FormulaHelpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="公式使用说明"
+        Width="940"
+        Height="820"
+        MinWidth="760"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        PreviewMouseWheel="Window_PreviewMouseWheel"
+        Background="#F5F6F8">
+    <Window.Resources>
+        <Style x:Key="SectionHeadingStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#172033" />
+            <Setter Property="Margin" Value="0,22,0,8" />
+        </Style>
+        <Style x:Key="BodyTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#252A34" />
+            <Setter Property="LineHeight" Value="24" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="CompactHelpGridStyle" TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="CanUserResizeRows" Value="False" />
+            <Setter Property="CanUserReorderColumns" Value="False" />
+            <Setter Property="CanUserSortColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="RowHeaderWidth" Value="0" />
+            <Setter Property="RowHeight" Value="30" />
+            <Setter Property="ColumnHeaderHeight" Value="32" />
+            <Setter Property="GridLinesVisibility" Value="All" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#D9DDE3" />
+            <Setter Property="VerticalGridLinesBrush" Value="#D9DDE3" />
+            <Setter Property="BorderBrush" Value="#D9DDE3" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="AlternatingRowBackground" Value="#FAFBFC" />
+            <Setter Property="AlternationCount" Value="2" />
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#E9EEF6" />
+            <Setter Property="Foreground" Value="#172033" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="BorderBrush" Value="#D9DDE3" />
+            <Setter Property="BorderThickness" Value="0,0,1,1" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="64" />
+        </Grid.RowDefinitions>
+
+        <Border Margin="18,18,18,0"
+                Padding="28,20"
+                Background="White"
+                BorderBrush="#E1E4E8"
+                BorderThickness="1"
+                CornerRadius="6">
+            <ScrollViewer x:Name="HelpScrollViewer"
+                          VerticalScrollBarVisibility="Hidden"
+                          HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False">
+                <StackPanel>
+                    <TextBlock Text="公式使用说明"
+                               FontFamily="Microsoft YaHei UI"
+                               FontSize="27"
+                               FontWeight="Bold"
+                               Foreground="#111827"
+                               Margin="0,0,0,14" />
+
+                    <Border Padding="14,10" Background="#F1F3F5" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="流水明细在保存时进行公式计算；自动生成后的保存、以及手工修改后的再次保存都会生效。"
+                                       Style="{StaticResource BodyTextStyle}" />
+                            <TextBlock Style="{StaticResource BodyTextStyle}">
+                                <Run Text="公式必须写在两侧各两个反斜杠中：" />
+                                <Run Text="\\公式内容\\" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                                <Run Text="。一个字段可写多个公式，也可在公式前后保留普通文字。" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="匹配到公式后会替换为计算结果；独立 Excel 公式没有非空数据时会报错并阻止保存；同行关联公式允许取到空值；不是公式的内容原样保留。"
+                               Style="{StaticResource BodyTextStyle}" />
+
+                    <TextBlock Text="一、支持的全部公式" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="FormulaGrid"
+                              Height="334"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="序号" Binding="{Binding Number}" Width="48" />
+                            <DataGridTextColumn Header="公式内容" Binding="{Binding Formula}" Width="140" />
+                            <DataGridTextColumn Header="生成范围" Binding="{Binding Meaning}" Width="220" />
+                            <DataGridTextColumn Header="完整写法" Binding="{Binding FullSyntax}" Width="210" />
+                            <DataGridTextColumn Header="示例结果" Binding="{Binding Example}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Text="n 必须是 0～4096 的整数（0 表示生成空内容）。未识别的片段按普通文字保留；未闭合定界符、无效日期格式、超长随机内容或超过 16384 个字符的结果会阻止保存。"
+                               Margin="0,8,0,0"
+                               Foreground="#5B6472"
+                               Style="{StaticResource BodyTextStyle}" />
+
+                    <TextBlock Text="二、Excel 取值规则" Style="{StaticResource SectionHeadingStyle}" />
+                    <TextBlock Text="• 第一行必须是列标题，第二行开始是数据；标题不可为空、不可重复。"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Style="{StaticResource BodyTextStyle}">
+                        <Run Text="• $列名$" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                        <Run Text=" 从该列非空数据中随机无放回抽取，当前轮用完后重新洗牌；流水数不足一轮时只抽取所需数量，不强求覆盖整列；整列无值时阻止保存。" />
+                    </TextBlock>
+                    <TextBlock Style="{StaticResource BodyTextStyle}">
+                        <Run Text="• ^列名^" FontFamily="Consolas" Foreground="#174EA6" FontWeight="SemiBold" />
+                        <Run Text=" 在同一条流水内共用一个行号，适合“姓名—卡号—开户行”等一一对应的数据，允许对应单元格为空。" />
+                    </TextBlock>
+                    <TextBlock Text="• 以上公式适用于所有银行；随机分子 Excel 按银行独立保存，切换银行后需重新读取，“清空”只清理当前银行的数据。"
+                               Style="{StaticResource BodyTextStyle}" />
+
+                    <TextBlock Text="三、日期格式说明" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="DateFormatGrid"
+                              Height="454"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="格式符" Binding="{Binding Token}" Width="120" />
+                            <DataGridTextColumn Header="含义" Binding="{Binding Meaning}" Width="*" />
+                            <DataGridTextColumn Header="示例" Binding="{Binding Example}" Width="160" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Text="四、组合示例" Style="{StaticResource SectionHeadingStyle}" />
+                    <DataGrid x:Name="CombinationExampleGrid"
+                              Height="184"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="填写内容" Binding="{Binding Input}" Width="390" />
+                            <DataGridTextColumn Header="可能结果" Binding="{Binding Output}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Text="五、固定日期选项" Style="{StaticResource SectionHeadingStyle}" />
+                    <TextBlock Text="以下内容填写在“固定日期增加项目”的固定日期列；“出现次数”可填单个整数或次数范围。"
+                               Margin="0,0,0,8"
+                               Style="{StaticResource BodyTextStyle}" />
+                    <DataGrid x:Name="FixedDateGrid"
+                              Height="184"
+                              Style="{StaticResource CompactHelpGridStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="符号" Binding="{Binding Symbol}" Width="130" />
+                            <DataGridTextColumn Header="说明" Binding="{Binding Meaning}" Width="220" />
+                            <DataGridTextColumn Header="生成范围" Binding="{Binding Range}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <Border Grid.Row="1" Background="#F5F6F8">
+            <Button Content="关闭"
+                    Width="92"
+                    Height="34"
+                    Margin="0,14,20,14"
+                    HorizontalAlignment="Right"
+                    IsDefault="True"
+                    IsCancel="True"
+                    Click="Close_Click" />
+        </Border>
+    </Grid>
+</Window>

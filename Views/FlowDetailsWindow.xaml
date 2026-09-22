@@ -264,7 +264,7 @@
                 <Button Content="导出xlsx" Command="{Binding ExportRecordCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="开启筛选" Command="{Binding OpenFilterCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="设置字段" Command="{Binding SetColumnFieldCommand}" Style="{StaticResource FlowSideButtonStyle}" />
-                <Button Content="转换公式" Command="{Binding ConvertFormulaCommand}" IsEnabled="False" Style="{StaticResource FlowSideButtonStyle}" />
+                <Button Content="转换公式" Command="{Binding ConvertFormulaCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="查看统计" Command="{Binding ShowStaticCommand}" Style="{StaticResource FlowSideButtonStyle}" />
                 <Button Content="返回" Command="{Binding CloseCommand}" Style="{StaticResource FlowSideButtonStyle}" />
             </StackPanel>

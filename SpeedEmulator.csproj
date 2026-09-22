@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
     <Resource Include="Assets\SpeedEmulatorIcon.ico" />
     <Resource Include="Assets\SpeedEmulatorIcon.png" />
     <Resource Include="Assets\jisu-theme-app-icon-with-year.ico" />
@@ -25,6 +26,7 @@
     <Content Include="db2.db" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
     <Content Include="Data\*.json" Exclude="Data\bank-users-seed.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Data\bank-users-seed.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <EmbeddedResource Include="Data\FormulaExamples\微信随机分子Excel示例.xlsx" LogicalName="SpeedEmulator.FormulaExamples.WeChat.xlsx" />
     <Content Include="VendorRuntime\Zhencheng\**\*" Exclude="VendorRuntime\Zhencheng\.gitkeep;VendorRuntime\Zhencheng\Stimulsoft*.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="zhencheng-runtime\%(RecursiveDir)%(Filename)%(Extension)" />
     <!-- Vendor QuestPDF templates resolve bank logos and seals from AppContext.BaseDirectory/static. -->
     <Content Include="VendorRuntime\Zhencheng\static\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="static\%(RecursiveDir)%(Filename)%(Extension)" />

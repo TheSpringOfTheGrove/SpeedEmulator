@@ -6,6 +6,9 @@ namespace SpeedEmulator.Repositories;
 
 public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
 {
+    private const string FormulaDemoMigration = "builtin-formula-demo-v1";
+    private const string FormulaDemoMarker = "__BuiltInFormulaDemoVersion";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -17,12 +20,17 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
     private readonly string storagePath;
 
     public InMemoryFlowGenerationRepository()
-    {
-        storagePath = Path.Combine(
+        : this(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SpeedEmulator",
-            "flow-generation-config.json");
+            "flow-generation-config.json"))
+    {
+    }
 
+    public InMemoryFlowGenerationRepository(string storagePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storagePath);
+        this.storagePath = Path.GetFullPath(storagePath);
         LoadFromDisk();
     }
 
@@ -41,6 +49,13 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
             else if (TryRefreshStaleSeed(bank, snapshot, out var refreshedSnapshot))
             {
                 snapshot = refreshedSnapshot;
+                snapshots[key] = Clone(snapshot);
+                SaveToDisk();
+            }
+
+            if (TryApplyPackagedMigrations(bank, snapshot, out var migratedSnapshot))
+            {
+                snapshot = migratedSnapshot;
                 snapshots[key] = Clone(snapshot);
                 SaveToDisk();
             }
@@ -90,6 +105,7 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
 
         refreshedSnapshot = new FlowGenerationSnapshot
         {
+            AppliedMigrations = snapshot.AppliedMigrations.ToList(),
             Config = snapshot.Config.Clone(),
             References = packagedSeed.References.Select(item => item.Clone()).ToList(),
             ConstItems = packagedSeed.ConstItems.Select(item => item.Clone()).ToList()
@@ -125,10 +141,60 @@ public sealed class InMemoryFlowGenerationRepository : IFlowGenerationRepository
         ]);
     }
 
+    private static bool TryApplyPackagedMigrations(
+        Bank bank,
+        FlowGenerationSnapshot snapshot,
+        out FlowGenerationSnapshot migratedSnapshot)
+    {
+        migratedSnapshot = snapshot;
+        if (snapshot.AppliedMigrations.Contains(FormulaDemoMigration, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        if (!FlowGenerationSeedCatalog.TryCreateBankSeed(bank.Id, bank.Name, out var packagedSeed)
+            || packagedSeed.References.FirstOrDefault(IsFormulaDemoRule) is not { } packagedDemo)
+        {
+            return false;
+        }
+
+        var references = snapshot.References.Select(item => item.Clone()).ToList();
+        if (!references.Any(IsFormulaDemoRule))
+        {
+            var demo = packagedDemo.Clone();
+            demo.Id = Math.Max(
+                references.Select(item => item.Id).DefaultIfEmpty(0).Max(),
+                snapshot.ConstItems.Select(item => item.Id).DefaultIfEmpty(0).Max()) + 1;
+            demo.Index = references.Select(item => item.Index).DefaultIfEmpty(0).Max() + 1;
+            demo.BankId = bank.Id;
+            demo.IsCheck = false;
+            references.Add(demo);
+        }
+
+        migratedSnapshot = new FlowGenerationSnapshot
+        {
+            AppliedMigrations = snapshot.AppliedMigrations
+                .Append(FormulaDemoMigration)
+                .Distinct(StringComparer.Ordinal)
+                .ToList(),
+            Config = snapshot.Config.Clone(),
+            References = references,
+            ConstItems = snapshot.ConstItems.Select(item => item.Clone()).ToList()
+        };
+        return true;
+    }
+
+    private static bool IsFormulaDemoRule(GenerateReferenceRule rule)
+    {
+        return rule.ExtraFields.TryGetValue(FormulaDemoMarker, out var version)
+            && string.Equals(version, "1", StringComparison.Ordinal);
+    }
+
     private static FlowGenerationSnapshot Clone(FlowGenerationSnapshot snapshot)
     {
         return new FlowGenerationSnapshot
         {
+            AppliedMigrations = snapshot.AppliedMigrations.ToList(),
             Config = snapshot.Config.Clone(),
             References = snapshot.References.Select(item => item.Clone()).ToList(),
             ConstItems = snapshot.ConstItems.Select(item => item.Clone()).ToList()

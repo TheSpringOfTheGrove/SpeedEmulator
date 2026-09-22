@@ -7,7 +7,7 @@ public sealed class FlowRecord : ObservableObject
 {
     private int index;
     private long id;
-    private int replaceIndex;
+    private int replaceIndex = -1;
     private long bankId;
     private long bankUserId;
     private bool moveFlag;
@@ -66,6 +66,7 @@ public sealed class FlowRecord : ObservableObject
 
     public int Index { get => index; set => SetProperty(ref index, value); }
     public long Id { get => id; set => SetProperty(ref id, value); }
+    [JsonIgnore]
     public int ReplaceIndex { get => replaceIndex; set => SetProperty(ref replaceIndex, value); }
     public long BankId { get => bankId; set => SetProperty(ref bankId, value); }
     public long BankUserId { get => bankUserId; set => SetProperty(ref bankUserId, value); }
