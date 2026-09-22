@@ -592,9 +592,9 @@ public sealed class TableExcelService : ITableExcelService
         if (field == nameof(FlowRecord.TradeMoney))
         {
             return record.TradeMoney.HasValue
-                ? (IsPostalPersonalBank(bank) || IsCcbPersonalBank(bank) || IsMinshengPersonalBank(bank))
-                    ? record.TradeMoney.Value
-                    : Math.Abs(record.TradeMoney.Value)
+                ? ShouldExportTradeMoneyAsAbsolute(bank)
+                    ? Math.Abs(record.TradeMoney.Value)
+                    : record.TradeMoney.Value
                 : null;
         }
 
@@ -802,25 +802,26 @@ public sealed class TableExcelService : ITableExcelService
             && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
     }
 
-    private static bool IsPostalPersonalBank(Bank? bank)
+    private static bool ShouldExportTradeMoneyAsAbsolute(Bank? bank)
     {
-        return bank is not null
-            && string.Equals(bank.Name, "\u90ae\u653f", StringComparison.Ordinal)
-            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
-    }
+        if (bank is null
+            || string.IsNullOrWhiteSpace(bank.Name)
+            || !FlowRecordColumnCatalog.TryGetExportFlowColumns(bank.Name, out var columns))
+        {
+            return false;
+        }
 
-    private static bool IsCcbPersonalBank(Bank? bank)
-    {
-        return bank is not null
-            && string.Equals(bank.Name, "\u5efa\u884c", StringComparison.Ordinal)
-            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
-    }
-
-    private static bool IsMinshengPersonalBank(Bank? bank)
-    {
-        return bank is not null
-            && string.Equals(bank.Name, "\u6c11\u751f", StringComparison.Ordinal)
-            && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
+        // A single amount column only retains its direction when the template has
+        // no companion column that explicitly tells readers whether it is income
+        // or expense. Templates with a direction marker or separate debit/credit
+        // columns conventionally print the amount as an absolute value.
+        return columns
+            .Select(column => ExcelColumnFieldResolver.ResolveFlowRecordField(bank.Name, column).Field)
+            .Any(field => field is nameof(FlowRecord.IncomeAttribute)
+                or nameof(FlowRecord.IncomeFlag)
+                or nameof(FlowRecord.CreditType)
+                or nameof(FlowRecord.CreditAmount)
+                or nameof(FlowRecord.DebitAmount));
     }
 
     private static bool IsWechatBank(Bank? bank)
