@@ -249,6 +249,12 @@ public static class BankInterestCalculationService
                 changed = true;
             }
 
+            ApplyConfiguredFields(existing, setting);
+            if (rowKind == FlowGeneratedRowKinds.InterestTax)
+            {
+                ConvertLabelsToInterestTax(existing);
+            }
+
             return existing;
         }
 
@@ -415,7 +421,7 @@ public static class BankInterestCalculationService
             ProductType = "活期",
             Usage = isTax ? InterestTaxText : InterestText,
             TradeExplain = isTax ? InterestTaxText : InterestText,
-            Remark = isTax ? InterestTaxText : PersonalCurrentInterestRemark,
+            Remark = PersonalCurrentInterestRemark,
             SerialNum = isTax ? "0000000002" : "0000000001",
             LogNum = "0000000001",
             Currency = FirstNotBlank(bankUser.Currency, "RMB"),
@@ -479,7 +485,6 @@ public static class BankInterestCalculationService
         record.ProductType = ConvertLabelToInterestTax(record.ProductType);
         record.Usage = ConvertLabelToInterestTax(record.Usage);
         record.TradeExplain = ConvertLabelToInterestTax(record.TradeExplain);
-        record.Remark = ConvertLabelToInterestTax(record.Remark);
     }
 
     private static string ConvertLabelToInterestTax(string value)

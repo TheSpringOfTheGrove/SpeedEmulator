@@ -15488,6 +15488,7 @@ public sealed class FlowAutoGenerator
         ClearInterestDisplayFields(record);
         ApplyUserAccountToRecord(request, record);
         ApplyInterestFields(record, setting);
+        record.Remark = FirstNonEmpty(record.Remark, PersonalCurrentInterestRemark);
         ApplyInterestRowKindLabels(record, rowKind);
 
         return record;
@@ -15585,7 +15586,7 @@ public sealed class FlowAutoGenerator
         record.ProductType = FirstNonEmpty(record.ProductType, "活期");
         record.Usage = FirstNonEmpty(record.Usage, rowKind == InterestTaxRowKind ? "利息税" : "结息");
         record.TradeExplain = FirstNonEmpty(record.TradeExplain, rowKind == InterestTaxRowKind ? "利息税" : "结息");
-        record.Remark = FirstNonEmpty(record.Remark, rowKind == InterestTaxRowKind ? "利息税" : "个人活期结息");
+        record.Remark = FirstNonEmpty(record.Remark, "个人活期结息");
     }
 
     private static InterestRecordFieldProfile CreateInterestRecordFieldProfile(IEnumerable<FlowRecord> records)
@@ -20394,7 +20395,6 @@ public sealed class FlowAutoGenerator
         record.ProductType = ConvertInterestLabelToTax(record.ProductType);
         record.Usage = ConvertInterestLabelToTax(record.Usage);
         record.TradeExplain = ConvertInterestLabelToTax(record.TradeExplain);
-        record.Remark = ConvertInterestLabelToTax(record.Remark);
     }
 
     private static string ConvertInterestLabelToTax(string? value)
