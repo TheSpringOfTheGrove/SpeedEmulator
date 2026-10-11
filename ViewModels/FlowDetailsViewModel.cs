@@ -3,6 +3,7 @@ using System.Collections;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
@@ -221,10 +222,20 @@ public sealed class FlowDetailsViewModel : ObservableObject
 
     private void InsertBlankRecord()
     {
-        var record = CreateDraftRecord();
+        var selectedTime = SelectedRecord?.AccountTime;
+        var record = CreateDraftRecord(
+            selectedTime is null ? null : selectedTime.Value.AddSeconds(1));
         record.ProductBrief = string.Empty;
-        record.TradeMoney = null;
+        record.TradeMoney = 0d;
         record.Balance = null;
+
+        // 农行流水的日志号是必填展示字段。插入空行时仅为农行补齐与生成流水一致的格式；
+        // 其他银行维持原有空白行行为，不在此处写入任何日志号。
+        if (IsAgriculturalBank(Bank))
+        {
+            record.LogNum = CreateAgriculturalLogNumber(record.AccountTime);
+        }
+
         InsertAfterSelected(record);
         StatusMessage = "已插入空行";
     }
@@ -719,14 +730,14 @@ public sealed class FlowDetailsViewModel : ObservableObject
         RefreshDisplay(record);
     }
 
-    private FlowRecord CreateDraftRecord()
+    private FlowRecord CreateDraftRecord(DateTime? accountTime = null)
     {
         var last = allRecords.LastOrDefault();
         return new FlowRecord
         {
             BankId = Bank.Id,
             BankUserId = BankUser.Id,
-            AccountTime = (last?.AccountTime ?? DateTime.Now).AddMinutes(1),
+            AccountTime = accountTime ?? (last?.AccountTime ?? DateTime.Now).AddMinutes(1),
             TradeMoney = 0,
             Balance = last?.Balance ?? OpeningBalance,
             BalanceAmount = last?.Balance ?? OpeningBalance,
@@ -737,6 +748,41 @@ public sealed class FlowDetailsViewModel : ObservableObject
             Currency = "RMB",
             TradeCurrency = "RMB"
         };
+    }
+
+    private static bool IsAgriculturalBank(Bank bank)
+    {
+        return bank.Name.Contains("农行", StringComparison.Ordinal)
+            || bank.Name.Contains("农业", StringComparison.Ordinal);
+    }
+
+    private static string CreateAgriculturalLogNumber(DateTime? accountTime)
+    {
+        var time = accountTime ?? DateTime.Today;
+        var digits = CreateRandomDigits(9);
+        if (time < new DateTime(2024, 3, 15))
+        {
+            return digits;
+        }
+
+        if (time < new DateTime(2024, 8, 15))
+        {
+            return $"U{digits}";
+        }
+
+        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return $"{letters[RandomNumberGenerator.GetInt32(letters.Length)]}{digits}";
+    }
+
+    private static string CreateRandomDigits(int length)
+    {
+        var digits = new char[length];
+        for (var index = 0; index < digits.Length; index++)
+        {
+            digits[index] = (char)('0' + RandomNumberGenerator.GetInt32(10));
+        }
+
+        return new string(digits);
     }
 
     public IReadOnlyList<string> GetFilterFieldNames()

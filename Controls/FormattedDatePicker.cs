@@ -61,10 +61,16 @@ public sealed class FormattedDatePicker : UserControl
         textBox = new TextBox
         {
             BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent,
+            Background = Brushes.White,
+            Foreground = Brushes.Black,
+            CaretBrush = Brushes.Black,
+            SelectionBrush = new SolidColorBrush(Color.FromRgb(201, 223, 245)),
+            SelectionTextBrush = Brushes.Black,
+            SelectionOpacity = 0.4,
             Padding = new Thickness(4, 2, 4, 2),
             VerticalContentAlignment = VerticalAlignment.Center
         };
+        // Keep date editing readable on selected rows and beneath WPF's selection overlay.
         textBox.LostKeyboardFocus += (_, _) => CommitText();
         textBox.KeyDown += TextBox_KeyDown;
         textBox.PreviewMouseWheel += TextBox_PreviewMouseWheel;
