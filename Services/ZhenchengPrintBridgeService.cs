@@ -1306,6 +1306,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly MethodInfo? vendorApplicationExportMethod;
         private readonly MethodInfo? vendorSignedPdfMethod;
         private readonly MethodInfo? vendorEveryPageSignedPdfMethod;
+        private readonly MethodInfo? vendorWechatLastPageSignedPdfMethod;
         private readonly MethodInfo? templateListMethod;
         private readonly MethodInfo generatePdfMethod;
 
@@ -1351,32 +1352,27 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 vendorSignedPdfMethod = pRectType is null
                     ? null
                     : types.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
-                        .Where(method =>
-                        {
-                            var parameters = method.GetParameters();
-                            return parameters.Length == 5
-                                && method.DeclaringType?.Assembly == pRectType.Assembly
-                                && parameters[0].ParameterType == typeof(Stream)
-                                && parameters[1].ParameterType == typeof(Stream).MakeByRefType()
-                                && parameters[2].ParameterType == pRectType
-                                && parameters[3].ParameterType == typeof(string)
-                                && parameters[4].ParameterType == typeof(string);
-                        })
-                        .FirstOrDefault(method => method.Name.Length == 1 && method.Name[0] == '\u0006');
+                        .Where(IsVendorSignedPdfMethod)
+                        // Prefer the runtime's standard five-argument signer;
+                        // the WeChat last-page-only path is resolved separately
+                        // below and therefore does not alter other templates.
+                        .FirstOrDefault(method => method.Name.Length == 1 && method.Name[0] == '\u0006')
+                        ?? types.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                            .Where(IsVendorSignedPdfMethod)
+                            .FirstOrDefault(method => method.Name.Length == 1 && method.Name[0] == '\u0008')
+                        ?? types.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                            .FirstOrDefault(IsVendorSignedPdfMethod);
                 vendorEveryPageSignedPdfMethod = vendorSignedPdfMethod?.DeclaringType?
                     .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(method =>
-                    {
-                        var parameters = method.GetParameters();
-                        return method.Name.Length == 1
-                            && method.Name[0] == '\u0002'
-                            && parameters.Length == 5
-                            && parameters[0].ParameterType == typeof(Stream)
-                            && parameters[1].ParameterType == typeof(Stream).MakeByRefType()
-                            && parameters[2].ParameterType == pRectType
-                            && parameters[3].ParameterType == typeof(string)
-                            && parameters[4].ParameterType == typeof(string);
-                    });
+                    .FirstOrDefault(method => method.Name.Length == 1
+                        && method.Name[0] == '\u0002'
+                        && IsVendorSignedPdfMethod(method));
+                vendorWechatLastPageSignedPdfMethod = pRectType is null
+                    ? null
+                    : types.SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                        .FirstOrDefault(method => method.Name.Length == 1
+                            && method.Name[0] == '\u0006'
+                            && IsVendorShortSignedPdfMethod(method));
                 templateListMethod = FindTemplateListMethod(types);
                 configFactory = types
                     .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
@@ -1433,6 +1429,39 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     Directory.SetCurrentDirectory(previousDirectory);
                 }
             }
+        }
+
+        private bool IsVendorSignedPdfMethod(MethodInfo method)
+        {
+            if (pRectType is null)
+            {
+                return false;
+            }
+
+            var parameters = method.GetParameters();
+            return parameters.Length == 5
+                && method.DeclaringType?.Assembly == pRectType.Assembly
+                && parameters[0].ParameterType == typeof(Stream)
+                && parameters[1].ParameterType == typeof(Stream).MakeByRefType()
+                && parameters[2].ParameterType == pRectType
+                && parameters[3].ParameterType == typeof(string)
+                && parameters[4].ParameterType == typeof(string);
+        }
+
+        private bool IsVendorShortSignedPdfMethod(MethodInfo method)
+        {
+            if (pRectType is null)
+            {
+                return false;
+            }
+
+            var parameters = method.GetParameters();
+            return method.DeclaringType?.Assembly == pRectType.Assembly
+                && parameters.Length == 4
+                && parameters[0].ParameterType == typeof(Stream)
+                && parameters[1].ParameterType == typeof(Stream).MakeByRefType()
+                && parameters[2].ParameterType == pRectType
+                && parameters[3].ParameterType == typeof(string);
         }
 
         public bool TryExport(PrintRenderContext context, string path)
@@ -1674,7 +1703,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var hasQuestPdfLayout = !context.Template.IsSystem
                 && !hasPdfData
                 && PrintTemplateQuestPdfConversionService.HasQuestPdfLayout(context.Template);
-            if (hasPdfData && !hasQuestPdfLayout)
+            // 微信个人版 must stay on the native QuestPDF route even when a
+            // Stimulsoft payload was persisted with the template. The vendor
+            // Stimulsoft exporter signs every page internally, whereas this
+            // statement requires its certificate signature on the final page
+            // only.
+            if (hasPdfData
+                && !hasQuestPdfLayout
+                && !ShouldUseNativeWechatLastPageSignature(context))
             {
                 return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
             }
@@ -1729,7 +1765,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 }
             }
 
-            if (hasPdfData && !hasQuestPdfLayout)
+            if (hasPdfData
+                && !hasQuestPdfLayout
+                && !ShouldUseNativeWechatLastPageSignature(context))
             {
                 return new ResolvedTemplate(context.Template.Name, null, null, context.Template.PdfData, context.Template.PageRows);
             }
@@ -2010,24 +2048,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                         return File.Exists(path) && new FileInfo(path).Length > 0;
                     }
 
-                    if (ShouldStampWechatPersonalStatementOnEveryPage(context))
-                    {
-                        if (vendorGeneratePdfDocumentMethod is null)
-                        {
-                            throw new MissingMethodException("Vendor PDF document factory was not found.");
-                        }
-
-                        var nativeDocument = vendorGeneratePdfDocumentMethod.Invoke(null, [bankUser, records, template]);
-                        if (nativeDocument is null)
-                        {
-                            throw new InvalidOperationException("Vendor PDF document factory returned null.");
-                        }
-
-                        generatePdfMethod.Invoke(null, [nativeDocument, path]);
-                        ApplyVendorDigitalSignature(context, path);
-                        return File.Exists(path) && new FileInfo(path).Length > 0;
-                    }
-
                     if (ShouldUseVendorCompletePdfPipeline(context)
                         && TryGenerateWithVendorCompletePdfPipeline(bankUser, records, template, path))
                     {
@@ -2090,13 +2110,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         private void ApplyVendorDigitalSignature(PrintRenderContext context, string path)
         {
-            if (!ShouldUseVendorCompletePdfPipeline(context))
+            if (!ShouldUseVendorCompletePdfPipeline(context)
+                && !ShouldUseNativeWechatLastPageSignature(context))
             {
                 return;
             }
 
-            var signedPdfMethod = ShouldStampWechatPersonalStatementOnEveryPage(context)
-                ? vendorEveryPageSignedPdfMethod
+            var signedPdfMethod = ShouldUseNativeWechatLastPageSignature(context)
+                ? vendorWechatLastPageSignedPdfMethod ?? vendorSignedPdfMethod
                 : vendorSignedPdfMethod;
             if (signedPdfMethod is null || pRectType is null)
             {
@@ -2116,21 +2137,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
             var rect = Activator.CreateInstance(pRectType)
                 ?? throw new InvalidOperationException("Vendor signature rectangle was not created.");
-            var stampEveryPage = ShouldStampWechatPersonalStatementOnEveryPage(context);
-            // The existing WeChat personal templates use the signed rectangle
-            // [436,70,562,196] on A4. Keep that exact appearance while extending
-            // it from the first/last pages to every page.
-            var width = stampEveryPage
+            var useWechatFinalPageSignature = ShouldUseNativeWechatLastPageSignature(context);
+            var width = useWechatFinalPageSignature
                 ? 126d
                 : context.Template.Config.SealWidth > 0
-                    ? context.Template.Config.SealWidth
-                    : 86d;
-            Set(rect, "X", stampEveryPage
-                ? 33d
+                ? context.Template.Config.SealWidth
+                : 86d;
+            Set(rect, "X", useWechatFinalPageSignature
+                // The native signer accepts coordinates from the top-left.
+                // The statement's ordinary seal occupies PDF rect
+                // [436, 70, 562, 196] (right-bottom), i.e. top-left
+                // coordinates (436, 646) on an A4 page.
+                ? 436d
                 : context.Template.Config.SealRight > 0
-                    ? context.Template.Config.SealRight
-                    : 70d);
-            Set(rect, "Y", stampEveryPage ? 70d : Math.Max(0d, context.Template.Config.SealBottom));
+                ? context.Template.Config.SealRight
+                : 70d);
+            Set(rect, "Y", useWechatFinalPageSignature ? 646d : Math.Max(0d, context.Template.Config.SealBottom));
             Set(rect, "Width", width);
             Set(rect, "Height", width);
 
@@ -2140,7 +2162,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 Stream signedStream;
                 using (var input = File.OpenRead(path))
                 {
-                    object?[] arguments = [input, null, rect, stampPath, "电子签章"];
+                    object?[] arguments = signedPdfMethod.GetParameters().Length == 4
+                        ? [input, null, rect, stampPath]
+                        : [input, null, rect, stampPath, "电子签章"];
                     signedPdfMethod.Invoke(null, arguments);
                     signedStream = arguments[1] as Stream
                         ?? throw new InvalidOperationException("Vendor signature pipeline did not return a PDF stream.");
@@ -2188,8 +2212,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private static bool ShouldUseVendorCompletePdfPipeline(PrintRenderContext context)
         {
             var templateName = context.Template.Name;
-            if (templateName.Contains("微信个人版", StringComparison.Ordinal)
-                || IsCiticPersonalElectronic3PrintContext(context))
+            if (IsCiticPersonalElectronic3PrintContext(context))
             {
                 return true;
             }
@@ -2209,9 +2232,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     || string.Equals(context.Template.Name, "微信个人版2", StringComparison.Ordinal));
         }
 
+        private static bool ShouldUseNativeWechatLastPageSignature(PrintRenderContext context)
+        {
+            return IsWechatBank(context.Bank)
+                && string.Equals(context.Template.Name, "微信个人版", StringComparison.Ordinal);
+        }
+
         private static bool ShouldBypassDefaultQuestPdfBridge(PrintRenderContext context)
         {
             return ShouldUseVendorCompletePdfPipeline(context)
+                || ShouldUseNativeWechatLastPageSignature(context)
                 || IsEverbrightCorporateElectronicTemplate(context);
         }
 
@@ -5008,7 +5038,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         var signedStampPath = ResolveVendorSignedStampPath(context);
         var defaultStampPath = ResolveVendorDefaultStampPath(context);
-        // The legacy checkbox is retained for data compatibility; all print templates must render a stamp.
+        // Every page retains the template's ordinary visual stamp. The separate
+        // vendor certificate signature is added to the final page afterwards.
         const bool shouldPrintStamp = true;
         var stampCode = ResolveBankUserStampCode(context, bankUser, values);
         var stampBranch = FirstNotBlank(
@@ -5026,9 +5057,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         }
 
         Set(target, "IsPrintStamp", shouldPrintStamp);
-        Set(target, "ZhangImg", shouldPrintStamp
-            ? FirstNotBlank(bankUser.SealImagePath, GetValue(values, "ZhangImg"), signedStampPath, defaultStampPath)
-            : string.Empty);
+        Set(target, "ZhangImg", FirstNotBlank(
+            bankUser.SealImagePath,
+            GetValue(values, "ZhangImg"),
+            signedStampPath,
+            defaultStampPath));
         Set(target, "StampCode", stampCode);
         Set(target, "StampBranch", stampBranch);
         Set(target, "ChapterCode", stampCode);
@@ -5050,6 +5083,117 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, "PrintInstitution", resolvedPrintBranch);
         Set(target, "PrintNet", resolvedPrintBranch);
         Set(target, "PrintNetwork", resolvedPrintBranch);
+    }
+
+    private static void RemoveWechatBuiltInStamp(PrintRenderContext context, string path)
+    {
+        if (!IsWechatBank(context.Bank)
+            || !string.Equals(context.Template.Name, "微信个人版2", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Version 2 embeds another opaque copy on the first/last pages and
+        // ignores IsPrintStamp. Match the original image's dimensions and full
+        // alpha mask, not an unstable PDF resource name. Remove only its paint
+        // operation while the PDF is still unsigned; signing adds one shared
+        // translucent appearance per page below.
+        BitmapSource source;
+        using (var input = File.OpenRead(ResolveVendorSignedStampPath(context)))
+        {
+            var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            source = new FormatConvertedBitmap(decoder.Frames[0], System.Windows.Media.PixelFormats.Bgra32, null, 0d);
+            source.Freeze();
+        }
+        var stride = checked(source.PixelWidth * 4);
+        var pixels = new byte[checked(stride * source.PixelHeight)];
+        source.CopyPixels(pixels, stride, 0);
+        var expectedAlpha = new byte[checked(source.PixelWidth * source.PixelHeight)];
+        for (var i = 0; i < expectedAlpha.Length; i++) expectedAlpha[i] = pixels[i * 4 + 3];
+
+        using var document = PdfReader.Open(path, PdfDocumentOpenMode.Modify);
+        var changed = false;
+        foreach (var page in document.Pages)
+        {
+            var objects = page.Resources?.Elements.GetDictionary("/XObject");
+            if (objects is null) continue;
+            var stampNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var name in objects.Elements.KeyNames)
+            {
+                var image = objects.Elements.GetDictionary(name.Value);
+                var mask = image?.Elements.GetDictionary("/SMask");
+                if (image?.Elements.GetName("/Subtype") == "/Image"
+                    && image.Elements.GetInteger("/Width") == source.PixelWidth
+                    && image.Elements.GetInteger("/Height") == source.PixelHeight
+                    && mask?.Elements.GetInteger("/BitsPerComponent") == 8
+                    && mask.Stream is not null
+                    && mask.Stream.UnfilteredValue.AsSpan().SequenceEqual(expectedAlpha))
+                {
+                    stampNames.Add(name.Value);
+                }
+            }
+            if (stampNames.Count == 0) continue;
+            var sequence = ContentReader.ReadContent(page);
+            var removed = false;
+            for (var i = sequence.Count - 1; i >= 0; i--)
+            {
+                if (sequence[i] is COperator { OpCode.Name: "Do" } operation
+                    && operation.Operands.Count == 1
+                    && operation.Operands[0] is CName name
+                    && stampNames.Contains(name.Name))
+                {
+                    sequence.RemoveAt(i);
+                    removed = true;
+                }
+            }
+            if (!removed) continue;
+            page.Contents.ReplaceContent(sequence);
+            foreach (var name in stampNames) objects.Elements.Remove(name);
+            changed = true;
+        }
+        if (!changed) return;
+        var tempPath = path + ".wechat-unstamped-" + Guid.NewGuid().ToString("N") + ".pdf";
+        try
+        {
+            document.Save(tempPath);
+            document.Close();
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteLocalFile(tempPath);
+        }
+    }
+
+    private static void CreateWechatTranslucentStampImage(string sourcePath, string outputPath)
+    {
+        const double opacity = 0.90d;
+        BitmapSource source;
+        using (var input = File.OpenRead(sourcePath))
+        {
+            var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            source = new FormatConvertedBitmap(decoder.Frames[0], System.Windows.Media.PixelFormats.Bgra32, null, 0d);
+            source.Freeze();
+        }
+
+        var stride = checked(source.PixelWidth * 4);
+        var pixels = new byte[checked(stride * source.PixelHeight)];
+        source.CopyPixels(pixels, stride, 0);
+        for (var offset = 3; offset < pixels.Length; offset += 4)
+        {
+            pixels[offset] = (byte)Math.Round(pixels[offset] * opacity, MidpointRounding.AwayFromZero);
+        }
+
+        var image = BitmapSource.Create(
+            source.PixelWidth, source.PixelHeight,
+            source.DpiX > 0d ? source.DpiX : 96d,
+            source.DpiY > 0d ? source.DpiY : 96d,
+            System.Windows.Media.PixelFormats.Bgra32, null, pixels, stride);
+        image.Freeze();
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var output = File.Create(outputPath);
+        encoder.Save(output);
     }
 
     private static string ResolveVendorSignedStampPath(PrintRenderContext context)
@@ -7171,6 +7315,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return IsWechatBank(context.Bank)
             && templateName.Contains("\u5FAE\u4FE1", StringComparison.Ordinal)
             && templateName.Contains("\u4E2A\u4EBA\u7248", StringComparison.Ordinal);
+    }
+
+    private static bool ShouldUseNativeWechatLastPageSignature(PrintRenderContext context)
+    {
+        return IsWechatBank(context.Bank)
+            && string.Equals(context.Template.Name, "\u5FAE\u4FE1\u4E2A\u4EBA\u7248", StringComparison.Ordinal);
     }
 
     private static bool IsWechatTransferCertificatePrintContext(PrintRenderContext context)

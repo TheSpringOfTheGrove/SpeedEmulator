@@ -16,7 +16,9 @@ var tests = new (string Name, Action Run)[]
     ("微信无可交易日期的月份不捏造周末流水", TestUnavailableMonth),
     ("微信可在一千元容差内补齐大面额预算", TestLargeDenominationTolerance),
     ("微信小预算仍使用可负担的小额规则", TestSmallBudget),
-    ("微信负余额优先只改时间，保持金额条数及每月次数", TestNegativeTimeCorrection)
+    ("微信负余额优先只改时间，保持金额条数及每月次数", TestNegativeTimeCorrection),
+    ("微信总进账自动分配有月度起伏且首末月按有效天数", TestAutomaticMonthlyVariation),
+    ("微信手动月金额范围不被自动起伏覆盖", TestExplicitMonthlyRange)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -288,6 +290,73 @@ static void TestNegativeTimeCorrection()
     var date = debit.AccountTime!.Value.ToString("yyyyMMdd");
     Check(debit.SerialNum!.Substring(10, 8) == date && (debit.MerchantName == "/" || debit.MerchantName!.StartsWith(date)),
         $"移动日期后系统自动生成的单号日期应同步: serial={debit.SerialNum}, merchant={debit.MerchantName}, date={date}");
+}
+
+static void TestAutomaticMonthlyVariation()
+{
+    var config = Config(new DateTime(2025, 9, 18), new DateTime(2026, 9, 18), 5800000, 10000, 3000);
+    config.MinInMoneyMonth1 = config.MaxInMoneyMonth1 = 446153.85;
+    config.MinOutMoneyMonth1 = config.MaxOutMoneyMonth1 = 445384.62;
+    var rules = new[] { Rule(1, true, 50, 300, 0), Rule(2, false, 1000, 50000, -2) };
+    for (var run = 0; run < 3; run++)
+    {
+        var result = Generate(config, rules);
+        var monthly = result.Records.GroupBy(record => new DateTime(record.AccountTime!.Value.Year, record.AccountTime.Value.Month, 1))
+            .OrderBy(group => group.Key).Select(group => new
+            {
+                Month = group.Key,
+                Income = group.Where(record => record.TradeMoney > 0).Sum(record => record.TradeMoney ?? 0),
+                Expense = -group.Where(record => record.TradeMoney < 0).Sum(record => record.TradeMoney ?? 0),
+                Closing = group.Last().Balance ?? 0
+            }).ToArray();
+        var fullMonths = monthly.Skip(1).SkipLast(1).ToArray();
+        var median = fullMonths.Select(month => month.Income).Order().ElementAt(fullMonths.Length / 2);
+        Check(fullMonths.Max(month => month.Income) - fullMonths.Min(month => month.Income) > median * 0.35,
+            "完整月份不能继续均摊");
+        Check(fullMonths.Max(month => month.Expense) - fullMonths.Min(month => month.Expense) > median * 0.30,
+            "支出也必须跟随月度活动起伏");
+        Check(monthly[0].Income < median && monthly[^1].Income < median, "首末不完整月份应按有效天数降低");
+        Check(fullMonths.Any(month => month.Income < month.Expense) && fullMonths.Any(month => month.Income > month.Expense),
+            "收支差额不能每月都机械地相同");
+        Check(monthly.All(month => month.Closing >= -0.009), "自动分配不能制造月末资金缺口");
+        Near(5800000, result.IncomeTotal, 1);
+        Near(5790000, result.ExpenseTotal, 100);
+        Near(13000, result.FinalBalance, 100);
+        ValidateRows(result, rules);
+        Console.WriteLine($"  monthly run={run + 1}, incomeMin={fullMonths.Min(month => month.Income):F0}, incomeMax={fullMonths.Max(month => month.Income):F0}, " +
+            $"first={monthly[0].Income:F0}, last={monthly[^1].Income:F0}, final={result.FinalBalance:F2}");
+        if (result.MinimumBalance < -0.009)
+        {
+            var corrected = new FlowAutoGenerator().ApplyNegativeBalanceCorrection(new FlowAutoGenerationRequest
+            {
+                Bank = Bank(), BankUser = new BankUser { Id = 99, BankName = "微信" },
+                Config = config, References = rules, ConstItems = []
+            }, result);
+            Check(corrected.MinimumBalance >= -0.009, "起伏分配后的负余额仍应能修正");
+            Check(corrected.Records.Count == result.Records.Count, "时间修正不应改动条数");
+            foreach (var month in monthly)
+            {
+                var correctedMonth = corrected.Records.Where(record => record.AccountTime!.Value.Year == month.Month.Year
+                    && record.AccountTime.Value.Month == month.Month.Month).ToArray();
+                Near(month.Income, correctedMonth.Where(record => record.TradeMoney > 0).Sum(record => record.TradeMoney ?? 0), 0.01);
+                Near(month.Expense, -correctedMonth.Where(record => record.TradeMoney < 0).Sum(record => record.TradeMoney ?? 0), 0.01);
+            }
+        }
+    }
+}
+
+static void TestExplicitMonthlyRange()
+{
+    var config = Config(new DateTime(2025, 1, 1), new DateTime(2025, 3, 31), 30000, 0, 1000);
+    config.SelectIndex = 1;
+    config.MinInMoneyMonth2 = config.MaxInMoneyMonth2 = 10000;
+    config.MinOutMoneyMonth2 = config.MaxOutMoneyMonth2 = 10000;
+    var result = Generate(config, [Rule(1, true, 10, 100, 0), Rule(2, false, 10, 100, 0)]);
+    foreach (var month in result.Records.GroupBy(record => record.AccountTime!.Value.Month))
+    {
+        Near(10000, month.Where(record => record.TradeMoney > 0).Sum(record => record.TradeMoney ?? 0), 1);
+        Near(10000, -month.Where(record => record.TradeMoney < 0).Sum(record => record.TradeMoney ?? 0), 100);
+    }
 }
 
 static FlowAutoGenerationResult Generate(FlowGenerationConfig config, IReadOnlyList<GenerateReferenceRule> rules, IReadOnlyList<GenerateConstRule>? constants = null)

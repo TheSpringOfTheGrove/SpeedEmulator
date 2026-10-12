@@ -32,7 +32,10 @@ public sealed partial class FlowAutoGenerator
         // Couple money totals, never row counts. Any unavoidable rounding in income also
         // shifts the expense budget so that opening balance + LastMoney stays the target.
         expenseTarget = RoundMoney(Math.Max(0, SumIncome(records) - request.Config.LastMoney));
-        GenerateWechatOptionalDirection(request, months, expenseTarget, false, random, records, scheduleState);
+        var expenseMonths = IsWechatAutomaticMonthlyRange(request.Config, isIncome: false)
+            ? CreateWechatAutomaticExpenseMonths(request, months, records, scheduleState, openingBalance, random)
+            : null;
+        GenerateWechatOptionalDirection(request, months, expenseTarget, false, random, records, scheduleState, expenseMonths);
         CompleteWechatDirectionBudget(request, months, expenseTarget, false, random, records, scheduleState);
         ValidateWechatDirectionBudget(records, expenseTarget, false);
         ApplyBalances(records, openingBalance);
@@ -147,7 +150,8 @@ public sealed partial class FlowAutoGenerator
         bool isIncome,
         Random random,
         List<FlowRecord> records,
-        NativeScheduleState state)
+        NativeScheduleState state,
+        IReadOnlyList<double>? plannedTargets = null)
     {
         var rules = request.References.Where(rule => rule.IsCheck
                 && IsIncomeRuleSafe(rule) == isIncome && GetRequiredMonthlyCount(rule) == 0)
@@ -160,7 +164,7 @@ public sealed partial class FlowAutoGenerator
         var pools = months.Select(month => rules.Select(rule => new WechatNaturalRule(
                 rule, GetRuleAmountBounds(rule), state.GetCandidateDates(month.Start, month.End, rule)))
             .Where(item => item.Dates.Count > 0).ToArray()).ToArray();
-        var monthTargets = CreateWechatNaturalMonthlyTargets(request.Config, months, target, isIncome, random);
+        var monthTargets = plannedTargets ?? CreateWechatNaturalMonthlyTargets(request.Config, months, target, isIncome, random);
         var existing = months.Select(month => isIncome
             ? SumIncome(records.Where(record => IsRecordInRange(record, month.Start, month.End)))
             : SumExpense(records.Where(record => IsRecordInRange(record, month.Start, month.End)))).ToArray();
@@ -231,6 +235,25 @@ public sealed partial class FlowAutoGenerator
         bool isIncome,
         Random random)
     {
+        // In total-income mode the Calculate button fills min=max with the
+        // arithmetic monthly average. It is not a request for identical months.
+        // Explicit monthly ranges/details keep their existing allocation semantics.
+        if (months.Count > 1 && IsWechatAutomaticMonthlyRange(config, isIncome))
+        {
+            var factors = months.Select(_ => 0.80d + random.NextDouble() * 0.40d).ToArray();
+            var fullMonths = Enumerable.Range(0, months.Count)
+                .Where(index => GetActiveDayCount(months[index]) == DateTime.DaysInMonth(months[index].Start.Year, months[index].Start.Month))
+                .OrderBy(_ => random.Next()).ToArray();
+            if (fullMonths.Length >= 4)
+            {
+                factors[fullMonths[0]] = 1.45d + random.NextDouble() * 0.20d;
+                factors[fullMonths[1]] = 0.65d + random.NextDouble() * 0.13d;
+            }
+            var volatileWeights = months.Select((month, index) => factors[index]
+                * GetActiveDayCount(month) / DateTime.DaysInMonth(month.Start.Year, month.Start.Month)).ToArray();
+            return NormalizeRawTargets(volatileWeights, target);
+        }
+
         if (config.SelectIndex == 2)
         {
             var detailTargets = CreateMonthDetailRawTargets(config, months, isIncome);
@@ -255,6 +278,75 @@ public sealed partial class FlowAutoGenerator
             ? Math.Max(0, min + random.NextDouble() * (max - min))
             : (double)GetActiveDayCount(month)).ToArray();
         return NormalizeRawTargets(weights, target);
+    }
+
+    private static bool IsWechatAutomaticMonthlyRange(FlowGenerationConfig config, bool isIncome)
+    {
+        if (config.SelectIndex != 0) return false;
+        var min = isIncome ? config.MinInMoneyMonth1 : config.MinOutMoneyMonth1;
+        var max = isIncome ? config.MaxInMoneyMonth1 : config.MaxOutMoneyMonth1;
+        return min <= 0.009d && max <= 0.009d || Math.Abs(max - min) <= 0.009d;
+    }
+
+    private static double[]? CreateWechatAutomaticExpenseMonths(
+        FlowAutoGenerationRequest request,
+        IReadOnlyList<(DateTime Start, DateTime End)> months,
+        IReadOnlyList<FlowRecord> records,
+        NativeScheduleState state,
+        double openingBalance,
+        Random random)
+    {
+        if (months.Count == 0) return null;
+        var finalBalance = CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney);
+        if (finalBalance < -0.009d) return null;
+        var income = months.Select(month => SumIncome(records.Where(record => IsRecordInRange(record, month.Start, month.End)))).ToArray();
+        var requiredExpense = months.Select(month => SumExpense(records.Where(record => IsRecordInRange(record, month.Start, month.End)))).ToArray();
+        var optionalRules = request.References.Where(rule => rule.IsCheck && !IsIncomeRuleSafe(rule)
+            && GetRequiredMonthlyCount(rule) == 0).ToArray();
+        var canAddExpense = months.Select(month => optionalRules.Any(rule => state.GetCandidateDates(month.Start, month.End, rule).Count > 0)).ToArray();
+
+        // Reserve cash for future required expenses and the requested final balance.
+        // Months with no eligible optional expense rule cannot spend extra money.
+        var lowerClosing = new double[months.Count];
+        var upperClosing = new double[months.Count];
+        lowerClosing[^1] = upperClosing[^1] = finalBalance;
+        for (var index = months.Count - 2; index >= 0; index--)
+        {
+            var next = index + 1;
+            var shift = RoundMoney(requiredExpense[next] - income[next]);
+            lowerClosing[index] = RoundMoney(Math.Max(0, lowerClosing[next] + shift));
+            upperClosing[index] = canAddExpense[next] ? double.MaxValue : upperClosing[next] + shift;
+            if (upperClosing[index] < lowerClosing[index] - 0.009d) return null;
+        }
+
+        var averageIncome = income.Sum() / months.Count;
+        var previousClosing = openingBalance;
+        var targets = new double[months.Count];
+        for (var index = 0; index < months.Count; index++)
+        {
+            var available = RoundMoney(previousClosing + income[index] - requiredExpense[index]);
+            var minimum = lowerClosing[index];
+            var maximum = Math.Min(upperClosing[index], available);
+            if (maximum < minimum - 0.009d) return null;
+            double closing;
+            if (!canAddExpense[index])
+            {
+                closing = available;
+                if (closing > maximum + 0.009d) return null;
+            }
+            else
+            {
+                // Income and expense track the month's activity, but their gap is
+                // a cash-balance walk, not a fixed monthly ratio or equal net amount.
+                var desired = averageIncome * (0.03d + random.NextDouble() * 0.15d);
+                var step = Math.Max(1d, income[index] * (0.06d + random.NextDouble() * 0.06d));
+                desired = Math.Clamp(desired, Math.Max(0, previousClosing - step), previousClosing + step);
+                closing = RoundMoney(Math.Clamp(desired, minimum, Math.Max(minimum, maximum)));
+            }
+            targets[index] = RoundMoney(previousClosing + income[index] - closing);
+            previousClosing = closing;
+        }
+        return targets;
     }
 
     private static double DrawWechatNaturalAmount(AmountBounds bounds, double budget, Random random)
