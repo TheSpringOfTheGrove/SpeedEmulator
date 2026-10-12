@@ -44,7 +44,7 @@ public sealed class FlowAutoGenerationResult
     public required double RequiredOpeningBalance { get; init; }
 }
 
-public sealed class FlowAutoGenerator
+public sealed partial class FlowAutoGenerator
 {
     public const double AcceptedFinalBalanceTolerance = 1000d;
 
@@ -243,6 +243,11 @@ public sealed class FlowAutoGenerator
 
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateRunSeed(request, start, end));
+        if (IsWechatBank(request.Bank))
+        {
+            return GenerateWechatNaturalResult(request, start, end, openingBalance, random);
+        }
+
         var estimatedRecordCapacity = IsWechatBank(request.Bank)
             ? Math.Max(512, ((end.Date - start.Date).Days + 1) * 24)
             : 512;
@@ -808,6 +813,15 @@ public sealed class FlowAutoGenerator
             })
             .ToList();
 
+        // The dense WeChat path can usually be repaired by changing times only.
+        // Keep the existing confirmation and use the legacy amount repair as fallback.
+        if (IsWechatBank(request.Bank)
+            && TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random)
+            && !IsFinalBalanceOutsideTolerance(records.LastOrDefault()?.Balance ?? openingBalance, openingBalance, request.Config.LastMoney))
+        {
+            return CreateWechatNaturalBalanceResult(records, openingBalance, request.Config.LastMoney);
+        }
+
         for (var attempt = 0; attempt < 6; attempt++)
         {
             ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
@@ -846,6 +860,11 @@ public sealed class FlowAutoGenerator
         EnforceMinimumExactAmountRepeatGap(records, request, random);
         FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
+
+        if (IsWechatBank(request.Bank) && GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random);
+        }
 
         var incomeTotal = SumIncome(records);
         var expenseTotal = SumExpense(records);

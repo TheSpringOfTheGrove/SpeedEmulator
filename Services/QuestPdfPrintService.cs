@@ -1148,6 +1148,9 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             if (IsPostalSummaryColumn(column))
             {
                 return ApplyTabSize(FormatValue(FirstNotBlank(
+                    record["\u4EA4\u6613\u7C7B\u578B"],
+                    record.ProductBrief,
+                    record.ProductName,
                     record.Remark,
                     record["\u9644\u8A00"]), column.Type));
             }

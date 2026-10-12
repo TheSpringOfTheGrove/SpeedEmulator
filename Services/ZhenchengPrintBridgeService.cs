@@ -8059,15 +8059,22 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         object target)
     {
+        // Postal templates label this column as “摘要”, but its source value is
+        // the flow detail's transaction type (for example “快捷支付”), not the
+        // remittance remark or merchant description.
         var summary = NormalizeSingleLinePrintText(FirstNotBlank(
-            source.Remark,
+            GetFlowExtraFieldValue(context.Bank, source, values,
+                "\u4EA4\u6613\u7C7B\u578B",
+                "\u4EA4\u6613\u79CD\u7C7B",
+                "\u4E1A\u52A1\u7C7B\u578B"),
             source.ProductBrief,
-            source.TradeExplain,
             source.ProductName,
-            GetValue(values, nameof(FlowRecord.Remark)),
             GetValue(values, nameof(FlowRecord.ProductBrief)),
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
             GetValue(values, nameof(FlowRecord.ProductName)),
+            source.Remark,
+            source.TradeExplain,
+            GetValue(values, nameof(FlowRecord.Remark)),
+            GetValue(values, nameof(FlowRecord.TradeExplain)),
             GetFlowExtraFieldValue(context.Bank, source, values, "\u9644\u8A00")));
         var rawCashCheck = FirstNotBlank(source.CashCheck, GetValue(values, nameof(FlowRecord.CashCheck)));
         var channel = NormalizeSingleLinePrintText(FirstNotBlank(
