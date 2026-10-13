@@ -247,6 +247,10 @@ public sealed partial class FlowAutoGenerator
         {
             return GenerateWechatNaturalResult(request, start, end, openingBalance, random);
         }
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+        {
+            return GenerateBankOfChinaResult(request, start, end, openingBalance, random);
+        }
 
         var estimatedRecordCapacity = IsWechatBank(request.Bank)
             ? Math.Max(512, ((end.Date - start.Date).Days + 1) * 24)
@@ -794,6 +798,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+            return CorrectBankOfChinaResult(request, source, repairNegative: true);
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
@@ -889,6 +895,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+            return CorrectBankOfChinaResult(request, source, repairNegative: false);
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);

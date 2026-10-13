@@ -29,7 +29,7 @@ internal static class Program
             ("印章仅降低原有Alpha，不改变颜色或原文件", () => TestAlpha(output)),
             ("半透明处理仅用于微信两个个人流水模板", TestScope),
             ("微信个人版仅在最后一页生成签章", () => ExportSample("微信个人版", Path.Combine(output, "after.pdf"))),
-            ("微信个人版2所有页面仍生成签章", () => ExportSample("微信个人版2", Path.Combine(output, "after-v2.pdf")))
+            ("微信个人版2不生成数字签名", () => ExportSample("微信个人版2", Path.Combine(output, "after-v2.pdf")))
         };
         foreach (var (name, test) in tests)
         {
@@ -131,7 +131,7 @@ internal static class Program
                 && field.Elements.GetName("/FT") == "/Sig") ?? 0;
             var expectedSignatures = string.Equals(templateName, "微信个人版", StringComparison.Ordinal)
                 ? pageIndex == signedDocument.Pages.Count - 1 ? 1 : 0
-                : 1;
+                : 0;
             foreach (var signature in annotations?.Elements
                          .OfType<PdfSharpCore.Pdf.Advanced.PdfReference>()
                          .Select(reference => reference.Value)

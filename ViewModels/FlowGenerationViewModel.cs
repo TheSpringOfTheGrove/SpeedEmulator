@@ -852,6 +852,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
                 StatusMessage = "生成结果已自动放行保存，请在流水明细中查看余额。";
             }
 
+            if (!BankOfChinaGenerationBudget.TryValidate(Bank, Config, result, out var budgetReason))
+                throw new InvalidOperationException(budgetReason);
             SyncOpeningBalanceFromResult(result);
 
             SetGenerationProgress(72, appendToExistingRecords ? "正在追加保存生成流水" : "正在保存生成流水");
@@ -1099,6 +1101,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
         BankInterestSetting? interestSetting,
         out string reason)
     {
+        if (!BankOfChinaGenerationBudget.TryValidate(Bank, Config, result, out reason))
+            return false;
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
         if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
         {
