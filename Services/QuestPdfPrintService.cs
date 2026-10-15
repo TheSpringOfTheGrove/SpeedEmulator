@@ -174,11 +174,11 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                         {
                             accountTime?.ToString(includeTime ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd") ?? string.Empty,
                             accountTime?.ToString(includeTime ? "yyyyMMdd" : "yyyy-MM-dd") ?? string.Empty,
-                            FirstNotBlank(record.ProductBrief, record.ProductName, record.Remark),
+                            Convert.ToString(FlowPrintFieldValues.Create(context.Bank, record).GetValueOrDefault(nameof(FlowRecord.ProductName))) ?? string.Empty,
                             FirstNotBlank(record.IncomeAttribute, (record.TradeMoney ?? 0d) >= 0 ? "收" : "支"),
                             (record.TradeMoney ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
                             (record.Balance ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
-                            FirstNotBlank(record.Usage, record.TradeExplain),
+                            record.Usage ?? string.Empty,
                             record.OppositeUsername,
                             string.Join(Environment.NewLine, new[] { record.OppositeAccount, record.OppositeBank }.Where(value => !string.IsNullOrWhiteSpace(value)))
                         };
@@ -391,7 +391,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                                 {
                                     record.AccountTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty,
                                     record.AccountTime?.ToString("yyyyMMdd") ?? string.Empty,
-                                    FirstNotBlank(record.ProductBrief, record.ProductName, record.Remark),
+                                    Convert.ToString(FlowPrintFieldValues.Create(context.Bank, record).GetValueOrDefault(nameof(FlowRecord.ProductName))) ?? string.Empty,
                                     FirstNotBlank(record.IncomeAttribute, (record.TradeMoney ?? 0d) >= 0d ? "收" : "支"),
                                     (record.TradeMoney ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
                                     (record.Balance ?? 0d).ToString("N2", CultureInfo.InvariantCulture),
@@ -1140,19 +1140,33 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 return rowIndex.ToString(CultureInfo.InvariantCulture);
             }
 
+            if ((context.Bank.Name.Contains("工行", StringComparison.Ordinal) || context.Bank.Name.Contains("工商", StringComparison.Ordinal))
+                && column.Field == nameof(FlowRecord.AreaNum))
+            {
+                return FlowPrintFieldValues.IcbcOperationArea(context);
+            }
+
             if (IsSpdbPersonalElectronicSummaryColumn(column))
             {
-                return ApplyTabSize(FormatValue(FirstNotBlank(record.Remark, record.TradeExplain), column.Type));
+                return ApplyTabSize(FormatValue(FlowPrintFieldValues.Create(context.Bank, record).GetValueOrDefault(nameof(FlowRecord.ProductBrief)), column.Type));
             }
 
             if (IsPostalSummaryColumn(column))
             {
-                return ApplyTabSize(FormatValue(FirstNotBlank(
-                    record["\u4EA4\u6613\u7C7B\u578B"],
-                    record.ProductBrief,
-                    record.ProductName,
-                    record.Remark,
-                    record["\u9644\u8A00"]), column.Type));
+                var summary = context.Bank.Type == BankTypes.Corporate
+                    ? FlowPrintFieldValues.ReadColumn(context.Bank, record, "摘要")
+                    : FlowPrintFieldValues.Create(context.Bank, record).GetValueOrDefault(nameof(FlowRecord.ProductName));
+                return ApplyTabSize(FormatValue(summary, column.Type));
+            }
+
+            if (IsPostalContext() && context.Bank.Type == BankTypes.Corporate && column.Name == "附言")
+            {
+                return ApplyTabSize(FormatValue(FlowPrintFieldValues.ReadColumn(context.Bank, record, "附言") ?? string.Empty, column.Type));
+            }
+
+            if (context.Bank.Type == BankTypes.Personal && context.Template.Name == "工行个人纸质版（工资）" && column.Name == "摘要")
+            {
+                return ApplyTabSize(FormatValue(FlowPrintFieldValues.Create(context.Bank, record).GetValueOrDefault(nameof(FlowRecord.TradeExplain)), column.Type));
             }
 
             if (IsPostalChannelColumn(column))
@@ -1160,8 +1174,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 var channel = FirstNotBlank(
                     record.TradeChannel,
                     record["\u4EA4\u6613\u65B9\u5F0F"],
-                    record["\u4EA4\u6613\u6E20\u9053"],
-                    IsPostalCashFlag(record.CashCheck) ? string.Empty : record.CashCheck);
+                    record["\u4EA4\u6613\u6E20\u9053"]);
 
                 return ApplyTabSize(FormatValue(channel, column.Type));
             }
@@ -1173,10 +1186,7 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             }
 
             var formatted = ApplyTabSize(FormatValue(value, column.Type));
-            if (string.IsNullOrWhiteSpace(formatted))
-            {
-                formatted = GetKnownColumnFallback(record, column);
-            }
+            // 模板已绑定具体字段；空单元格不能按列名借用其他字段。
 
             if (IsWechatMerchantOrderColumn(column))
             {
@@ -1251,12 +1261,9 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             var bankName = context.Bank.Name ?? string.Empty;
             var templateName = context.Template.Name ?? string.Empty;
             var columnName = column.Name ?? string.Empty;
-            var isSpdb = context.Bank.Id == 12
-                || context.Template.BankId == 12
-                || bankName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
-                || bankName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal)
-                || templateName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
-                || templateName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal);
+            var isSpdb = context.Bank.Type == BankTypes.Personal
+                && (bankName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
+                    || bankName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal));
 
             return isSpdb
                 && templateName.Contains("\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal)
@@ -1306,104 +1313,6 @@ public sealed class QuestPdfPrintService : IPrintPdfService
             return text is "\u949E" or "\u6C47" or "\u949E\u6C47";
         }
 
-        private static string GetKnownColumnFallback(FlowRecord record, PrintPdfColumn column)
-        {
-            var name = column.Name ?? string.Empty;
-            if (name.Contains("\u4EA4\u6613\u5355\u53F7", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.SerialNum,
-                    record.SequenceNum,
-                    record.LogNum,
-                    record.TradeCode,
-                    record.MerchantName);
-            }
-
-            if (name.Contains("\u4EA4\u6613\u7C7B\u578B", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.ProductName,
-                    record.ProductType,
-                    record.TradeExplain,
-                    record.ProductBrief,
-                    record.CashCheck,
-                    record.Usage);
-            }
-
-            if (name.Contains("\u5546\u5BB6\u8BA2\u5355\u53F7", StringComparison.Ordinal)
-                || name.Contains("\u5546\u6237\u5355\u53F7", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.MerchantName,
-                    record.ReceiptNum,
-                    record.SerialNum);
-            }
-
-            if (name.Contains("\u5546\u54C1\u8BF4\u660E", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.Remark,
-                    record.ProductBrief,
-                    record.TradeExplain,
-                    record.Usage);
-            }
-
-            if (string.Equals(name, "\u6458\u8981", StringComparison.Ordinal)
-                || name.Contains("\u4EA4\u6613\u6458\u8981", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.Remark,
-                    record.ProductBrief,
-                    record.TradeExplain,
-                    record.ProductName,
-                    record.TradeCode,
-                    record.ProductCode,
-                    record.Usage);
-            }
-
-            if (name.Contains("\u4EA4\u6613\u540D\u79F0", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.ProductName,
-                    record.TradeExplain,
-                    record.ProductBrief,
-                    record.TradeCode,
-                    record.ProductCode,
-                    record.CashCheck,
-                    record.Remark,
-                    record.Usage);
-            }
-
-            if (string.Equals(name, "\u5730\u533A", StringComparison.Ordinal)
-                || name.Contains("\u5730\u533A\u53F7", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.AreaNum,
-                    record.TradePlace,
-                    record.NetNum);
-            }
-
-            if (name.Contains("\u4EA4\u6613\u673A\u6784", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.NetNum,
-                    record.BranchNum,
-                    record.TradePlace);
-            }
-
-            if (name.Contains("\u4EA4\u6613\u7F51\u70B9", StringComparison.Ordinal)
-                || name.Contains("\u4EA4\u6613\u5730\u70B9", StringComparison.Ordinal)
-                || string.Equals(name, "\u5730\u70B9", StringComparison.Ordinal))
-            {
-                return FirstNotBlank(
-                    record.TradePlace,
-                    record.NetNum,
-                    record.AreaNum,
-                    record.BranchNum);
-            }
-
-            return string.Empty;
-        }
 
         private bool ShouldSuppressPaperMainRowValue(FlowRecord record, PrintPdfColumn column, string value)
         {

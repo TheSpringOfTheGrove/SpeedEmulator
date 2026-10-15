@@ -20921,6 +20921,13 @@ public sealed partial class FlowAutoGenerator
     private static string? CreateGeneratedAreaNumber(FlowAutoGenerationRequest request, FlowRecord record)
     {
         var bank = request.Bank;
+        if (bank.Type == BankTypes.Personal
+            && (bank.Name.Contains("工行", StringComparison.Ordinal)
+                || bank.Name.Contains("工商", StringComparison.Ordinal)))
+        {
+            // 地区号来自当前参照/固定项目。空白表示不填写，不能生成随机地区号。
+            return null;
+        }
         var seed = CreateRecordSeed(bank, record, 89);
 
         if (HasFlowColumnName(bank, nameof(FlowRecord.AreaNum), "地区号"))

@@ -224,23 +224,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static readonly string[] SpdbPersonalElectronicSummaryPropertyNames =
     [
         nameof(FlowRecord.Remark),
-        nameof(FlowRecord.TradeExplain),
-        nameof(FlowRecord.Usage),
-        nameof(FlowRecord.ProductCode),
-        nameof(FlowRecord.ProductType),
-        nameof(FlowRecord.VoucherType),
-        nameof(FlowRecord.HandleStatus),
-        nameof(FlowRecord.NoticeType),
-        nameof(FlowRecord.InterfacePage),
-        nameof(FlowRecord.AppNum),
-        nameof(FlowRecord.DepositTerm),
-        nameof(FlowRecord.AgreedTerm),
-        nameof(FlowRecord.CreditType),
-        nameof(FlowRecord.SerialNum),
-        nameof(FlowRecord.SequenceNum),
-        nameof(FlowRecord.LogNum),
-        nameof(FlowRecord.VoucherNum),
-        nameof(FlowRecord.ReceiptNum),
         "\u6458\u8981",
         "\u4EA4\u6613\u6458\u8981",
         "Summary",
@@ -1972,8 +1955,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 var source = printRecords[index];
                 var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
-                var values = CreateValueMap(source);
-                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                var values = CreateFlowRecordPrintValues(context.Bank, source);
                 ApplyPrintFieldFallbacks(context.Bank, source, values);
                 ApplyMatchingProperties(target, values);
 
@@ -1986,16 +1968,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
-                var sequenceNumber = FirstNotBlank(
-                    GetValue(values, "SequenceNum"),
-                    GetValue(values, "SerialNum"),
-                    GetValue(values, "LogNum"),
-                    CreateSystemGeneratedPrintSerialNumber(context, index));
-                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values);
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -2062,6 +2039,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
 
                     NormalizeVendorDynamicImageDocument(context, document);
+                    document = PrepareVendorPrintDocument(context, document);
                     generatePdfMethod.Invoke(null, [document, path]);
                     NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
                     NormalizeImportedDocumentSerialNumbersInPdf(context, path);
@@ -2789,6 +2767,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
 
             NormalizeVendorDynamicImageDocument(context, document);
+            document = PrepareVendorPrintDocument(context, document);
             generatePdfMethod.Invoke(null, [document, path]);
             NormalizeEverbrightPersonalElectronicFooterPdf(context, path);
             NormalizeImportedDocumentSerialNumbersInPdf(context, path);
@@ -2956,8 +2935,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 var source = printRecords[index];
                 var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
-                var values = CreateValueMap(source);
-                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                var values = CreateFlowRecordPrintValues(context.Bank, source);
                 ApplyPrintFieldFallbacks(context.Bank, source, values);
                 ApplyMatchingProperties(target, values);
 
@@ -2970,16 +2948,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
-                var sequenceNumber = FirstNotBlank(
-                    GetValue(values, "SequenceNum"),
-                    GetValue(values, "SerialNum"),
-                    GetValue(values, "LogNum"),
-                    CreateSystemGeneratedPrintSerialNumber(context, index));
-                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values);
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -4620,8 +4593,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             {
                 var source = printRecords[index];
                 var target = Activator.CreateInstance(flowType) ?? throw new InvalidOperationException("Cannot create vendor flow record.");
-                var values = CreateValueMap(source);
-                ApplyFlowRecordColumnAliases(context.Bank, source, values);
+                var values = CreateFlowRecordPrintValues(context.Bank, source);
                 ApplyPrintFieldFallbacks(context.Bank, source, values);
                 ApplyMatchingProperties(target, values);
 
@@ -4634,16 +4606,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     GetValue(values, "AccountNum"),
                     GetValue(values, "Account"),
                     context.BankUser.AccountNo));
-                var sequenceNumber = FirstNotBlank(
-                    GetValue(values, "SequenceNum"),
-                    GetValue(values, "SerialNum"),
-                    GetValue(values, "LogNum"),
-                    CreateSystemGeneratedPrintSerialNumber(context, index));
-                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values, sequenceNumber);
+                var serialNumber = ResolveVendorPrintSerialNumber(context, source, values);
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", serialNumber);
+                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -5478,15 +5445,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             ApplyIcbcBankUserFields(context, target, values);
 
-            var operationArea = FirstNotBlank(
-                ResolveIcbcOperationAreaFromRecords(context),
-                GetBankUserColumnValue(context, values, "\u5730\u533A", "\u5730\u533A\u53F7", "\u64CD\u4F5C\u5730\u533A"),
-                GetValue(values, "OperationArea"),
-                GetValue(values, nameof(FlowRecord.AreaNum)));
-            if (!string.IsNullOrWhiteSpace(operationArea))
-            {
-                Set(target, "OperationArea", operationArea);
-            }
+            SetVendorStringNotNull(target, "OperationArea", FlowPrintFieldValues.IcbcOperationArea(context));
         }
 
         if (IsAgriculturalBankPersonalPaperTemplate(context))
@@ -5884,6 +5843,77 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             }
         }
     }
+
+    private static void ApplyIcbcPersonalFlowFields(
+        PrintRenderContext context,
+        FlowRecord source,
+        object target)
+    {
+        var values = CreateIcbcPersonalPrintValues(context.Bank, source);
+        // 工行明细的空值和短编号也是真实数据，不能借用摘要或补造账号。
+        foreach (var property in typeof(FlowRecord).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.PropertyType == typeof(string) && property.GetIndexParameters().Length == 0)
+            {
+                Set(target, property.Name, GetValue(values, property.Name) ?? string.Empty);
+            }
+        }
+
+        var account = GetValue(values, nameof(FlowRecord.Account)) ?? string.Empty;
+        foreach (var property in new[] { "Account", "AccountNum", "AccountNo", "BankAccount", "BankAccountNo" })
+        {
+            Set(target, property, account);
+        }
+
+        var sequence = GetValue(values, nameof(FlowRecord.SequenceNum)) ?? string.Empty;
+        Set(target, nameof(FlowRecord.SerialNum), sequence);
+        Set(target, nameof(FlowRecord.SequenceNum), sequence);
+        SetVendorStringNotNull(target, nameof(FlowRecord.AreaNum), FlowPrintFieldValues.IcbcOperationArea(context));
+
+        if ((IcbcPrintDocumentAdapter.SupportsTemplate(context.Template.Name) && string.IsNullOrWhiteSpace(context.Template.PdfData))
+            || context.Template.Name == "工行个人纸质版（工资）")
+        {
+            // 原生模板的“摘要”使用 Remark/ProductBrief，来源只能是明细“注释”。
+            var comment = GetValue(values, nameof(FlowRecord.TradeExplain)) ?? string.Empty;
+            Set(target, nameof(FlowRecord.Remark), comment);
+            Set(target, nameof(FlowRecord.ProductBrief), comment);
+        }
+    }
+
+    private static object PrepareIcbcPersonalDocument(PrintRenderContext context, object document)
+    {
+        if (!IsIcbcPersonalPrintContext(context)
+            || !IcbcPrintDocumentAdapter.SupportsTemplate(context.Template.Name)
+            || !string.IsNullOrWhiteSpace(context.Template.PdfData))
+        {
+            return document;
+        }
+
+        var rows = GetVendorPrintRecords(context).Select(source =>
+        {
+            var values = CreateIcbcPersonalPrintValues(context.Bank, source);
+            values[nameof(FlowRecord.AreaNum)] = FlowPrintFieldValues.IcbcOperationArea(context);
+            return (IReadOnlyDictionary<string, object?>)values;
+        }).ToArray();
+        return IcbcPrintDocumentAdapter.Prepare(document, context.Template.Name, rows);
+    }
+
+    private static object PrepareVendorPrintDocument(PrintRenderContext context, object document)
+    {
+        document = PrepareIcbcPersonalDocument(context, document);
+        if (IsSpdbPersonalElectronicPrintContext(context) && context.Template.Name == "浦发个人电子版"
+            && string.IsNullOrWhiteSpace(context.Template.PdfData))
+        {
+            document = SpdbPrintDocumentAdapter.Prepare(document, context.Bank, GetVendorPrintRecords(context));
+        }
+        return document;
+    }
+
+    private static Dictionary<string, object?> CreateIcbcPersonalPrintValues(Bank bank, FlowRecord source)
+        => CreateFlowRecordPrintValues(bank, source);
+
+    private static Dictionary<string, object?> CreateFlowRecordPrintValues(Bank bank, FlowRecord source)
+        => FlowPrintFieldValues.Create(bank, source);
 
     private static string ResolveIcbcAccountNumber(
         PrintRenderContext context,
@@ -6747,46 +6777,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         object target,
         IEnumerable? vendorRecords)
     {
-        if (!IsIcbcPrintContext(context) || vendorRecords is null)
+        if (IsIcbcPrintContext(context))
         {
-            return;
+            SetVendorStringNotNull(target, "OperationArea", FlowPrintFieldValues.IcbcOperationArea(context));
         }
-
-        var operationArea = vendorRecords
-            .Cast<object>()
-            .Select(record => FirstNotBlank(
-                Convert.ToString(GetPropertyValue(record, nameof(FlowRecord.AreaNum)), CultureInfo.CurrentCulture),
-                Convert.ToString(GetPropertyValue(record, nameof(FlowRecord.BranchNum)), CultureInfo.CurrentCulture),
-                Convert.ToString(GetPropertyValue(record, nameof(FlowRecord.NetNum)), CultureInfo.CurrentCulture)))
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        operationArea = FirstNotBlank(operationArea, ResolveIcbcOperationAreaFromRecords(context));
-        if (!string.IsNullOrWhiteSpace(operationArea))
-        {
-            Set(target, "OperationArea", operationArea);
-        }
-    }
-
-    private static string ResolveIcbcOperationAreaFromRecords(PrintRenderContext context)
-    {
-        foreach (var record in context.Records)
-        {
-            var values = CreateValueMap(record);
-            ApplyFlowRecordColumnAliases(context.Bank, record, values);
-            var operationArea = FirstNotBlank(
-                record.AreaNum,
-                GetValue(values, nameof(FlowRecord.AreaNum)),
-                GetFlowExtraFieldValue(context.Bank, record, values, "\u5730\u533A", "\u5730\u533A\u53F7"),
-                record.BranchNum,
-                GetValue(values, nameof(FlowRecord.BranchNum)),
-                record.NetNum,
-                GetValue(values, nameof(FlowRecord.NetNum)));
-            if (!string.IsNullOrWhiteSpace(operationArea))
-            {
-                return operationArea;
-            }
-        }
-
-        return string.Empty;
     }
 
     private static string ResolveBankUserPrintBranch(PrintRenderContext context, IReadOnlyDictionary<string, object?> values)
@@ -6971,28 +6965,14 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         // A CCB PDF has an explicit "交易地点/附言" column. For document imports an
         // empty source cell must remain empty; borrowing the summary made interest rows
         // render "利息存入" in both the summary and location columns.
-        var tradePlace = source.IsDocumentImported
-            ? importedTradePlace
-            : FirstNotBlank(
-                importedTradePlace,
-                GetValue(values, nameof(FlowRecord.TradeExplain)),
-                GetValue(values, nameof(FlowRecord.MerchantName)),
-                GetValue(values, nameof(FlowRecord.ProductBrief)),
-                GetValue(values, nameof(FlowRecord.OppositeBank)));
+        var tradePlace = importedTradePlace;
         SetValueIfBlank(values, nameof(FlowRecord.TradePlace), tradePlace);
         SetValueIfBlank(values, nameof(FlowRecord.NetNum), tradePlace);
 
         var importedRemark = FirstNotBlank(
             GetValue(values, nameof(FlowRecord.Remark)),
             GetFlowExtraFieldValue(bank, source, values, "\u9644\u8A00", "\u8F6C\u8D26\u9644\u8A00", "\u5907\u6CE8", "\u7559\u8A00", "\u56DE\u5355\u4E2A\u6027\u4FE1\u606F", "\u7528\u9014", "\u4EA4\u6613\u7528\u9014"));
-        var remark = source.IsDocumentImported
-            ? importedRemark
-            : FirstNotBlank(
-                importedRemark,
-                GetValue(values, nameof(FlowRecord.Usage)),
-                GetValue(values, nameof(FlowRecord.TradeExplain)),
-                GetValue(values, nameof(FlowRecord.ProductBrief)),
-                GetValue(values, nameof(FlowRecord.TradePlace)));
+        var remark = importedRemark;
         SetValueIfBlank(values, nameof(FlowRecord.Remark), remark);
     }
 
@@ -7003,37 +6983,26 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         FlowRecord source,
         IReadOnlyDictionary<string, object?> values)
     {
-        var productName = FirstNotBlank(source.ProductName, GetValue(values, nameof(FlowRecord.ProductName)));
-        var productBrief = FirstNotBlank(source.ProductBrief, GetValue(values, nameof(FlowRecord.ProductBrief)));
-        var productType = FirstNotBlank(source.ProductType, GetValue(values, nameof(FlowRecord.ProductType)));
-        var tradeExplain = FirstNotBlank(source.TradeExplain, GetValue(values, nameof(FlowRecord.TradeExplain)));
-        var tradeChannel = FirstNotBlank(source.TradeChannel, GetValue(values, nameof(FlowRecord.TradeChannel)));
-        var tradeChannelEn = FirstNotBlank(source.TradeChannelEn, GetValue(values, nameof(FlowRecord.TradeChannelEn)));
-        var tradeCode = FirstNotBlank(source.TradeCode, GetValue(values, nameof(FlowRecord.TradeCode)));
-        var cashCheck = FirstNotBlank(source.CashCheck, GetValue(values, nameof(FlowRecord.CashCheck)));
-        var usage = FirstNotBlank(source.Usage, GetValue(values, nameof(FlowRecord.Usage)));
-        var merchantName = FirstNotBlank(source.MerchantName, GetValue(values, nameof(FlowRecord.MerchantName)));
-        var currency = FirstNotBlank(source.Currency, GetValue(values, nameof(FlowRecord.Currency)));
+        var productName = GetValue(values, nameof(FlowRecord.ProductName)) ?? string.Empty;
+        var productBrief = GetValue(values, nameof(FlowRecord.ProductBrief)) ?? string.Empty;
+        var productType = GetValue(values, nameof(FlowRecord.ProductType)) ?? string.Empty;
+        var tradeExplain = GetValue(values, nameof(FlowRecord.TradeExplain)) ?? string.Empty;
+        var tradeChannel = GetValue(values, nameof(FlowRecord.TradeChannel)) ?? string.Empty;
+        var tradeChannelEn = GetValue(values, nameof(FlowRecord.TradeChannelEn)) ?? string.Empty;
+        var tradeCode = GetValue(values, nameof(FlowRecord.TradeCode)) ?? string.Empty;
+        var cashCheck = GetValue(values, nameof(FlowRecord.CashCheck)) ?? string.Empty;
+        var usage = GetValue(values, nameof(FlowRecord.Usage)) ?? string.Empty;
+        var merchantName = GetValue(values, nameof(FlowRecord.MerchantName)) ?? string.Empty;
+        var currency = GetValue(values, nameof(FlowRecord.Currency)) ?? string.Empty;
         var tradeCurrency = FirstNotBlank(
             source.TradeCurrency,
             GetValue(values, nameof(FlowRecord.TradeCurrency)),
             GetFlowExtraFieldValue(bank, source, values, "\u4EA4\u6613\u5E01\u79CD"));
-        var branchNum = FirstNotBlank(source.BranchNum, GetValue(values, nameof(FlowRecord.BranchNum)));
-        var netNum = FirstNotBlank(source.NetNum, GetValue(values, nameof(FlowRecord.NetNum)));
-        var areaNum = FirstNotBlank(source.AreaNum, GetValue(values, nameof(FlowRecord.AreaNum)));
-        var tradePlace = FirstNotBlank(source.TradePlace, GetValue(values, nameof(FlowRecord.TradePlace)));
-        var remark = FirstNotBlank(source.Remark, GetValue(values, nameof(FlowRecord.Remark)));
-        var areaText = FirstNotBlank(
-            areaNum,
-            GetFlowExtraFieldValue(bank, source, values, "\u5730\u533A", "\u5730\u533A\u53F7"),
-            branchNum,
-            netNum);
-        var locationText = FirstNotBlank(
-            tradePlace,
-            netNum,
-            GetFlowExtraFieldValue(bank, source, values, "\u5730\u70B9", "\u4EA4\u6613\u7F51\u70B9", "\u4EA4\u6613\u5730\u70B9", "\u4EA4\u6613\u573A\u6240", "\u7F51\u70B9\u540D\u79F0", "\u4EA4\u6613\u884C\u6240"),
-            areaNum,
-            branchNum);
+        var branchNum = GetValue(values, nameof(FlowRecord.BranchNum)) ?? string.Empty;
+        var netNum = GetValue(values, nameof(FlowRecord.NetNum)) ?? string.Empty;
+        var areaNum = GetValue(values, nameof(FlowRecord.AreaNum)) ?? string.Empty;
+        var tradePlace = GetValue(values, nameof(FlowRecord.TradePlace)) ?? string.Empty;
+        var remark = GetValue(values, nameof(FlowRecord.Remark)) ?? string.Empty;
 
         if ((bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
                 || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
@@ -7052,87 +7021,47 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         else if (bank.Name.Contains("\u5EFA\u884C", StringComparison.Ordinal)
             || bank.Name.Contains("\u5EFA\u8BBE", StringComparison.Ordinal))
         {
-            if (source.IsDocumentImported)
+            netNum = FirstNotBlank(netNum, tradePlace);
+            if (bank.Type == BankTypes.Corporate && context.Template.Name is
+                "建行对公纸质版4" or "建行对公纸质版5" or "建行对公纸质版6" or
+                "建行对公纸质版8" or "建行对公纸质版9" or "建行对公纸质版12" or
+                "建行纸质版红章" or "建行纸质版红章2" or "建行纸质版红章3" or "建行纸质版红章4")
             {
-                // Preserve the source PDF's explicit empty location/remark cell.
-                // These aliases are only needed by generated records whose models may
-                // store the same UI value under different legacy property names.
-                netNum = FirstNotBlank(netNum, tradePlace);
-            }
-            else
-            {
-                tradePlace = FirstNotBlank(tradePlace, netNum, tradeExplain, merchantName, productBrief, source.OppositeBank, GetValue(values, nameof(FlowRecord.OppositeBank)));
-                netNum = FirstNotBlank(netNum, tradePlace);
-                tradeExplain = FirstNotBlank(tradeExplain, tradePlace);
-                usage = FirstNotBlank(usage, tradePlace);
-                merchantName = FirstNotBlank(merchantName, tradePlace);
-                remark = FirstNotBlank(remark, tradePlace, usage, tradeExplain, productBrief);
+                // 这些原生模板的“备注”读取 TradeExplain，只映射明细中独立的备注。
+                tradeExplain = remark;
             }
         }
 
-        if (IsIcbcBank(bank))
+        if (IsIcbcBank(bank) && !IsIcbcPersonalPrintContext(context))
         {
-            var commentText = FirstNotBlank(
-                GetFlowExtraFieldValue(bank, source, values, "\u6CE8\u91CA", "\u4EA4\u6613\u8BF4\u660E", "\u4EA4\u6613\u63CF\u8FF0"),
-                tradeExplain,
-                productBrief,
-                remark,
-                usage);
-            tradeExplain = FirstNotBlank(commentText, tradeExplain);
-            productBrief = FirstNotBlank(commentText, productBrief);
-            productName = FirstNotBlank(productName, commentText);
-            remark = FirstNotBlank(remark, commentText);
-            areaNum = FirstNotBlank(areaNum, areaText);
-            branchNum = FirstNotBlank(branchNum, areaNum);
-            netNum = FirstNotBlank(netNum, areaNum);
+            // 对公摘要已绑定 ProductBrief，不能套用个人模板的“注释”映射。
+            areaNum = FlowPrintFieldValues.IcbcOperationArea(context);
+        }
+
+        if (bank.Type == BankTypes.Personal && bank.Name.Contains("民生", StringComparison.Ordinal))
+        {
+            // 原生“交易机构”读取 BranchNum，明细列表的同名列绑定 NetNum。
+            branchNum = netNum;
         }
 
         if (IsIndustrialBank(bank))
         {
-            var tradeKind = FirstNotBlank(
-                productName,
-                GetFlowExtraFieldValue(bank, source, values, "\u4EA4\u6613\u79CD\u7C7B", "\u4EA4\u6613\u7C7B\u578B", "\u4EA7\u54C1\u540D\u79F0"),
-                productBrief,
-                tradeExplain,
-                remark);
-            productName = FirstNotBlank(productName, tradeKind);
-            productBrief = FirstNotBlank(productBrief, tradeKind);
-            tradeExplain = FirstNotBlank(tradeExplain, tradeKind);
-            if (context.Template.Name is "兴业个人电子版9" or "兴业个人电子版10" or "兴业个人电子版14")
+            if (bank.Type == BankTypes.Personal)
             {
-                // These genuine runtime layouts label the final column as
-                // "交易地点" but read GenerateFlowRecord.TradeChannel.
-                tradeChannel = FirstNotBlank(tradePlace, tradeChannel);
+                // 原生“摘要”读取 ProductType，对应本地“交易种类”ProductName。
+                productBrief = productName;
+                productType = productName;
             }
+            // 电子版 9/10/14 的“交易地点”按旧版规则打印实际交易渠道，
+            // 保留 TradeChannel（包括空值），不能被独立地点字段覆盖。
         }
 
-        if (IsAgriculturalBank(bank))
+        if (IsPingAnBank(bank))
         {
-            netNum = FirstNotBlank(netNum, locationText, tradePlace, areaNum, branchNum);
-            tradePlace = FirstNotBlank(tradePlace, locationText, netNum, areaNum, branchNum);
-            branchNum = FirstNotBlank(branchNum, netNum, tradePlace, areaNum);
-            areaNum = FirstNotBlank(areaNum, netNum, tradePlace, branchNum);
-            tradeChannelEn = FirstNotBlank(tradeChannelEn, tradeChannel);
-        }
-
-        if (IsMinshengBank(bank))
-        {
-            branchNum = FirstNotBlank(branchNum, netNum, tradePlace);
-            netNum = FirstNotBlank(netNum, branchNum, tradePlace);
-            tradePlace = FirstNotBlank(tradePlace, netNum, branchNum);
-        }
-
-        if (IsPingAnBank(bank) || IsPostalBank(bank))
-        {
-            var summary = FirstNotBlank(remark, productBrief, tradeExplain, productName, usage);
-            remark = FirstNotBlank(remark, summary);
-            productBrief = FirstNotBlank(productBrief, summary);
-            tradeExplain = FirstNotBlank(tradeExplain, summary);
-            productName = FirstNotBlank(productName, summary);
-            tradeCode = FirstNotBlank(tradeCode, summary);
-            netNum = FirstNotBlank(netNum, tradePlace, branchNum);
-            branchNum = FirstNotBlank(branchNum, netNum, tradePlace);
-            tradePlace = FirstNotBlank(tradePlace, netNum, branchNum);
+            // 原生“交易地点”读取 NetNum，对应明细“交易网点”TradePlace。
+            netNum = tradePlace;
+            // 原生摘要列读取 ProductName；本地摘要明确绑定 ProductBrief。
+            productName = productBrief;
         }
 
         if (IsPostalBank(bank))
@@ -7151,19 +7080,27 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsChinaMerchantsBank(bank))
         {
-            var summaryCode = FirstNotBlank(productBrief, tradeExplain, productName, remark, usage);
-            productBrief = FirstNotBlank(productBrief, summaryCode);
-            productName = FirstNotBlank(productName, summaryCode);
-            tradeExplain = FirstNotBlank(tradeExplain, summaryCode);
-            tradeCode = FirstNotBlank(tradeCode, summaryCode);
+            tradeCode = productBrief;
+            if (bank.Type == BankTypes.Personal)
+            {
+                // 原生“交易摘要”明确读取 ProductCode，对应本地独立的“银行摘要”。
+                // 只桥接这一字段，不再把摘要批量写入期限、界面等其他属性。
+                Set(target, nameof(FlowRecord.ProductCode), FlowPrintFieldValues.ReadColumn(bank, source, "银行摘要") ?? string.Empty);
+            }
         }
 
-        if (IsBankOfChina(bank))
+        if (IsBankOfChina(bank) && bank.Type == BankTypes.Personal)
         {
-            var tradeName = FirstNotBlank(productName, tradeExplain, productBrief, tradeCode, cashCheck, remark, usage);
-            productName = FirstNotBlank(productName, tradeName);
-            tradeExplain = FirstNotBlank(tradeExplain, tradeName);
-            tradeCode = FirstNotBlank(tradeCode, tradeName);
+            // 原生个人模板的“交易名称”读取 TradeExplain，本地列表绑定 ProductName。
+            // 只映射实际列表值（包括空值），不能用交易说明、摘要或附言兜底。
+            tradeExplain = productName;
+        }
+
+        if (bank.Type == BankTypes.Personal && IsAgriculturalBankPersonalPaperTemplate(context))
+        {
+            // 原生农行纸质模板的“交易网点”读取 AreaNum，本地明细“地点”绑定 TradePlace。
+            // 只传递实际地点（包括空值及前导零），不借用地区号、网点号或机构号。
+            areaNum = tradePlace;
         }
 
         if (IsWechatBank(bank))
@@ -7278,25 +7215,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyAlipayPrintFieldAliases(target, source, values, merchantName);
         }
 
-        if (IsChinaMerchantsBank(bank))
-        {
-            ApplySummaryTextAliases(target, FirstNotBlank(productBrief, tradeCode, tradeExplain, productName, remark, usage));
-        }
-
-        if (IsIcbcBank(bank))
-        {
-            ApplySummaryTextAliases(target, FirstNotBlank(productBrief, tradeExplain, remark, usage));
-        }
-
-        if (IsIndustrialBank(bank))
-        {
-            ApplySummaryTextAliases(target, FirstNotBlank(productBrief, productName, tradeExplain, remark, usage));
-        }
-
-        if (IsPostalBank(bank))
-        {
-            ApplySummaryTextAliases(target, FirstNotBlank(remark, productBrief, productName, tradeExplain, tradeCode, usage));
-        }
     }
 
     private static bool IsAlipayBank(Bank bank)
@@ -7353,6 +7271,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             || context.Template.VendorBankId == 62
             || templateName.Contains("\u5DE5\u884C", StringComparison.Ordinal)
             || templateName.Contains("\u5DE5\u5546", StringComparison.Ordinal);
+    }
+
+    private static bool IsIcbcPersonalPrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Type == BankTypes.Personal && IsIcbcBank(context.Bank);
     }
 
     private static bool IsIcbcPersonalStatementTemplate(PrintRenderContext context)
@@ -7459,26 +7382,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         // reversal rather than a chronological sort, which would invert the
         // prepared order a second time.
         Set(vendorConfig, "Desc", false);
-    }
-
-    private static void ApplySummaryTextAliases(object target, string value)
-    {
-        foreach (var propertyName in new[]
-        {
-            nameof(FlowRecord.ProductCode),
-            nameof(FlowRecord.ProductType),
-            nameof(FlowRecord.VoucherType),
-            nameof(FlowRecord.HandleStatus),
-            nameof(FlowRecord.NoticeType),
-            nameof(FlowRecord.InterfacePage),
-            nameof(FlowRecord.AppNum),
-            nameof(FlowRecord.DepositTerm),
-            nameof(FlowRecord.AgreedTerm),
-            nameof(FlowRecord.CreditType)
-        })
-        {
-            SetTargetValueIfBlank(target, propertyName, value);
-        }
     }
 
     private static void ApplyAlipayPrintFieldAliases(
@@ -7724,6 +7627,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         if (IsIcbcPrintContext(context))
         {
             ApplyIcbcFlowRecordAccountFields(context, target);
+            if (IsIcbcPersonalPrintContext(context))
+            {
+                ApplyIcbcPersonalFlowFields(context, source, target);
+            }
         }
 
         if (IsCcbCorporatePaperDirectionTemplate(context))
@@ -7897,11 +7804,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static bool IsSpdbPersonalElectronicPrintContext(PrintRenderContext context)
     {
         var templateName = context.Template.Name ?? string.Empty;
-        return (IsSpdbBank(context.Bank)
-                || context.Bank.Id == 12
-                || context.Template.BankId == 12
-                || templateName.Contains("\u6D66\u53D1", StringComparison.Ordinal)
-                || templateName.Contains("\u6D66\u4E1C\u53D1\u5C55", StringComparison.Ordinal))
+        return context.Bank.Type == BankTypes.Personal
+            && IsSpdbBank(context.Bank)
             && templateName.Contains("\u4E2A\u4EBA\u7535\u5B50\u7248", StringComparison.Ordinal);
     }
 
@@ -8069,12 +7973,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "\u4EA4\u6613\u540D\u79F0", transactionName);
         }
 
-        var exactSummary = NormalizeSingleLinePrintText(FirstNotBlank(
-            source.Remark,
-            GetValue(values, nameof(FlowRecord.Remark)),
-            source.TradeExplain,
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
-            GetFlowExtraFieldValue(context.Bank, source, values, "\u5907\u6CE8", "\u4EA4\u6613\u8BF4\u660E")));
+        // 原生“交易摘要”读取 Remark；本地明细绑定 ProductBrief，不能借用附言，
+        // 更不能把摘要写进流水号、凭证号、期限等独立字段。
+        var exactSummary = NormalizeSingleLinePrintText(GetValue(values, nameof(FlowRecord.ProductBrief)) ?? string.Empty);
 
         foreach (var propertyName in SpdbPersonalElectronicSummaryPropertyNames)
         {
@@ -8209,30 +8110,25 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         object target)
     {
+        if (context.Bank.Type == BankTypes.Corporate)
+        {
+            // 对公“摘要”和“附言”是两列：列表摘要绑定 Remark，附言独立存储。
+            // 原生模板分别读取 ProductBrief / Remark，空值也必须原样保留。
+            Set(target, nameof(FlowRecord.ProductBrief), FlowPrintFieldValues.ReadColumn(context.Bank, source, "摘要") ?? string.Empty);
+            Set(target, nameof(FlowRecord.Remark), FlowPrintFieldValues.ReadColumn(context.Bank, source, "附言") ?? string.Empty);
+            return;
+        }
+
         // Postal templates label this column as “摘要”, but its source value is
         // the flow detail's transaction type (for example “快捷支付”), not the
         // remittance remark or merchant description.
-        var summary = NormalizeSingleLinePrintText(FirstNotBlank(
-            GetFlowExtraFieldValue(context.Bank, source, values,
-                "\u4EA4\u6613\u7C7B\u578B",
-                "\u4EA4\u6613\u79CD\u7C7B",
-                "\u4E1A\u52A1\u7C7B\u578B"),
-            source.ProductBrief,
-            source.ProductName,
-            GetValue(values, nameof(FlowRecord.ProductBrief)),
-            GetValue(values, nameof(FlowRecord.ProductName)),
-            source.Remark,
-            source.TradeExplain,
-            GetValue(values, nameof(FlowRecord.Remark)),
-            GetValue(values, nameof(FlowRecord.TradeExplain)),
-            GetFlowExtraFieldValue(context.Bank, source, values, "\u9644\u8A00")));
+        var summary = NormalizeSingleLinePrintText(GetValue(values, nameof(FlowRecord.ProductName)) ?? string.Empty);
         var rawCashCheck = FirstNotBlank(source.CashCheck, GetValue(values, nameof(FlowRecord.CashCheck)));
         var channel = NormalizeSingleLinePrintText(FirstNotBlank(
             source.TradeChannel,
             GetValue(values, nameof(FlowRecord.TradeChannel)),
             GetFlowExtraFieldValue(context.Bank, source, values, "\u4EA4\u6613\u65B9\u5F0F", "\u4EA4\u6613\u6E20\u9053"),
-            IsPostalCashFlag(rawCashCheck) ? string.Empty : rawCashCheck,
-            ReadStringProperty(target, nameof(FlowRecord.TradeChannel), string.Empty)));
+            GetFlowExtraFieldValue(context.Bank, source, values, "交易方式")));
         var cashCheck = NormalizeSingleLinePrintText(FirstNotBlank(
             GetFlowExtraFieldValue(context.Bank, source, values, "\u949E\u6C47"),
             IsPostalCashFlag(rawCashCheck) ? rawCashCheck : string.Empty));
@@ -8240,6 +8136,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         Set(target, nameof(FlowRecord.Remark), summary);
         Set(target, nameof(FlowRecord.TradeExplain), summary);
         Set(target, nameof(FlowRecord.ProductBrief), summary);
+        Set(target, nameof(FlowRecord.ProductType), summary);
         Set(target, "\u9644\u8A00", summary);
         Set(target, "\u6458\u8981", summary);
         Set(target, "\u4EA4\u6613\u6458\u8981", summary);
@@ -8265,7 +8162,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             SetVendorStringNotNull(target, nameof(FlowRecord.VoucherNum), externalSystemFlow);
             SetVendorStringNotNull(target, nameof(FlowRecord.SerialNum), externalSystemFlow);
 
-            Set(target, nameof(FlowRecord.ProductType), summary);
             Set(target, nameof(FlowRecord.ProductName), channel);
         }
         else
@@ -9311,7 +9207,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         FlowRecord source,
         IReadOnlyDictionary<string, object?> values)
     {
-        var value = FirstNotBlank(source.OppositeAccount, GetValue(values, nameof(FlowRecord.OppositeAccount)));
+        var value = GetValue(values, nameof(FlowRecord.OppositeAccount)) ?? string.Empty;
+        if (IsIcbcPersonalPrintContext(context))
+        {
+            return GetValue(CreateIcbcPersonalPrintValues(context.Bank, source), nameof(FlowRecord.OppositeAccount)) ?? string.Empty;
+        }
+
         if (source.IsDocumentImported && IsBankOfChina(context.Bank))
         {
             return PreserveHorizontalPrintSpacing(value);
@@ -11602,20 +11503,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static string NormalizePrintNumber(string value)
     {
-        var text = string.IsNullOrWhiteSpace(value) ? "6228480398401725673" : value.Trim();
-        if (text.Length >= 18)
-        {
-            return text;
-        }
-
-        var digits = new string(text.Where(char.IsDigit).ToArray());
-        if (digits.Length >= 18)
-        {
-            return digits;
-        }
-
-        var seed = string.IsNullOrWhiteSpace(digits) ? "6228480398401725673" : digits;
-        return (seed + "6228480398401725673")[..18];
+        // 打印不是编号生成阶段。空值、短账号、字母及脱敏字符均保留，不补造数字。
+        return NormalizeSingleLinePrintText(value);
     }
 
     private static string NormalizePrintNumber(PrintRenderContext context, string value)
@@ -11636,16 +11525,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             : NormalizePrintNumber(value);
     }
 
-    private static string CreateSystemGeneratedPrintSerialNumber(PrintRenderContext context, int index)
-    {
-        if (IsEverbrightCorporatePrintContext(context))
-        {
-            return SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(context.BankUser.AccountNo);
-        }
-
-        return $"P{index + 1:000000000}";
-    }
-
     private static bool IsEverbrightCorporatePrintContext(PrintRenderContext context)
     {
         return context.Bank.Name.Contains("光大", StringComparison.Ordinal)
@@ -11655,9 +11534,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     private static string ResolveVendorPrintSerialNumber(
         PrintRenderContext context,
         FlowRecord source,
-        IReadOnlyDictionary<string, object?> values,
-        string generatedFallback)
+        IReadOnlyDictionary<string, object?> values)
     {
+        if (IsIcbcPersonalPrintContext(context))
+        {
+            return GetValue(CreateIcbcPersonalPrintValues(context.Bank, source), nameof(FlowRecord.SequenceNum)) ?? string.Empty;
+        }
+
         if (source.IsDocumentImported && IsCcbCorporatePaperSerialNumberTemplate(context))
         {
             var importedSerialNumber = NormalizeDocumentImportSerialNumber(FirstNotBlank(
@@ -11680,16 +11563,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         {
             // Passing the PDF row number (1, 2, 3...) to the vendor CCB renderer
             // makes its paged layout reduce AccountTime to a day-only token.
-            return CreateSystemGeneratedPrintSerialNumber(context, Math.Max(0, source.Index - 1));
+            return $"P{Math.Max(1, source.Index):000000000}";
         }
 
-        if (!source.IsDocumentImported && IsEverbrightCorporatePrintContext(context))
-        {
-            return SystemFlowNumberGenerator.CreateEverbrightCorporateSerialNumber(context.BankUser.AccountNo);
-        }
-
-        var serialNumber = FirstNotBlank(
-            source.SerialNum,
+        var serialNumber = context.Bank.FlowColumns.Any(column => column.Field == nameof(FlowRecord.SerialNum))
+            ? GetValue(values, nameof(FlowRecord.SerialNum)) ?? string.Empty
+            : FirstNotBlank(
             GetValue(values, "SerialNum"),
             source.SequenceNum,
             GetValue(values, "SequenceNum"),
@@ -11708,7 +11587,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 : NormalizeDocumentImportSerialNumber(serialNumber);
         }
 
-        return NormalizePrintNumber(context, FirstNotBlank(serialNumber, generatedFallback));
+        return NormalizePrintNumber(context, serialNumber);
     }
 
     private static bool IsCcbCorporatePaperSerialNumberTemplate(PrintRenderContext context)
