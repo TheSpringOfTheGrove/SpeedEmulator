@@ -5510,6 +5510,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             ApplyBocomCorporateBankUserFields(context, target, values);
         }
 
+        if (IsBocomPersonalElectronicPrintContext(context))
+        {
+            ApplyBocomPersonalElectronicBankUserFields(context, target, values);
+        }
+
         if (IsWechatPersonalStatementPrintContext(context))
         {
             ApplyWechatPersonalStatementBankUserFields(context, target, values);
@@ -6093,6 +6098,34 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return (context.Bank.Name.Contains("交行对公", StringComparison.Ordinal)
                 || context.BankUser.BankName.Contains("交行对公", StringComparison.Ordinal))
             && context.Template.Name.Contains("交行对公电子版", StringComparison.Ordinal);
+    }
+
+    private static bool IsBocomPersonalElectronicPrintContext(PrintRenderContext context)
+    {
+        return context.Bank.Type == BankTypes.Personal
+            && string.Equals(context.Bank.Name, "交行", StringComparison.Ordinal)
+            && (context.Template.Name.Contains("交行个人电子版", StringComparison.Ordinal)
+                || context.Template.Name.Contains("交通个人电子版", StringComparison.Ordinal));
+    }
+
+    private static void ApplyBocomPersonalElectronicBankUserFields(
+        PrintRenderContext context,
+        object target,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        var idNumber = NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "证件号码", "证件号", "身份证号", "身份证"),
+            context.BankUser.IdNumber,
+            GetValue(values, "IdNum")));
+
+        // The vendor BOCOM personal electronic template labels CardNum as
+        // "ID Number", while its account/card header reads AccountNum.
+        // Keep the account aliases untouched and override only the field used
+        // by this one template's certificate-number label.
+        Set(target, "IdNum", idNumber);
+        Set(target, "IdNumber", idNumber);
+        Set(target, "CardNum", idNumber);
+        Set(target, "CardNo", idNumber);
     }
 
     private static void ApplyPingAnBankUserFields(
@@ -7056,6 +7089,15 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             // 保留 TradeChannel（包括空值），不能被独立地点字段覆盖。
         }
 
+        if (IsBocomPersonalElectronicPrintContext(context))
+        {
+            // The BOCOM personal electronic template's "Trading Type" column
+            // reads ProductType, whereas the local detail grid stores the value
+            // in ProductName. Do not substitute a fallback field: an empty local
+            // transaction type must remain empty in the printed statement.
+            productType = productName;
+        }
+
         if (IsPingAnBank(bank))
         {
             // 原生“交易地点”读取 NetNum，对应明细“交易网点”TradePlace。
@@ -7446,13 +7488,25 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     {
         // The WeChat statement has dedicated columns for these two values. Keep
         // them separate from the generic product fields used by other banks.
-        var transactionType = FirstNotBlank(
-            source.ProductBrief,
-            source.ProductName,
-            GetValue(values, "交易类型"),
-            GetValue(values, nameof(FlowRecord.ProductBrief)),
-            GetValue(values, nameof(FlowRecord.ProductName)),
-            productName);
+        var transactionType = usePersonalStatementAliases
+            ? FirstNotBlank(
+                // 微信个人版的明细“交易类型”存储在 ProductName；ProductBrief
+                // 在导入数据中常是“支出/收入/其他”，不能抢占交易类型列。
+                source.ProductName,
+                GetValue(values, "交易类型"),
+                GetValue(values, nameof(FlowRecord.ProductName)),
+                productName,
+                // Keep legacy statement records printable when their explicit
+                // transaction-type field is genuinely empty.
+                source.ProductBrief,
+                GetValue(values, nameof(FlowRecord.ProductBrief)))
+            : FirstNotBlank(
+                source.ProductBrief,
+                source.ProductName,
+                GetValue(values, "交易类型"),
+                GetValue(values, nameof(FlowRecord.ProductBrief)),
+                GetValue(values, nameof(FlowRecord.ProductName)),
+                productName);
         var paymentMethod = FirstNotBlank(
             source.CashCheck,
             source.TradeChannel,
@@ -7910,10 +7964,8 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             Set(target, "\u5BF9\u65B9\u8D26\u53F7", normalizedOppositeAccount);
         }
 
-        var merchantName = NormalizeSingleLinePrintText(FirstNotBlank(
-            GetFlowExtraFieldValue(context.Bank, source, values, "\u5546\u6237\u540D\u79F0", "\u5546\u6237\u540D", "\u5546\u5BB6\u540D\u79F0"),
-            source.MerchantName,
-            GetValue(values, nameof(FlowRecord.MerchantName))));
+        // 商户名称在广发明细中显示为分户序号；明确的空值不能借用旧商户/摘要数据。
+        var merchantName = NormalizeSingleLinePrintText(GetValue(values, nameof(FlowRecord.SubAccountNum)) ?? string.Empty);
         Set(target, nameof(FlowRecord.MerchantName), merchantName);
         Set(target, nameof(FlowRecord.AccountNum), merchantName);
         Set(target, "Merchant", merchantName);

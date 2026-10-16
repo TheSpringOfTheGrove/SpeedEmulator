@@ -1140,6 +1140,13 @@ public sealed class QuestPdfPrintService : IPrintPdfService
                 return rowIndex.ToString(CultureInfo.InvariantCulture);
             }
 
+            if (context.Bank.Name == "广发" && context.Bank.Type == BankTypes.Personal
+                && column.Name is "商户名称" or "商户名" or "商家名称")
+            {
+                return ApplyTabSize(FormatValue(FlowPrintFieldValues.Create(context.Bank, record)
+                    .GetValueOrDefault(nameof(FlowRecord.SubAccountNum)), column.Type));
+            }
+
             if ((context.Bank.Name.Contains("工行", StringComparison.Ordinal) || context.Bank.Name.Contains("工商", StringComparison.Ordinal))
                 && column.Field == nameof(FlowRecord.AreaNum))
             {

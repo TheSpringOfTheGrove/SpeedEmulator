@@ -140,7 +140,7 @@ public sealed class TableExcelService : ITableExcelService
         }
 
         var columns = GetFlowExportColumns(bank).ToList();
-        var flowHeaderRowIndex = FindExactHeaderRow(sheet, columns);
+        var flowHeaderRowIndex = FindExactHeaderRow(sheet, columns, bank);
         if (flowHeaderRowIndex < 0)
         {
             throw new InvalidDataException(InvalidExcelFormatMessage);
@@ -153,7 +153,7 @@ public sealed class TableExcelService : ITableExcelService
             ApplyBankUserInfo(sheet[0], sheet[1], bank, bankUser);
         }
 
-        var headerMap = CreateHeaderMap(sheet[flowHeaderRowIndex], columns, ignoreIdColumn: true);
+        var headerMap = CreateHeaderMap(NormalizeFlowImportHeaders(sheet[flowHeaderRowIndex], bank), columns, ignoreIdColumn: true);
         var result = new List<FlowRecord>();
 
         foreach (var row in sheet.Skip(flowHeaderRowIndex + 1))
@@ -369,14 +369,22 @@ public sealed class TableExcelService : ITableExcelService
 
     private static int FindExactHeaderRow(
         IReadOnlyList<Dictionary<int, string>> sheet,
-        IReadOnlyList<ColumnDefinition> columns)
+        IReadOnlyList<ColumnDefinition> columns,
+        Bank bank)
     {
-        if (sheet.Count >= 3 && HasExactHeaderLayout(sheet[2], columns))
+        if (sheet.Count >= 3 && HasExactHeaderLayout(NormalizeFlowImportHeaders(sheet[2], bank), columns))
         {
             return 2;
         }
 
-        return HasExactHeaderLayout(sheet[0], columns) ? 0 : -1;
+        return HasExactHeaderLayout(NormalizeFlowImportHeaders(sheet[0], bank), columns) ? 0 : -1;
+    }
+
+    private static IReadOnlyDictionary<int, string> NormalizeFlowImportHeaders(IReadOnlyDictionary<int, string> headers, Bank bank)
+    {
+        if (bank.Name != "广发" || bank.Type != BankTypes.Personal) return headers;
+        return headers.ToDictionary(pair => pair.Key, pair => NormalizeHeader(pair.Value) is "商户名称" or "商户名" or "商家名称"
+            ? "分户序号" : pair.Value);
     }
 
     private static void ValidateExactHeaderLayout(

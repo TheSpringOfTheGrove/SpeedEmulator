@@ -92,7 +92,14 @@ public sealed class FlowRuleExcelService : IFlowRuleExcelService
         }
 
         var excelColumns = GetExcelColumns(columns).ToList();
-        var headerMap = CreateHeaderMap(sheet[0], excelColumns);
+        // 本地广发个人银行 ID 为 6，其商户名称与参照表的分户序号是同一字段。
+        IReadOnlyDictionary<int, string> headers = sheet[0];
+        if (bankId == 6 && excelColumns.Any(column => column.Name == "分户序号" && column.Field == nameof(FlowRuleBase.SubAccountNum)))
+        {
+            headers = headers.ToDictionary(pair => pair.Key, pair => NormalizeHeader(pair.Value) is "商户名称" or "商户名" or "商家名称"
+                ? "分户序号" : pair.Value);
+        }
+        var headerMap = CreateHeaderMap(headers, excelColumns);
         var result = new List<T>();
 
         foreach (var row in sheet.Skip(1))

@@ -466,6 +466,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "浦发" => true,
             "中信" => true,
             "华夏" => true,
+            "广发" => true,
             "支付宝" => true,
             "邮政" => true,
             "浦发对公" => true,
@@ -1693,6 +1694,12 @@ public sealed partial class PdfImportService : IPdfImportService
             SetUserNamed(user, bank, "结束日期", accountMatch.Groups["end"].Value);
             parsedUser = true;
             break;
+        }
+
+        if (TryParseCgbPositionedRecords(bank, user, document, out var positionedRecords))
+        {
+            result.FlowRecords.AddRange(positionedRecords);
+            return parsedUser;
         }
 
         foreach (var group in GroupLinesByStart(lines, IsCgbRecordStart, IsCgbIgnoredLine))
@@ -6749,7 +6756,7 @@ public sealed partial class PdfImportService : IPdfImportService
         record.Balance = ParseDoubleOrNull(balanceText);
         record.OppositeUsername = oppositeName;
         record.OppositeAccount = oppositeAccount;
-        record.MerchantName = merchantName;
+        record.SubAccountNum = merchantName;
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.TradeChannel = summary;
@@ -6766,7 +6773,8 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "对方姓名", record.OppositeUsername);
         SetFlowRaw(record, "对手账号", record.OppositeAccount);
         SetFlowRaw(record, "对方账号", record.OppositeAccount);
-        SetFlowRaw(record, "商户名称", record.MerchantName);
+        SetFlowRaw(record, "商户名称", record.SubAccountNum);
+        SetFlowRaw(record, "分户序号", record.SubAccountNum);
         SetFlowRaw(record, "摘要", record.ProductBrief);
         SetFlowRaw(record, "交易渠道", record.TradeChannel);
         SetFlowRaw(record, "附言", record.Remark);
@@ -10019,7 +10027,8 @@ public sealed partial class PdfImportService : IPdfImportService
     private static bool IsCgbSummaryToken(string value)
     {
         return value is "银联入账" or "入金" or "网银入账" or "快捷支付" or "结息转入"
-            or "行内转入" or "行内转出" or "转账" or "消费" or "退货";
+            or "行内转入" or "行内转出" or "转账" or "消费" or "退货"
+            or "转账存入" or "转账支出" or "存款结息";
     }
 
     private static (string TradeUnit, string OppositeName, string OppositeAccount, string OppositeBank, string Remark) SplitHuaxiaTail(string tail)

@@ -5,7 +5,7 @@ using SpeedEmulator.Services;
 
 internal static partial class Program
 {
-    private static void Equal(string expected, string actual, string label)
+    private static void Equal(string? expected, string? actual, string label)
     {
         if (expected != actual) throw new InvalidOperationException($"{label}: expected '{expected}', got '{actual}'");
     }
@@ -31,7 +31,8 @@ internal static partial class Program
         TestBankOfChinaTradeNames(catalog);
         TestAgriculturalOutlets(catalog);
         TestRestoredBankBindings(catalog);
-        Console.WriteLine("PASS 7 regression groups: 工行参照地区号、实际字段绑定、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射");
+        TestGuangfaMerchantMapping(catalog, []);
+        Console.WriteLine("PASS 8 regression groups: 工行参照地区号、实际字段绑定、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射、广发商户分户序号");
     }
 
     private static void TestDateGeneration(List<Entry> catalog)

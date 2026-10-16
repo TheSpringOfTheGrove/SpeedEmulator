@@ -7,6 +7,21 @@ public static class ExcelColumnFieldResolver
     public static (string? Field, string Type) ResolveFlowRecordField(string bankName, string columnName)
     {
         var normalizedName = NormalizeColumnName(columnName);
+        if (string.Equals(bankName, "广发", StringComparison.Ordinal)
+            && normalizedName is "商户名称" or "商户名" or "商家名称")
+        {
+            // 广发模板的商户名称对应明细/参照中的分户序号，不读取通用商户字段。
+            return (nameof(FlowRecord.SubAccountNum), "Text");
+        }
+
+        if (string.Equals(bankName, "广发", StringComparison.Ordinal)
+            && normalizedName == "活期余额")
+        {
+            // 广发标准导出使用“活期余额”作为余额列表头，
+            // 必须直接读取流水余额，而不是当作未知扩展字段。
+            return (nameof(FlowRecord.Balance), "Money");
+        }
+
         if (string.Equals(bankName, "\u5de5\u884c", StringComparison.Ordinal)
             && normalizedName is "\u501f\u8d37" or "\u501f/\u8d37" or "\u501f\u8d37\u6807\u5fd7")
         {

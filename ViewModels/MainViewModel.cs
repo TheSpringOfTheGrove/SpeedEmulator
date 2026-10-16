@@ -559,6 +559,11 @@ public sealed class MainViewModel : ObservableObject
             }
         }
 
+        if (bankName == "广发" && columnName is "商户名称" or "商户名" or "商家名称")
+        {
+            return (nameof(FlowRuleBase.SubAccountNum), "Text");
+        }
+
         if (bankName == "中行对公")
         {
             return columnName switch

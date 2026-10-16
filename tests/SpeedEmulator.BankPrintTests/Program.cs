@@ -12,8 +12,10 @@ internal static partial class Program
 {
     private const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
     private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-    private static readonly string Root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-    private static readonly string Output = Path.Combine(Root, "tmp", "bank-print-regressions");
+    private static readonly string Root = Environment.GetEnvironmentVariable("SPEEDEMULATOR_TEST_ROOT")
+        ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    private static readonly string Output = Environment.GetEnvironmentVariable("SPEEDEMULATOR_TEST_OUTPUT")
+        ?? Path.Combine(Root, "tmp", "bank-print-regressions");
     private static readonly Type Bridge = typeof(ZhenchengPrintBridgeService);
     private static readonly string[] Fields = ["OppositeAccount", "SequenceNum", "SerialNum", "Account", "ProductBrief", "Remark", "TradeExplain", "DepositTerm", "AgreedTerm", "NoticeType", "AppNum", "InterfacePage", "TradePlace", "NetNum", "BranchNum", "AreaNum", "TradeChannel", "Currency", "OppositeUsername"];
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
@@ -45,6 +47,8 @@ internal static partial class Program
         if (args.Contains("--boc-fields")) { TestBankOfChinaTradeNames(catalog); return; }
         if (args.Contains("--abc-fields")) { TestAgriculturalOutlets(catalog); return; }
         if (args.Contains("--restored-fields")) { TestRestoredBankBindings(catalog); return; }
+        if (args.Contains("--cgb-fields")) { TestGuangfaMerchantMapping(catalog, args); return; }
+        if (args.Contains("--wechat-fields")) { TestWechatPersonalStatementFields(catalog); return; }
         RunRegressions(catalog);
         if (args.Contains("--boc-render")) { RenderBankOfChinaTradeNames(catalog); return; }
         if (args.Contains("--abc-render")) { RenderAgriculturalOutlets(catalog); return; }
