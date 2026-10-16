@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <StartupObject>Program</StartupObject>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\..\SpeedEmulator.csproj" /></ItemGroup>
+  <!-- 只调整测试进程输出：旧式 MRT 的 MainEntry 引用配套的 QuestPDF 2026.7.3。
+       不替换应用项目的依赖，不影响正在运行的程序。 -->
+  <Target Name="UseMatchingVendorQuestForTests" AfterTargets="Build" Condition="'$(UseVendorQuestRuntime)' == 'true'">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\..\VendorRuntime\Zhencheng\QuestPDF.dll" DestinationFolder="$(TargetDir)" />
+  </Target>
+</Project>

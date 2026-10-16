@@ -44,7 +44,7 @@ public sealed class FlowAutoGenerationResult
     public required double RequiredOpeningBalance { get; init; }
 }
 
-public sealed class FlowAutoGenerator
+public sealed partial class FlowAutoGenerator
 {
     public const double AcceptedFinalBalanceTolerance = 1000d;
 
@@ -243,6 +243,15 @@ public sealed class FlowAutoGenerator
 
         var openingBalance = RoundMoney(request.OpeningBalanceOverride ?? request.Config.OpeningBalance);
         var random = new Random(CreateRunSeed(request, start, end));
+        if (IsWechatBank(request.Bank))
+        {
+            return GenerateWechatNaturalResult(request, start, end, openingBalance, random);
+        }
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+        {
+            return GenerateBankOfChinaResult(request, start, end, openingBalance, random);
+        }
+
         var estimatedRecordCapacity = IsWechatBank(request.Bank)
             ? Math.Max(512, ((end.Date - start.Date).Days + 1) * 24)
             : 512;
@@ -789,6 +798,8 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+            return CorrectBankOfChinaResult(request, source, repairNegative: true);
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
@@ -807,6 +818,15 @@ public sealed class FlowAutoGenerator
                 return copy;
             })
             .ToList();
+
+        // The dense WeChat path can usually be repaired by changing times only.
+        // Keep the existing confirmation and use the legacy amount repair as fallback.
+        if (IsWechatBank(request.Bank)
+            && TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random)
+            && !IsFinalBalanceOutsideTolerance(records.LastOrDefault()?.Balance ?? openingBalance, openingBalance, request.Config.LastMoney))
+        {
+            return CreateWechatNaturalBalanceResult(records, openingBalance, request.Config.LastMoney);
+        }
 
         for (var attempt = 0; attempt < 6; attempt++)
         {
@@ -847,6 +867,11 @@ public sealed class FlowAutoGenerator
         FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
         ApplyBalances(records, openingBalance);
 
+        if (IsWechatBank(request.Bank) && GetMinimumBalance(records, openingBalance) < -0.009d)
+        {
+            TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random);
+        }
+
         var incomeTotal = SumIncome(records);
         var expenseTotal = SumExpense(records);
         var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
@@ -870,6 +895,8 @@ public sealed class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
+            return CorrectBankOfChinaResult(request, source, repairNegative: false);
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
@@ -20894,6 +20921,13 @@ public sealed class FlowAutoGenerator
     private static string? CreateGeneratedAreaNumber(FlowAutoGenerationRequest request, FlowRecord record)
     {
         var bank = request.Bank;
+        if (bank.Type == BankTypes.Personal
+            && (bank.Name.Contains("工行", StringComparison.Ordinal)
+                || bank.Name.Contains("工商", StringComparison.Ordinal)))
+        {
+            // 地区号来自当前参照/固定项目。空白表示不填写，不能生成随机地区号。
+            return null;
+        }
         var seed = CreateRecordSeed(bank, record, 89);
 
         if (HasFlowColumnName(bank, nameof(FlowRecord.AreaNum), "地区号"))

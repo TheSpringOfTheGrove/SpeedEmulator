@@ -12,17 +12,17 @@
           "Extended.Wpf.Toolkit": "5.1.2",
           "LiveChartsCore.SkiaSharpView.WPF": "2.0.5",
           "Microsoft.Toolkit.Uwp.Notifications": "7.1.3",
-          "Microsoft.Web.WebView2": "1.0.4078.44",
-          "MiniExcel": "1.45.0",
+          "Microsoft.Web.WebView2": "1.0.4129.50",
+          "MiniExcel": "1.46.0",
           "SingleInstanceCore": "2.2.2",
-          "System.Data.SQLite": "2.0.3",
+          "System.Data.SQLite": "2.0.4",
           "System.Linq.Dynamic.Core": "1.7.3",
-          "System.Management": "10.0.10",
+          "System.Management": "10.0.11",
           "WPF-UI": "4.3.0",
           "caiwu-core": "1.0.0",
-          "Microsoft.Web.WebView2.Core": "1.0.4078.44",
-          "Microsoft.Web.WebView2.WinForms": "1.0.4078.44",
-          "Microsoft.Web.WebView2.Wpf": "1.0.4078.44",
+          "Microsoft.Web.WebView2.Core": "1.0.4129.50",
+          "Microsoft.Web.WebView2.WinForms": "1.0.4129.50",
+          "Microsoft.Web.WebView2.Wpf": "1.0.4129.50",
           "runtimepack.Microsoft.Windows.SDK.NET.Ref": "10.0.17763.57"
         },
         "runtime": {
@@ -94,26 +94,26 @@
           }
         }
       },
-      "EPPlus/8.6.1": {
+      "EPPlus/8.7.0": {
         "dependencies": {
-          "EPPlus.Interfaces": "8.4.0",
+          "EPPlus.Interfaces": "8.6.2",
           "Microsoft.Extensions.Configuration.Json": "8.0.1",
           "Microsoft.IO.RecyclableMemoryStream": "3.0.1",
           "System.Security.Cryptography.Pkcs": "8.0.1",
-          "System.Security.Cryptography.Xml": "8.0.3"
+          "System.Security.Cryptography.Xml": "8.0.4"
         },
         "runtime": {
           "lib/net8.0/EPPlus.dll": {
-            "assemblyVersion": "8.6.1.0",
-            "fileVersion": "8.6.1.0"
+            "assemblyVersion": "8.7.0.0",
+            "fileVersion": "8.7.0.0"
           }
         }
       },
-      "EPPlus.Interfaces/8.4.0": {
+      "EPPlus.Interfaces/8.6.2": {
         "runtime": {
           "lib/net8.0/EPPlus.Interfaces.dll": {
-            "assemblyVersion": "8.4.0.0",
-            "fileVersion": "8.4.0.0"
+            "assemblyVersion": "8.6.2.0",
+            "fileVersion": "8.6.2.0"
           }
         }
       },
@@ -202,7 +202,7 @@
           "Microsoft.DotNet.PlatformAbstractions": "1.1.0",
           "Microsoft.Extensions.DependencyModel": "10.0.2",
           "Microsoft.Extensions.Logging": "5.0.0",
-          "System.Security.Cryptography.Xml": "8.0.3",
+          "System.Security.Cryptography.Xml": "8.0.4",
           "itext.commons": "9.7.0"
         },
         "runtime": {
@@ -832,18 +832,18 @@
           }
         }
       },
-      "Microsoft.Web.WebView2/1.0.4078.44": {
+      "Microsoft.Web.WebView2/1.0.4129.50": {
         "native": {
           "runtimes/win-x64/native/WebView2Loader.dll": {
-            "fileVersion": "1.0.4078.44"
+            "fileVersion": "1.0.4129.50"
           }
         }
       },
-      "MiniExcel/1.45.0": {
+      "MiniExcel/1.46.0": {
         "runtime": {
           "lib/net8.0/MiniExcel.dll": {
-            "assemblyVersion": "1.45.0.0",
-            "fileVersion": "1.45.0.0"
+            "assemblyVersion": "1.46.0.0",
+            "fileVersion": "1.46.0.0"
           }
         }
       },
@@ -959,22 +959,22 @@
           }
         }
       },
-      "Quartz/3.18.2": {
+      "Quartz/3.19.1": {
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "5.0.0"
         },
         "runtime": {
           "lib/net8.0/Quartz.dll": {
-            "assemblyVersion": "3.18.2.0",
-            "fileVersion": "3.18.2.0"
+            "assemblyVersion": "3.19.1.0",
+            "fileVersion": "3.19.1.0"
           }
         }
       },
-      "QuestPDF/2026.7.1": {
+      "QuestPDF/2026.7.3": {
         "runtime": {
           "lib/net8.0/QuestPDF.dll": {
-            "assemblyVersion": "2026.7.1.0",
-            "fileVersion": "2026.7.1.0"
+            "assemblyVersion": "2026.7.3.0",
+            "fileVersion": "2026.7.3.0"
           }
         },
         "native": {
@@ -1138,7 +1138,7 @@
           }
         }
       },
-      "SqlSugarCore/5.1.4.216": {
+      "SqlSugarCore/5.1.4.217": {
         "dependencies": {
           "Microsoft.Data.SqlClient": "5.2.3",
           "Microsoft.Data.Sqlite": "10.0.9",
@@ -1152,8 +1152,8 @@
         },
         "runtime": {
           "lib/netstandard2.1/SqlSugar.dll": {
-            "assemblyVersion": "5.1.4.216",
-            "fileVersion": "5.1.4.216"
+            "assemblyVersion": "5.1.4.217",
+            "fileVersion": "5.1.4.217"
           }
         }
       },
@@ -1173,129 +1173,133 @@
           }
         }
       },
-      "Stimulsoft.Reports.Engine/2026.2.4": {
+      "Stimulsoft.Reports.Engine/2026.3.2": {
         "dependencies": {
           "Microsoft.CodeAnalysis.CSharp": "4.8.0",
           "Microsoft.CodeAnalysis.Common": "4.8.0",
           "Microsoft.CodeAnalysis.VisualBasic": "4.8.0",
           "Microsoft.Data.SqlClient": "5.2.3",
-          "Stimulsoft.Svg": "2026.2.4",
-          "System.CodeDom": "10.0.10",
+          "Stimulsoft.Svg": "2026.3.2",
+          "System.CodeDom": "10.0.11",
           "System.Data.Odbc": "8.0.1",
           "System.Data.OleDb": "8.0.1"
         },
         "runtime": {
           "lib/net8.0-windows7.0/Stimulsoft.Base.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Blockly.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Data.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Map.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Report.Check.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Report.Helper.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Report.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
+          },
+          "lib/net8.0-windows7.0/Stimulsoft.System.dll": {
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           }
         }
       },
-      "Stimulsoft.Reports.Wpf/2026.2.4": {
+      "Stimulsoft.Reports.Wpf/2026.3.2": {
         "dependencies": {
-          "Microsoft.Web.WebView2": "1.0.4078.44",
-          "Stimulsoft.Reports.Engine": "2026.2.4"
+          "Microsoft.Web.WebView2": "1.0.4129.50",
+          "Stimulsoft.Reports.Engine": "2026.3.2"
         },
         "runtime": {
           "lib/net8.0-windows7.0/Stimulsoft.BlocklyEditor.Wpf.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Client.Designer.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Controls.Wpf.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Database.Wpf.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Editor.Wpf.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Report.Wpf.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           },
           "lib/net8.0-windows7.0/Stimulsoft.Report.WpfDesign.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           }
         }
       },
-      "Stimulsoft.Svg/2026.2.4": {
+      "Stimulsoft.Svg/2026.3.2": {
         "dependencies": {
           "System.Drawing.Common": "8.0.22"
         },
         "runtime": {
           "lib/net8.0-windows7.0/Stimulsoft.Svg.dll": {
-            "assemblyVersion": "2026.2.4.0",
-            "fileVersion": "2026.2.4.0"
+            "assemblyVersion": "2026.3.2.0",
+            "fileVersion": "2026.3.2.0"
           }
         }
       },
-      "Syncfusion.Compression.Net.Core/34.1.31": {
+      "Syncfusion.Compression.Net.Core/34.2.4": {
         "runtime": {
           "lib/net8.0/Syncfusion.Compression.Portable.dll": {
-            "assemblyVersion": "34.1.31.0",
-            "fileVersion": "34.1.31.0"
+            "assemblyVersion": "34.2.4.0",
+            "fileVersion": "34.2.4.0"
           }
         }
       },
-      "Syncfusion.Licensing/34.1.31": {
+      "Syncfusion.Licensing/34.2.4": {
         "runtime": {
           "lib/net8.0/Syncfusion.Licensing.dll": {
-            "assemblyVersion": "34.1.31.0",
-            "fileVersion": "34.1.31.0"
+            "assemblyVersion": "34.2.4.0",
+            "fileVersion": "34.2.4.0"
           }
         }
       },
-      "Syncfusion.Pdf.Net.Core/34.1.31": {
+      "Syncfusion.Pdf.Net.Core/34.2.4": {
         "dependencies": {
-          "Syncfusion.Compression.Net.Core": "34.1.31",
-          "Syncfusion.Licensing": "34.1.31",
-          "Syncfusion.Telemetry": "34.1.31"
+          "Syncfusion.Compression.Net.Core": "34.2.4",
+          "Syncfusion.Licensing": "34.2.4",
+          "Syncfusion.Telemetry": "34.2.4"
         },
         "runtime": {
           "lib/net8.0/Syncfusion.Pdf.Portable.dll": {
-            "assemblyVersion": "34.1.31.0",
-            "fileVersion": "34.1.31.0"
+            "assemblyVersion": "34.2.4.0",
+            "fileVersion": "34.2.4.0"
           }
         }
       },
-      "Syncfusion.Telemetry/34.1.31": {
+      "Syncfusion.Telemetry/34.2.4": {
         "runtime": {
-          "lib/net8.0/Syncfusion.Telemetry.dll": {
-            "assemblyVersion": "34.1.31.0",
-            "fileVersion": "34.1.31.0"
+          "lib/net8.0-windows7.0/Syncfusion.Telemetry.dll": {
+            "assemblyVersion": "34.2.4.0",
+            "fileVersion": "34.2.4.0"
           }
         }
       },
@@ -1311,11 +1315,11 @@
           }
         }
       },
-      "System.CodeDom/10.0.10": {
+      "System.CodeDom/10.0.11": {
         "runtime": {
           "lib/net8.0/System.CodeDom.dll": {
             "assemblyVersion": "10.0.0.0",
-            "fileVersion": "10.0.1026.32716"
+            "fileVersion": "10.0.1126.37416"
           }
         }
       },
@@ -1350,11 +1354,11 @@
           }
         }
       },
-      "System.Data.SQLite/2.0.3": {
+      "System.Data.SQLite/2.0.4": {
         "runtime": {
           "lib/netstandard2.1/System.Data.SQLite.dll": {
-            "assemblyVersion": "2.0.3.0",
-            "fileVersion": "2.0.3.0"
+            "assemblyVersion": "2.0.4.0",
+            "fileVersion": "2.0.4.0"
           }
         }
       },
@@ -1421,14 +1425,14 @@
           }
         }
       },
-      "System.Management/10.0.10": {
+      "System.Management/10.0.11": {
         "dependencies": {
-          "System.CodeDom": "10.0.10"
+          "System.CodeDom": "10.0.11"
         },
         "runtime": {
           "runtimes/win/lib/net8.0/System.Management.dll": {
-            "assemblyVersion": "10.0.0.10",
-            "fileVersion": "10.0.1026.32716"
+            "assemblyVersion": "10.0.0.11",
+            "fileVersion": "10.0.1126.37416"
           }
         }
       },
@@ -1463,14 +1467,14 @@
           }
         }
       },
-      "System.Security.Cryptography.Xml/8.0.3": {
+      "System.Security.Cryptography.Xml/8.0.4": {
         "dependencies": {
           "System.Security.Cryptography.Pkcs": "8.0.1"
         },
         "runtime": {
           "lib/net8.0/System.Security.Cryptography.Xml.dll": {
             "assemblyVersion": "8.0.0.0",
-            "fileVersion": "8.0.2626.16921"
+            "fileVersion": "8.0.2926.32403"
           }
         }
       },
@@ -1528,16 +1532,16 @@
         "dependencies": {
           "CommunityToolkit.Mvvm": "8.4.2",
           "DeepCopy": "1.0.3",
-          "EPPlus": "8.6.1",
+          "EPPlus": "8.7.0",
           "PdfSharpCore": "1.3.67",
           "QRCoder": "1.8.0",
-          "Quartz": "3.18.2",
-          "QuestPDF": "2026.7.1",
+          "Quartz": "3.19.1",
+          "QuestPDF": "2026.7.3",
           "SQLitePCLRaw.bundle_e_sqlcipher": "2.1.11",
           "SkiaSharp": "3.119.1",
-          "SqlSugarCore": "5.1.4.216",
-          "Stimulsoft.Reports.Wpf": "2026.2.4",
-          "Syncfusion.Pdf.Net.Core": "34.1.31",
+          "SqlSugarCore": "5.1.4.217",
+          "Stimulsoft.Reports.Wpf": "2026.3.2",
+          "Syncfusion.Pdf.Net.Core": "34.2.4",
           "itext.bouncy-castle-adapter": "9.7.0",
           "itext7": "9.7.0"
         },
@@ -1548,27 +1552,27 @@
           }
         }
       },
-      "Microsoft.Web.WebView2.Core/1.0.4078.44": {
+      "Microsoft.Web.WebView2.Core/1.0.4129.50": {
         "runtime": {
           "Microsoft.Web.WebView2.Core.dll": {
-            "assemblyVersion": "1.0.4078.44",
-            "fileVersion": "1.0.4078.44"
+            "assemblyVersion": "1.0.4129.50",
+            "fileVersion": "1.0.4129.50"
           }
         }
       },
-      "Microsoft.Web.WebView2.WinForms/1.0.4078.44": {
+      "Microsoft.Web.WebView2.WinForms/1.0.4129.50": {
         "runtime": {
           "Microsoft.Web.WebView2.WinForms.dll": {
-            "assemblyVersion": "1.0.4078.44",
-            "fileVersion": "1.0.4078.44"
+            "assemblyVersion": "1.0.4129.50",
+            "fileVersion": "1.0.4129.50"
           }
         }
       },
-      "Microsoft.Web.WebView2.Wpf/1.0.4078.44": {
+      "Microsoft.Web.WebView2.Wpf/1.0.4129.50": {
         "runtime": {
           "Microsoft.Web.WebView2.Wpf.dll": {
-            "assemblyVersion": "1.0.4078.44",
-            "fileVersion": "1.0.4078.44"
+            "assemblyVersion": "1.0.4129.50",
+            "fileVersion": "1.0.4129.50"
           }
         }
       }
@@ -1620,19 +1624,19 @@
       "path": "deepcopy/1.0.3",
       "hashPath": "deepcopy.1.0.3.nupkg.sha512"
     },
-    "EPPlus/8.6.1": {
+    "EPPlus/8.7.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-ialCJVbku7pQ6Cf2qcdgVkynEkpdkx+6ryGpAu2n3Jlra//HY+0Fp54OM7ELRCE71id5qk55q3SMZgPGW1Pbbw==",
-      "path": "epplus/8.6.1",
-      "hashPath": "epplus.8.6.1.nupkg.sha512"
+      "sha512": "sha512-aNxtQ2O/zdt7aljXatMe2Oj7ez4j7fIYltR6/+TxMlBobD1aYnMf3QGGHxaE7kpdEeX/zadm3nilHHGK5LVZYg==",
+      "path": "epplus/8.7.0",
+      "hashPath": "epplus.8.7.0.nupkg.sha512"
     },
-    "EPPlus.Interfaces/8.4.0": {
+    "EPPlus.Interfaces/8.6.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-QaEzDFG2vcQMPqUmoWv0vBTObtH8hffQmyDr2WkqRYF/nFSn2pkdBB4vudcd/EIv0N8M3P1fzzkPQgEWsFnUmA==",
-      "path": "epplus.interfaces/8.4.0",
-      "hashPath": "epplus.interfaces.8.4.0.nupkg.sha512"
+      "sha512": "sha512-Xl1ncbV84UCz7QxcHuWjGa6PKXnOTwbC+y2ZdDqe5Zt5MbozWQINOwchcKW+agqx9Rybl2SQ3GdN1fbPIbjVOA==",
+      "path": "epplus.interfaces/8.6.2",
+      "hashPath": "epplus.interfaces.8.6.2.nupkg.sha512"
     },
     "Extended.Wpf.Toolkit/5.1.2": {
       "type": "package",
@@ -1942,19 +1946,19 @@
       "path": "microsoft.toolkit.uwp.notifications/7.1.3",
       "hashPath": "microsoft.toolkit.uwp.notifications.7.1.3.nupkg.sha512"
     },
-    "Microsoft.Web.WebView2/1.0.4078.44": {
+    "Microsoft.Web.WebView2/1.0.4129.50": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A==",
-      "path": "microsoft.web.webview2/1.0.4078.44",
-      "hashPath": "microsoft.web.webview2.1.0.4078.44.nupkg.sha512"
+      "sha512": "sha512-BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ==",
+      "path": "microsoft.web.webview2/1.0.4129.50",
+      "hashPath": "microsoft.web.webview2.1.0.4129.50.nupkg.sha512"
     },
-    "MiniExcel/1.45.0": {
+    "MiniExcel/1.46.0": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-VsBtvXyhfPcbtNliuD9IMNqfBW01kRQl2/tA7JRIGjj82rcKNrz9Gfpn1FW8euXw91gkINWZuQv+n6XUURB3XA==",
-      "path": "miniexcel/1.45.0",
-      "hashPath": "miniexcel.1.45.0.nupkg.sha512"
+      "sha512": "sha512-IMmli1Hc3/Axst8hcuUx30q/2HTKH2f3nmduiy59wvpth1u0881fZMEMAy4Inl3GBkdrVXA8UUpF5lyoWREdLQ==",
+      "path": "miniexcel/1.46.0",
+      "hashPath": "miniexcel.1.46.0.nupkg.sha512"
     },
     "MySqlConnector/2.2.5": {
       "type": "package",
@@ -2033,19 +2037,19 @@
       "path": "qrcoder/1.8.0",
       "hashPath": "qrcoder.1.8.0.nupkg.sha512"
     },
-    "Quartz/3.18.2": {
+    "Quartz/3.19.1": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-/KaRLj7jv84RSIR/UtAWnzYRmS7o/mA6CdEuoLwxhLa9Nfl7Q1keMA7Fe/r2BzRfDf+7YpN1QNEYSSU89DA3OA==",
-      "path": "quartz/3.18.2",
-      "hashPath": "quartz.3.18.2.nupkg.sha512"
+      "sha512": "sha512-u+kAlmReZLLpKRG9TcPt8gP0H5e8Nff11fh9tz52e4B+GtXm9cLBOe/bfGcDs4IQftmEcxakpfTzOlsZdv9ekg==",
+      "path": "quartz/3.19.1",
+      "hashPath": "quartz.3.19.1.nupkg.sha512"
     },
-    "QuestPDF/2026.7.1": {
+    "QuestPDF/2026.7.3": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-GsBxQb48dFAGmvI1eP3SHyz0Pua4uH6aUHX7f0ywTin6hordAviZRAiTiIQiKMLwq6hN1FmgS+qLjfh2v7vhOg==",
-      "path": "questpdf/2026.7.1",
-      "hashPath": "questpdf.2026.7.1.nupkg.sha512"
+      "sha512": "sha512-MYpJrSLwUkgaX/POQj+9GY8QreFoLXjHCiUPCNl0XrHF+nLDT9KeUFZbeaUNu1P5spt5QeYzCbf2tDF0z5idHg==",
+      "path": "questpdf/2026.7.3",
+      "hashPath": "questpdf.2026.7.3.nupkg.sha512"
     },
     "SharpZipLib/1.4.2": {
       "type": "package",
@@ -2159,12 +2163,12 @@
       "path": "sqlitepclraw.provider.e_sqlite3/2.1.11",
       "hashPath": "sqlitepclraw.provider.e_sqlite3.2.1.11.nupkg.sha512"
     },
-    "SqlSugarCore/5.1.4.216": {
+    "SqlSugarCore/5.1.4.217": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-OCfOzFZwW0gVXt1PTlnJUfepvO/1bjTjCrDghZMqF9r4rlLZhPfhHrjXQbh2kvo5sq5jPCGa7ummgZd0wJPGmQ==",
-      "path": "sqlsugarcore/5.1.4.216",
-      "hashPath": "sqlsugarcore.5.1.4.216.nupkg.sha512"
+      "sha512": "sha512-yV2Gr+zAdxHGHGPFgpLeLjhFqtUfThaed2d90C5s+17z5pbZZFRAPV1Xk7M25XFJCVrUpafzp3XbMzF3JmAMDw==",
+      "path": "sqlsugarcore/5.1.4.217",
+      "hashPath": "sqlsugarcore.5.1.4.217.nupkg.sha512"
     },
     "SqlSugarCore.Dm/8.8.1": {
       "type": "package",
@@ -2180,54 +2184,54 @@
       "path": "sqlsugarcore.kdbndp/9.3.8.413",
       "hashPath": "sqlsugarcore.kdbndp.9.3.8.413.nupkg.sha512"
     },
-    "Stimulsoft.Reports.Engine/2026.2.4": {
+    "Stimulsoft.Reports.Engine/2026.3.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-2lWcwbxmObUO47sA9XJnzR5Gdp39gKOuM9G2cJhWI6Id+8eC1IJ9NT+/fruA0H7/yTwa62jzBkkuz3Fj0hp2IA==",
-      "path": "stimulsoft.reports.engine/2026.2.4",
-      "hashPath": "stimulsoft.reports.engine.2026.2.4.nupkg.sha512"
+      "sha512": "sha512-L+LcXI5+dnly7kybRG2RxqGM5E6c0piGKacd4fZc7yrbcy+w8Kq2arSxJtxpdWelXGn/6pi4ehqjzCILvbLfGA==",
+      "path": "stimulsoft.reports.engine/2026.3.2",
+      "hashPath": "stimulsoft.reports.engine.2026.3.2.nupkg.sha512"
     },
-    "Stimulsoft.Reports.Wpf/2026.2.4": {
+    "Stimulsoft.Reports.Wpf/2026.3.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-TsQxbn3fPto9UuAROc9mhK2mZcfmuW3GfqbgNbsOUctxrdR0hc28DDDW3zNXUPbvbAD2ZoRG5YFMXfTql8LEig==",
-      "path": "stimulsoft.reports.wpf/2026.2.4",
-      "hashPath": "stimulsoft.reports.wpf.2026.2.4.nupkg.sha512"
+      "sha512": "sha512-cwhU1CZQOkCtP2SV7BgN1B/gnGu+YT2HrJJltB6sBzStPQH4w7fXHlGpno5RG4h8HISeVf0sk2a4EkCVGvvpIQ==",
+      "path": "stimulsoft.reports.wpf/2026.3.2",
+      "hashPath": "stimulsoft.reports.wpf.2026.3.2.nupkg.sha512"
     },
-    "Stimulsoft.Svg/2026.2.4": {
+    "Stimulsoft.Svg/2026.3.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-YIHT4L28/FTf/qy5ZcxKrUDjkYwOP4cmUhx0UI3smPaBsTjTqTzB1XKxzZpC7gCQoKRHTRZuFOvftmpmpfwRRg==",
-      "path": "stimulsoft.svg/2026.2.4",
-      "hashPath": "stimulsoft.svg.2026.2.4.nupkg.sha512"
+      "sha512": "sha512-rDJ6F0+hPXCOAyG8GfHRg5H5cqfc23gHZm0Olfu24oBbeoIN116PQdTAtOr0cXKsDYzIxbXgl5TCl+Xj9jRE3g==",
+      "path": "stimulsoft.svg/2026.3.2",
+      "hashPath": "stimulsoft.svg.2026.3.2.nupkg.sha512"
     },
-    "Syncfusion.Compression.Net.Core/34.1.31": {
+    "Syncfusion.Compression.Net.Core/34.2.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-XC50xNOakL95lmrhBAwS7u5OVeYXhWXkzxwBMt7Id2G8fJF2jvguivSj0SYLVTGcJB8Y77AQkr9Rlg/KcAo8Ig==",
-      "path": "syncfusion.compression.net.core/34.1.31",
-      "hashPath": "syncfusion.compression.net.core.34.1.31.nupkg.sha512"
+      "sha512": "sha512-10QzSLKbFb3VDquI9x0JZ9JdcfMtK7p2EvjU3nzHVHjxWUSkCCmbM7moAZSxb87UnYZ3P7C0SBJpZh7P1BLxTw==",
+      "path": "syncfusion.compression.net.core/34.2.4",
+      "hashPath": "syncfusion.compression.net.core.34.2.4.nupkg.sha512"
     },
-    "Syncfusion.Licensing/34.1.31": {
+    "Syncfusion.Licensing/34.2.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-G4AZRl6ouImRKwmbnCp2JYsbHX03cgADZwTnFKFhjY7hp6KDJGbSlPChm73kR4ZNkavtV1ZlXTlaPYblsLmIkw==",
-      "path": "syncfusion.licensing/34.1.31",
-      "hashPath": "syncfusion.licensing.34.1.31.nupkg.sha512"
+      "sha512": "sha512-xoxPdzCamqVWI8uu9poNzhfnAYXDs0nXJXO5dnjECRj6+IF0hPpb8fAjbmAW8cTdsT2gPOEWHr58731naclQpw==",
+      "path": "syncfusion.licensing/34.2.4",
+      "hashPath": "syncfusion.licensing.34.2.4.nupkg.sha512"
     },
-    "Syncfusion.Pdf.Net.Core/34.1.31": {
+    "Syncfusion.Pdf.Net.Core/34.2.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-uOoY6joHGOCNBsgFOVShLCvEZPiIvwBn8nk9N7kI3zanCbOIbIusi/0N5B/yKKCbiG/Nv2jdkMjfzMZ3fgJv6g==",
-      "path": "syncfusion.pdf.net.core/34.1.31",
-      "hashPath": "syncfusion.pdf.net.core.34.1.31.nupkg.sha512"
+      "sha512": "sha512-B+SK4ihlBFUM0+HrAOQz5tGj2Daj8DuKXI8Edw2n7UPxfefoMT0hwsa7nTDwWBdvE0KInxl2vLWL3LatbDwNmg==",
+      "path": "syncfusion.pdf.net.core/34.2.4",
+      "hashPath": "syncfusion.pdf.net.core.34.2.4.nupkg.sha512"
     },
-    "Syncfusion.Telemetry/34.1.31": {
+    "Syncfusion.Telemetry/34.2.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-woKkSgcUPkgbVIvyUaL/0ytS+UMwUQdzmtb1rEUtuZ5gGcBcmoGAGniYuOUTeTFyVx4rCzjHgSVsUpggjSfgew==",
-      "path": "syncfusion.telemetry/34.1.31",
-      "hashPath": "syncfusion.telemetry.34.1.31.nupkg.sha512"
+      "sha512": "sha512-ZjrU3BzI92QOLsD6saUvDCLvut2MU20x8sGtCupcHwtSpoclBBVBsCzygOlBxBkbJnbNtrwyFAn1RIitbeUewg==",
+      "path": "syncfusion.telemetry/34.2.4",
+      "hashPath": "syncfusion.telemetry.34.2.4.nupkg.sha512"
     },
     "System.ClientModel/1.0.0": {
       "type": "package",
@@ -2236,12 +2240,12 @@
       "path": "system.clientmodel/1.0.0",
       "hashPath": "system.clientmodel.1.0.0.nupkg.sha512"
     },
-    "System.CodeDom/10.0.10": {
+    "System.CodeDom/10.0.11": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-lru5igKxs4OgWKfMeOpMAYpfB1tNSSXHk2zyiSDO/h0u8RVAhN6KqW9d3ANybDB+ePIHg6HM/NlE8HlpOk4k5A==",
-      "path": "system.codedom/10.0.10",
-      "hashPath": "system.codedom.10.0.10.nupkg.sha512"
+      "sha512": "sha512-v40pNeBoZTYsiVxz+PzyZmmIr2JIhpK4VsFpQqZSZCXa51PDlNXIN2ESm8kDU0voZYVfLhxF9HvmBsxCJmkiRg==",
+      "path": "system.codedom/10.0.11",
+      "hashPath": "system.codedom.10.0.11.nupkg.sha512"
     },
     "System.Configuration.ConfigurationManager/8.0.1": {
       "type": "package",
@@ -2264,12 +2268,12 @@
       "path": "system.data.oledb/8.0.1",
       "hashPath": "system.data.oledb.8.0.1.nupkg.sha512"
     },
-    "System.Data.SQLite/2.0.3": {
+    "System.Data.SQLite/2.0.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-5I9dVqmHp1v0dhco21btIRkUE47zHSy4t6bRLwIO6nGZ1mxGIL1f1yp1zWI/AAZFfdUz7n6RrH1hyi/6EhlIeQ==",
-      "path": "system.data.sqlite/2.0.3",
-      "hashPath": "system.data.sqlite.2.0.3.nupkg.sha512"
+      "sha512": "sha512-iiawN8l6QBzLZTK2BQRyq/1XmvDONghjvXoDhkkQgPTG8bRIsmIxJV1+Lc75fviNgMnjAE3wxReVJAF7P1hkoQ==",
+      "path": "system.data.sqlite/2.0.4",
+      "hashPath": "system.data.sqlite.2.0.4.nupkg.sha512"
     },
     "System.Diagnostics.EventLog/8.0.1": {
       "type": "package",
@@ -2320,12 +2324,12 @@
       "path": "system.linq.dynamic.core/1.7.3",
       "hashPath": "system.linq.dynamic.core.1.7.3.nupkg.sha512"
     },
-    "System.Management/10.0.10": {
+    "System.Management/10.0.11": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-U13ksdXfQlF2WDdu3S4ZPVpikFs2HgV3dbJJZLeZpBIQ4z/xCmQnwEf6LsEEIC2zSamVVa1acA9RdVhZwnWKeA==",
-      "path": "system.management/10.0.10",
-      "hashPath": "system.management.10.0.10.nupkg.sha512"
+      "sha512": "sha512-xyNn8KGbWI88LoUwg3rB8qcpFFST6dr8Ro/qS8GBu2GOwR0v7J82kVFHTiiPtvEKS79VbMTxs/sIKQ+Cq1Zs1g==",
+      "path": "system.management/10.0.11",
+      "hashPath": "system.management.10.0.11.nupkg.sha512"
     },
     "System.Memory.Data/1.0.2": {
       "type": "package",
@@ -2348,12 +2352,12 @@
       "path": "system.security.cryptography.pkcs/8.0.1",
       "hashPath": "system.security.cryptography.pkcs.8.0.1.nupkg.sha512"
     },
-    "System.Security.Cryptography.Xml/8.0.3": {
+    "System.Security.Cryptography.Xml/8.0.4": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-1cHAWDYwOyyoRy+nxS7/Ro/Zcio6i5yHoIJ6xUA+fU8lNu4yGQgja5dEovAxBVud3RnfwRVWOl0B2vr+9LP/mg==",
-      "path": "system.security.cryptography.xml/8.0.3",
-      "hashPath": "system.security.cryptography.xml.8.0.3.nupkg.sha512"
+      "sha512": "sha512-1y+ROEEmEOACrQWqRi37GkGHOThPc31m7vezOySpPE9xXN2nTN6ndLYjylvy42aCtQq4owlYhcqaKpQKMDFKFg==",
+      "path": "system.security.cryptography.xml/8.0.4",
+      "hashPath": "system.security.cryptography.xml.8.0.4.nupkg.sha512"
     },
     "System.Text.Encodings.Web/10.0.2": {
       "type": "package",
@@ -2395,17 +2399,17 @@
       "serviceable": false,
       "sha512": ""
     },
-    "Microsoft.Web.WebView2.Core/1.0.4078.44": {
+    "Microsoft.Web.WebView2.Core/1.0.4129.50": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
     },
-    "Microsoft.Web.WebView2.WinForms/1.0.4078.44": {
+    "Microsoft.Web.WebView2.WinForms/1.0.4129.50": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
     },
-    "Microsoft.Web.WebView2.Wpf/1.0.4078.44": {
+    "Microsoft.Web.WebView2.Wpf/1.0.4129.50": {
       "type": "reference",
       "serviceable": false,
       "sha512": ""
