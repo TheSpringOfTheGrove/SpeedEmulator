@@ -7125,9 +7125,9 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             tradeCode = productBrief;
             if (bank.Type == BankTypes.Personal)
             {
-                // 原生“交易摘要”明确读取 ProductCode，对应本地独立的“银行摘要”。
+                // 原生“交易摘要”明确读取 ProductCode，对应本地“摘要代码”。
                 // 只桥接这一字段，不再把摘要批量写入期限、界面等其他属性。
-                Set(target, nameof(FlowRecord.ProductCode), FlowPrintFieldValues.ReadColumn(bank, source, "银行摘要") ?? string.Empty);
+                Set(target, nameof(FlowRecord.ProductCode), FlowPrintFieldValues.ReadColumn(bank, source, "摘要代码") ?? string.Empty);
             }
         }
 

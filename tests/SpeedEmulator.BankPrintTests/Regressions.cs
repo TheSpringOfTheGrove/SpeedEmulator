@@ -26,13 +26,14 @@ internal static partial class Program
     {
         TestDateGeneration(catalog);
         TestBoundFields(catalog);
+        TestChinaMerchantsSummaryMappings(catalog);
         TestLocalRenderer(catalog);
         TestOperationArea(catalog);
         TestBankOfChinaTradeNames(catalog);
         TestAgriculturalOutlets(catalog);
         TestRestoredBankBindings(catalog);
         TestGuangfaMerchantMapping(catalog, []);
-        Console.WriteLine("PASS 8 regression groups: 工行参照地区号、实际字段绑定、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射、广发商户分户序号");
+        Console.WriteLine("PASS 9 regression groups: 工行参照地区号、实际字段绑定、招行摘要导出及打印、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射、广发商户分户序号");
     }
 
     private static void TestDateGeneration(List<Entry> catalog)
@@ -82,6 +83,23 @@ internal static partial class Program
         Equal("", Value(Convert(context)[0]!, "OppositeAccount"), "已清空的扩展账号不能借用隐藏属性");
     }
 
+    private static void TestChinaMerchantsSummaryMappings(List<Entry> catalog)
+    {
+        var entry = catalog.First(item => item.Bank.Name == "招行");
+        var row = Row(entry, "distinct");
+        var target = Convert(Context(entry, row))[0]!;
+        Equal("摘要甲", Value(target, nameof(FlowRecord.ProductCode)), "招行打印交易摘要必须读取摘要代码");
+
+        var bankSummaryColumn = entry.Bank.FlowColumns.First(column => column.Name == "银行摘要");
+        var service = new TableExcelService();
+        var path = Path.Combine(Output, "cmb-flow-roundtrip.xlsx");
+        var user = new BankUser { Id = 990200, BankId = entry.Bank.Id, BankName = entry.Bank.Name };
+        service.ExportFlowRecords(path, [row], entry.Bank, user);
+        var imported = service.ImportFlowRecords(path, entry.Bank, user).Single();
+        Equal("摘要甲", imported.ProductBrief, "招行导出摘要代码必须保持独立");
+        Equal("银行摘要卯", System.Convert.ToString(imported[bankSummaryColumn.Field!.Trim('[', ']')]), "招行导出银行摘要必须读取实际配置字段");
+    }
+
     private static string LocalValue(PrintRenderContext context, FlowRecord row, PrintPdfColumn column)
     {
         var type = typeof(QuestPdfPrintService).GetNestedType("BankFlowPrintDocument", BindingFlags.NonPublic)!;
@@ -125,7 +143,8 @@ internal static partial class Program
         if (variant != "distinct") return;
         if (entry.Bank.Name is "邮政" or "兴业")
             if (!text.Contains("类型辰")) throw new Exception("摘要未使用明细交易类型");
-        if (entry.Bank.Name == "招行" && !text.Contains("银行摘要卯")) throw new Exception("招行银行摘要未使用独立列");
+        if (entry.Bank.Name == "招行" && (!text.Contains("摘要甲") || text.Contains("银行摘要卯")))
+            throw new Exception("招行打印交易摘要未使用摘要代码");
         if (entry.Bank.Name == "中行" && !text.Contains("类型辰")) throw new Exception("中行交易名称未使用明细交易名称");
         if (entry.Bank.Name == "农行" && entry.Template.Name == "农行个人纸质版" && !text.Contains("场所丁"))
             throw new Exception("农行交易网点未使用明细地点");
@@ -163,7 +182,7 @@ internal static partial class Program
             var text = string.Join("\n", pdf.GetPages().Select(page => page.Text));
             foreach (var record in records)
             {
-                var marker = template.StartsWith("招行") ? $"银行{record.Index:000}" : record.ProductBrief;
+                var marker = record.ProductBrief;
                 if (!text.Contains(marker)) throw new Exception("跨页缺失流水 " + marker);
             }
             Console.WriteLine($"PASS {template}: {pdf.NumberOfPages} pages, 70 source summaries preserved");

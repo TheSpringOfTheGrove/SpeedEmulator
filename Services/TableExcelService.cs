@@ -242,6 +242,19 @@ public sealed class TableExcelService : ITableExcelService
         {
             var columnName = columnNames[index];
             var (field, type) = ExcelColumnFieldResolver.ResolveFlowRecordField(bank.Name, columnName);
+            if (string.Equals(bank.Name, "招行", StringComparison.Ordinal)
+                && string.Equals(NormalizeHeader(columnName), NormalizeHeader("银行摘要"), StringComparison.OrdinalIgnoreCase))
+            {
+                var bankSummaryColumn = bank.FlowColumns.FirstOrDefault(column =>
+                    string.Equals(NormalizeHeader(column.Name ?? string.Empty), NormalizeHeader("银行摘要"), StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(column.Field));
+                if (bankSummaryColumn is not null)
+                {
+                    field = bankSummaryColumn.Field;
+                    type = string.IsNullOrWhiteSpace(bankSummaryColumn.Type) ? "Text" : bankSummaryColumn.Type;
+                }
+            }
+
             if (field is null || !usedFixedFields.Add(field))
             {
                 field = CreateExportFlowExtraFieldPath(bank.Name, columnName, index);
