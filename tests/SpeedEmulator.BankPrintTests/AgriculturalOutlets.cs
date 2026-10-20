@@ -59,6 +59,18 @@ internal static partial class Program
             Equal(row.AreaNum, Value(Convert(Context(entry, row), exporter)[0]!, "AreaNum"), "不影响农行电子版或对公地区字段");
             count++;
         }
+
+        foreach (var entry in catalog.Where(IsAgriculturalPaperEntry))
+        {
+            var row = AgriculturalOutletRow(1, "139999");
+            row.OppositeAccount = "6228480398401725673";
+            row.OppositeUsername = "测试商户";
+
+            var target = Convert(Context(entry, row), "VendorBridge")[0]!;
+            Equal(row.OppositeAccount, Value(target, nameof(FlowRecord.OppositeAccount)), entry.Template.Name + "/对方账号不补空格");
+            Equal(row.OppositeUsername, Value(target, nameof(FlowRecord.OppositeUsername)), entry.Template.Name + "/对方户名不补空格");
+            count++;
+        }
         Console.WriteLine($"PASS 农行交易网点: {count} field cases (all paper templates, 3 exporters, generated/imported, leading zeros/blanks/custom bindings; electronic/corporate unchanged)");
     }
 

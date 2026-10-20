@@ -8726,12 +8726,17 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static string PrepareAgriculturalPaperAccountText(string text)
     {
-        return AppendAgriculturalPaperInlineSeparator(NormalizeAgriculturalPaperInlineDetailText(text));
+        // The vendor paper templates position the account in its own field.  Do not
+        // manufacture trailing spaces here: they become visible as extra gaps before
+        // the following field after the vendor renderer lays out the secondary row.
+        return NormalizeAgriculturalPaperInlineDetailText(text);
     }
 
     private static string PrepareAgriculturalPaperCounterpartyText(string text)
     {
-        return AppendAgriculturalPaperInlineSeparator(NormalizeAgriculturalPaperInlineDetailText(text));
+        // Keep the counterparty name independent from the following detail field for
+        // the same reason as the account number above.
+        return NormalizeAgriculturalPaperInlineDetailText(text);
     }
 
     private static string PrepareAgriculturalPaperDetailText(string text)
@@ -8767,13 +8772,6 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return NormalizeSingleLinePrintText(text)
             .Replace("\u200B", string.Empty, StringComparison.Ordinal)
             .Trim();
-    }
-
-    private static string AppendAgriculturalPaperInlineSeparator(string text)
-    {
-        return string.IsNullOrWhiteSpace(text)
-            ? string.Empty
-            : text + "  ";
     }
 
     private static void RestoreAgriculturalPaperMainRowRemark(
