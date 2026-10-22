@@ -48,6 +48,7 @@ internal static partial class Program
         if (args.Contains("--abc-fields")) { TestAgriculturalOutlets(catalog); return; }
         if (args.Contains("--restored-fields")) { TestRestoredBankBindings(catalog); return; }
         if (args.Contains("--cgb-fields")) { TestGuangfaMerchantMapping(catalog, args); return; }
+        if (args.Contains("--bocom-fields")) { TestBocomPersonalPdf(catalog, args); return; }
         if (args.Contains("--wechat-fields")) { TestWechatPersonalStatementFields(catalog); return; }
         RunRegressions(catalog);
         if (args.Contains("--boc-render")) { RenderBankOfChinaTradeNames(catalog); return; }

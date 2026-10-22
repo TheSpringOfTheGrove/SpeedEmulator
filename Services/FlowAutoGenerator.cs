@@ -20614,7 +20614,7 @@ public sealed partial class FlowAutoGenerator
 
         if (HasFlowColumnName(bank, nameof(FlowRecord.SerialNum), ExternalSystemFlowColumnName))
         {
-            return IsConsumerExpenseRecord(record) ? CreateExternalSystemFlowNumber(record, seed) : null;
+            return ShouldGenerateExternalSystemFlowNumber(bank, record) ? CreateExternalSystemFlowNumber(record, seed) : null;
         }
 
         return RandomDigits(seed, 8);
@@ -20758,6 +20758,33 @@ public sealed partial class FlowAutoGenerator
         return ContainsAny(consumerText, ConsumerExpenseKeywords);
     }
 
+    private static bool ShouldGenerateExternalSystemFlowNumber(Bank bank, FlowRecord record)
+    {
+        return IsConsumerExpenseRecord(record) || IsPostalWechatTransferExpenseRecord(bank, record);
+    }
+
+    private static bool IsPostalWechatTransferExpenseRecord(Bank bank, FlowRecord record)
+    {
+        if ((record.TradeMoney ?? 0) >= -0.009d
+            || bank.Type != BankTypes.Personal
+            || (!bank.Name.Contains("邮政", StringComparison.Ordinal)
+                && !bank.Name.Contains("邮储", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var text = BuildConsumerClassificationText(record);
+        if (!text.Contains("微信", StringComparison.OrdinalIgnoreCase)
+            || !text.Contains("转账", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !NonConsumerExpenseKeywords.Any(keyword =>
+            !string.Equals(keyword, "转账", StringComparison.Ordinal)
+            && text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string BuildConsumerClassificationText(FlowRecord record)
     {
         return string.Join(" ", new[]
@@ -20814,7 +20841,7 @@ public sealed partial class FlowAutoGenerator
 
         if (HasFlowColumnName(bank, nameof(FlowRecord.VoucherNum), ExternalSystemFlowColumnName))
         {
-            return IsConsumerExpenseRecord(record) ? CreateExternalSystemFlowNumber(record, seed) : null;
+            return ShouldGenerateExternalSystemFlowNumber(bank, record) ? CreateExternalSystemFlowNumber(record, seed) : null;
         }
 
         if (HasFlowColumnName(bank, nameof(FlowRecord.VoucherNum), "凭证号", "凭证号码", "凭证", "凭证序号", "凭证号码业务", "票据号", "传票号"))

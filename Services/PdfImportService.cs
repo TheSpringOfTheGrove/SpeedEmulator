@@ -130,6 +130,19 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Counterparty", 410, 575)
     ];
 
+    // The personal Bank of Communications statement uses a fixed A4 six-column
+    // table. This is deliberately separate from the existing corporate BOCOM
+    // layout, whose page size and column order are entirely different.
+    private static readonly PdfPositionedColumnSpec[] BocomPersonalColumns =
+    [
+        new("Date", 40, 106),
+        new("TradePlace", 106, 249),
+        new("TradeType", 249, 328),
+        new("Direction", 328, 376),
+        new("Amount", 376, 479),
+        new("Balance", 479, 600)
+    ];
+
     private static readonly PdfPositionedColumnSpec[] SpdbPersonalColumns =
     [
         new("Date", 88, 130),
@@ -462,6 +475,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "微信" => true,
             "平安" => true,
             "农行" => true,
+            "交行" => true,
             "招行" => true,
             "浦发" => true,
             "中信" => true,
@@ -632,6 +646,7 @@ public sealed partial class PdfImportService : IPdfImportService
             "建行" => ParseCcbPdf(bank, bankUser, document, result),
             "民生" => ParseCmbcPdf(bank, bankUser, document, result),
             "农行" => ParseAbcPdf(bank, bankUser, document, result),
+            "交行" => ParseBocomPersonalPdf(bank, bankUser, document, result),
             "招行" => ParseCmbPersonalPdf(bank, bankUser, document, result),
             "平安" => ParsePingAnPdf(bank, bankUser, document, result),
             "浦发" => ParseSpdbPdf(bank, bankUser, document, result),
@@ -2883,6 +2898,312 @@ public sealed partial class PdfImportService : IPdfImportService
 
         ApplyCmbPersonalOpeningBalances(user, bank, result.FlowRecords);
         return parsedUser;
+    }
+
+    private static bool ParseBocomPersonalPdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
+    {
+        var parsedUser = ApplyBocomPersonalHeaderUserInfo(bank, user, document);
+
+        foreach (var row in BuildPositionedRows(
+            document.Words,
+            BocomPersonalColumns,
+            IsBocomPersonalHeaderWord,
+            IsBocomPersonalFooterWord,
+            @"^\d{4}-\d{2}-\d{2}$",
+            110,
+            0))
+        {
+            if (TryParseBocomPersonalPositionedRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+        }
+
+        if (user.OpeningBalance == 0 && result.FlowRecords.FirstOrDefault() is { Balance: { } firstBalance } firstRecord)
+        {
+            var openingBalance = firstBalance - (firstRecord.TradeMoney ?? 0);
+            user.OpeningBalance = (decimal)openingBalance;
+            SetUserNamed(user, bank, "期初余额", openingBalance.ToString("0.00", CultureInfo.InvariantCulture));
+        }
+
+        return parsedUser;
+    }
+
+    private static bool ApplyBocomPersonalHeaderUserInfo(Bank bank, BankUser user, PdfExtractedDocument document)
+    {
+        var headerCandidates = new[]
+        {
+            string.Concat(document.Lines.Where(line => line.PageNumber == 1).Take(100).Select(line => line.Text)),
+            string.Concat(document.Words.Where(word => word.PageNumber == 1)
+                .OrderBy(word => word.Top)
+                .ThenBy(word => word.Left)
+                .Select(word => word.Text))
+        };
+        var matched = false;
+
+        foreach (var header in headerCandidates.Where(text => !string.IsNullOrWhiteSpace(text)))
+        {
+            var accountMatch = Regex.Match(header, @"账号\s*/\s*卡号\s*[：:]?\s*(?<account>\d{10,})");
+            if (accountMatch.Success)
+            {
+                var account = accountMatch.Groups["account"].Value;
+                user.AccountNo = account;
+                user.CardNo = account;
+                SetUserNamed(user, bank, "账号卡号", account);
+                matched = true;
+            }
+
+            var nameMatch = Regex.Match(header, @"户名\s*[：:]?\s*(?<name>.+?)(?=查询起日|查询止日|打印时间|柜员号|币种|证件|交易日期)", RegexOptions.Singleline);
+            if (nameMatch.Success)
+            {
+                var name = CleanPdfValue(nameMatch.Groups["name"].Value);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    user.AccountName = name;
+                    SetUserNamed(user, bank, "户名", name);
+                    matched = true;
+                }
+            }
+
+            var startMatch = Regex.Match(header, @"查询起日\s*[：:]?\s*(?<date>\d{4}-\d{2}-\d{2})");
+            if (startMatch.Success)
+            {
+                var date = startMatch.Groups["date"].Value;
+                user.StartDate = ParseDateTimeOrNull(date) ?? user.StartDate;
+                SetUserNamed(user, bank, "查询起日", date);
+                matched = true;
+            }
+
+            var endMatch = Regex.Match(header, @"查询止日\s*[：:]?\s*(?<date>\d{4}-\d{2}-\d{2})");
+            if (endMatch.Success)
+            {
+                var date = endMatch.Groups["date"].Value;
+                user.EndDate = ParseDateTimeOrNull(date) ?? user.EndDate;
+                SetUserNamed(user, bank, "查询止日", date);
+                matched = true;
+            }
+
+            var printMatch = Regex.Match(header, @"打印时间\s*[：:]?\s*(?<time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})");
+            if (printMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印日期", printMatch.Groups["time"].Value);
+                SetUserNamed(user, bank, "查询时间", printMatch.Groups["time"].Value);
+                matched = true;
+            }
+
+            var tellerMatch = Regex.Match(header, @"柜员号\s*[：:]?\s*(?<teller>[A-Za-z0-9]+)");
+            if (tellerMatch.Success)
+            {
+                SetUserNamed(user, bank, "查询柜员", tellerMatch.Groups["teller"].Value);
+                matched = true;
+            }
+
+            var currencyMatch = Regex.Match(header, @"币种\s*[：:]?\s*(?<currency>人民币|RMB|CNY)");
+            if (currencyMatch.Success)
+            {
+                var currency = NormalizeCurrencyText(currencyMatch.Groups["currency"].Value);
+                user.Currency = currency;
+                SetUserNamed(user, bank, "币种", currency);
+                matched = true;
+            }
+        }
+
+        // PdfPig's content-order text puts the BOCOM header values before the labels
+        // on some documents (the two-column header is emitted out of visual order).
+        // Read the actual label/value pairs by their fixed horizontal relationship and
+        // apply them last so those values always win over the text-order fallback.
+        var positionedAccount = GetBocomPersonalHeaderValue(document, "账号/卡号");
+        if (Regex.IsMatch(positionedAccount, @"^\d{10,}$"))
+        {
+            user.AccountNo = positionedAccount;
+            user.CardNo = positionedAccount;
+            SetUserNamed(user, bank, "账号卡号", positionedAccount);
+            matched = true;
+        }
+
+        var positionedName = GetBocomPersonalHeaderValue(document, "户名");
+        if (!string.IsNullOrWhiteSpace(positionedName))
+        {
+            user.AccountName = positionedName;
+            SetUserNamed(user, bank, "户名", positionedName);
+            matched = true;
+        }
+
+        var positionedStart = GetBocomPersonalHeaderValue(document, "查询起日");
+        if (Regex.IsMatch(positionedStart, @"^\d{4}-\d{2}-\d{2}$"))
+        {
+            user.StartDate = ParseDateTimeOrNull(positionedStart) ?? user.StartDate;
+            SetUserNamed(user, bank, "查询起日", positionedStart);
+            matched = true;
+        }
+
+        var positionedEnd = GetBocomPersonalHeaderValue(document, "查询止日");
+        if (Regex.IsMatch(positionedEnd, @"^\d{4}-\d{2}-\d{2}$"))
+        {
+            user.EndDate = ParseDateTimeOrNull(positionedEnd) ?? user.EndDate;
+            SetUserNamed(user, bank, "查询止日", positionedEnd);
+            matched = true;
+        }
+
+        var positionedPrintTime = GetBocomPersonalPrintTime(document);
+        if (DateTime.TryParseExact(
+                positionedPrintTime,
+                "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out _))
+        {
+            SetUserNamed(user, bank, "打印日期", positionedPrintTime);
+            SetUserNamed(user, bank, "查询时间", positionedPrintTime);
+            matched = true;
+        }
+
+        var positionedTeller = GetBocomPersonalHeaderValue(document, "柜员号");
+        if (!string.IsNullOrWhiteSpace(positionedTeller))
+        {
+            SetUserNamed(user, bank, "查询柜员", positionedTeller);
+            matched = true;
+        }
+
+        var positionedCurrency = GetBocomPersonalHeaderValue(document, "币种");
+        if (!string.IsNullOrWhiteSpace(positionedCurrency))
+        {
+            var currency = positionedCurrency.StartsWith("人民币", StringComparison.Ordinal) ? "人民币" : NormalizeCurrencyText(positionedCurrency);
+            user.Currency = currency;
+            SetUserNamed(user, bank, "币种", currency);
+            matched = true;
+        }
+
+        return matched;
+    }
+
+    private static string GetBocomPersonalHeaderValue(PdfExtractedDocument document, string label)
+    {
+        var labelWord = document.Words
+            .Where(word => word.PageNumber == 1)
+            .OrderBy(word => word.Top)
+            .ThenBy(word => word.Left)
+            .FirstOrDefault(word => CleanPdfValue(word.Text).TrimEnd(':', '：').StartsWith(label, StringComparison.Ordinal));
+        if (labelWord is null)
+        {
+            return string.Empty;
+        }
+
+        // Values are printed 4–6 points below each Chinese label. The following
+        // English label starts roughly ten points below, so a nine-point band keeps
+        // the value separate without relying on PDF content order.
+        return CleanPdfValue(string.Concat(document.Words
+            .Where(word => word.PageNumber == 1
+                && word.Left >= labelWord.Right + 8d
+                && word.Left < labelWord.Right + 200d
+                && word.Top >= labelWord.Top - 1d
+                && word.Top <= labelWord.Top + 9d)
+            .OrderBy(word => word.Top)
+            .ThenBy(word => word.Left)
+            .Select(word => word.Text)));
+    }
+
+    private static string GetBocomPersonalPrintTime(PdfExtractedDocument document)
+    {
+        var labelWord = document.Words
+            .Where(word => word.PageNumber == 1)
+            .OrderBy(word => word.Top)
+            .ThenBy(word => word.Left)
+            .FirstOrDefault(word => CleanPdfValue(word.Text).TrimEnd(':', '：').StartsWith("打印时间", StringComparison.Ordinal));
+        if (labelWord is null)
+        {
+            return string.Empty;
+        }
+
+        // 日期与时间的基线会有不到一像素的偏差，按 Top 排序会让时间排在日期前。
+        // 因此分别取值区域内的日期、时间 token 后再组合，稳定桥接到“查询时间”。
+        var values = document.Words
+            .Where(word => word.PageNumber == 1
+                && word.Left >= labelWord.Right + 8d
+                && word.Left < labelWord.Right + 200d
+                && word.Top >= labelWord.Top - 1d
+                && word.Top <= labelWord.Top + 9d)
+            .Select(word => CleanPdfValue(word.Text))
+            .ToArray();
+        var date = values.FirstOrDefault(value => Regex.IsMatch(value, @"^\d{4}-\d{2}-\d{2}$"));
+        var time = values.FirstOrDefault(value => Regex.IsMatch(value, @"^\d{2}:\d{2}:\d{2}$"));
+        return string.IsNullOrWhiteSpace(date) || string.IsNullOrWhiteSpace(time)
+            ? string.Empty
+            : $"{date} {time}";
+    }
+
+    private static bool TryParseBocomPersonalPositionedRecord(
+        PdfPositionedRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        var dateText = GetPositionedCell(row, "Date");
+        var tradePlace = GetPositionedCell(row, "TradePlace");
+        var tradeType = GetPositionedCell(row, "TradeType");
+        var direction = CleanPdfValue(GetPositionedCell(row, "Direction")).ToUpperInvariant();
+        var amountText = GetPositionedCell(row, "Amount").Replace('−', '-');
+        var balanceText = GetPositionedCell(row, "Balance").Replace('−', '-');
+        if (!Regex.IsMatch(dateText, @"^\d{4}-\d{2}-\d{2}$")
+            || direction is not ("D" or "C" or "借" or "贷")
+            || !IsPdfMoneyToken(amountText)
+            || !IsPdfMoneyToken(balanceText))
+        {
+            return false;
+        }
+
+        var amount = ParseDoubleOrNull(amountText);
+        var balance = ParseDoubleOrNull(balanceText);
+        if (!amount.HasValue || !balance.HasValue)
+        {
+            return false;
+        }
+
+        var signedAmount = direction is "D" or "借"
+            ? -Math.Abs(amount.Value)
+            : Math.Abs(amount.Value);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = FirstNotBlank(user.AccountNo, user.CardNo);
+        record.AccountTime = ParseDateTimeOrNull(dateText);
+        record.TradePlace = tradePlace;
+        record.ProductName = tradeType;
+        record.ProductType = tradeType;
+        record.ProductBrief = tradeType;
+        record.TradeExplain = tradeType;
+        record.Remark = tradeType;
+        record.TradeMoney = signedAmount;
+        record.Balance = balance;
+        record.BalanceAmount = balance;
+        record.Currency = FirstNotBlank(user.Currency, "人民币");
+        record.TradeCurrency = record.Currency;
+        ApplySignedAmountColumns(record, signedAmount);
+
+        SetFlowRaw(record, "交易日期", dateText);
+        SetFlowRaw(record, "记账日期", dateText);
+        SetFlowRaw(record, "交易地点", tradePlace);
+        SetFlowRaw(record, "交易类型", tradeType);
+        SetFlowRaw(record, "借贷状态", direction);
+        SetFlowRaw(record, "交易金额", FormatMoney(signedAmount));
+        SetFlowRaw(record, "余额", FormatMoney(balance.Value));
+        SetFlowRaw(record, "摘要", tradeType);
+        return true;
+    }
+
+    private static bool IsBocomPersonalHeaderWord(PdfTextWord word)
+    {
+        return word.Text is "交易日期" or "交易地点" or "交易类型" or "借贷状态" or "交易金额" or "余额"
+            or "Trans" or "Date" or "Trading" or "Place" or "Type" or "Dc" or "Flg" or "Amt" or "Balance";
+    }
+
+    private static bool IsBocomPersonalFooterWord(string text)
+    {
+        var value = CleanPdfValue(text);
+        return Regex.IsMatch(value, @"^第\s*\d+\s*页")
+            || Regex.IsMatch(value, @"^Page\s*\d+", RegexOptions.IgnoreCase)
+            || value.StartsWith("交通银行", StringComparison.Ordinal)
+            || value.StartsWith("客户服务热线", StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<PdfPositionedRow> BuildCmbPersonalPositionedRows(IReadOnlyList<PdfTextWord> words)
