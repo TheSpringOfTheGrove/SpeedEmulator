@@ -21030,11 +21030,6 @@ public sealed partial class FlowAutoGenerator
         }
 
         var originalPostscript = record.Remark?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(originalPostscript))
-        {
-            return string.Empty;
-        }
-
         if (HasGeneratedAgriculturalPostscriptPrefix(originalPostscript))
         {
             return originalPostscript;
@@ -21045,8 +21040,19 @@ public sealed partial class FlowAutoGenerator
         var brief = record.ProductBrief?.Trim() ?? string.Empty;
         var channel = record.TradeChannel?.Trim() ?? string.Empty;
 
-        if (brief.Contains("抖音", StringComparison.Ordinal)
-            || originalPostscript.Contains("抖音", StringComparison.Ordinal))
+        if (AgriculturalPostscriptRules.RequiresNaConsumerPrefix(bank, record))
+        {
+            return $"NA{time:yyyyMMdd}{RandomDigits(seed, 23)}{originalPostscript}";
+        }
+
+        if (string.IsNullOrWhiteSpace(originalPostscript))
+        {
+            return string.Empty;
+        }
+
+        if (!AgriculturalPostscriptRules.IsPersonalAgriculturalBank(bank)
+            && (brief.Contains("抖音", StringComparison.Ordinal)
+                || originalPostscript.Contains("抖音", StringComparison.Ordinal)))
         {
             return $"NA{time:yyyyMMdd}{RandomDigits(seed, 23)}{originalPostscript}";
         }

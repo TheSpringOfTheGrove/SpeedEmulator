@@ -4921,6 +4921,7 @@ public sealed class ZhenchengFlowGenerationAdapter
             }
 
             var generatedRemark = CreateAgriculturalPostscript(
+                request.Bank,
                 record,
                 TryInvokeVendorFlowString(createVendorRemarkMethod, vendorRecord));
             if (string.IsNullOrWhiteSpace(generatedRemark))
@@ -4996,12 +4997,21 @@ public sealed class ZhenchengFlowGenerationAdapter
             return $"{letters[RandomNumberGenerator.GetInt32(0, letters.Length)]}{digits}";
         }
 
-        private static string CreateAgriculturalPostscript(FlowRecord record, string? vendorPostscript)
+        private static string CreateAgriculturalPostscript(Bank bank, FlowRecord record, string? vendorPostscript)
         {
             var originalPostscript = FirstNonEmpty(record.Remark?.Trim(), vendorPostscript?.Trim());
             if (HasGeneratedAgriculturalPostscriptPrefix(originalPostscript))
             {
                 return originalPostscript;
+            }
+
+            var time = record.AccountTime ?? DateTime.Today;
+            var brief = record.ProductBrief?.Trim() ?? string.Empty;
+            var channel = record.TradeChannel?.Trim() ?? string.Empty;
+
+            if (AgriculturalPostscriptRules.RequiresNaConsumerPrefix(bank, record))
+            {
+                return $"NA{time:yyyyMMdd}{RandomDigits(23)}{originalPostscript}";
             }
 
             var postscriptText = FirstNonEmpty(originalPostscript, ResolveAgriculturalPostscriptText(record));
@@ -5010,12 +5020,9 @@ public sealed class ZhenchengFlowGenerationAdapter
                 return string.Empty;
             }
 
-            var time = record.AccountTime ?? DateTime.Today;
-            var brief = record.ProductBrief?.Trim() ?? string.Empty;
-            var channel = record.TradeChannel?.Trim() ?? string.Empty;
-
-            if (brief.Contains("抖音", StringComparison.Ordinal)
-                || postscriptText.Contains("抖音", StringComparison.Ordinal))
+            if (!AgriculturalPostscriptRules.IsPersonalAgriculturalBank(bank)
+                && (brief.Contains("抖音", StringComparison.Ordinal)
+                    || postscriptText.Contains("抖音", StringComparison.Ordinal)))
             {
                 return $"NA{time:yyyyMMdd}{RandomDigits(23)}{postscriptText}";
             }
