@@ -4,7 +4,7 @@ namespace SpeedEmulator.Services;
 
 internal static class AgriculturalPostscriptRules
 {
-    private static readonly HashSet<string> NaConsumerSummaries = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> NaSummaries = new(StringComparer.Ordinal)
     {
         "微信支付",
         "抖音支付",
@@ -20,14 +20,26 @@ internal static class AgriculturalPostscriptRules
             && string.Equals(bank.Type, BankTypes.Personal, StringComparison.Ordinal);
     }
 
-    public static bool RequiresNaConsumerPrefix(Bank bank, FlowRecord record)
+    public static bool RequiresNaPrefix(Bank bank, FlowRecord record)
     {
-        if (!IsPersonalAgriculturalBank(bank)
-            || !string.Equals(record.CashCheck?.Trim(), "消费", StringComparison.Ordinal))
+        if (!IsPersonalAgriculturalBank(bank))
         {
             return false;
         }
 
-        return NaConsumerSummaries.Contains(record.ProductBrief?.Trim() ?? string.Empty);
+        return NaSummaries.Contains(record.ProductBrief?.Trim() ?? string.Empty);
+    }
+
+    public static bool RequiresUaPrefix(Bank bank, FlowRecord record)
+    {
+        if (!IsPersonalAgriculturalBank(bank))
+        {
+            return false;
+        }
+
+        var oppositeAccount = record.OppositeAccount?.Trim() ?? string.Empty;
+        var oppositeBank = record.OppositeBank?.Trim() ?? string.Empty;
+        return oppositeAccount.Length is > 0 and < 15
+            && string.IsNullOrWhiteSpace(oppositeBank);
     }
 }

@@ -5009,9 +5009,26 @@ public sealed class ZhenchengFlowGenerationAdapter
             var brief = record.ProductBrief?.Trim() ?? string.Empty;
             var channel = record.TradeChannel?.Trim() ?? string.Empty;
 
-            if (AgriculturalPostscriptRules.RequiresNaConsumerPrefix(bank, record))
+            var isPersonalAgriculturalBank = AgriculturalPostscriptRules.IsPersonalAgriculturalBank(bank);
+            if (AgriculturalPostscriptRules.RequiresNaPrefix(bank, record))
             {
                 return $"NA{time:yyyyMMdd}{RandomDigits(23)}{originalPostscript}";
+            }
+
+            if (isPersonalAgriculturalBank)
+            {
+                if (brief.Contains("代付", StringComparison.Ordinal)
+                    && originalPostscript.Contains("零钱提现", StringComparison.Ordinal))
+                {
+                    return $"NG{time:yyyyMMdd}{RandomDigits(23)}{originalPostscript}";
+                }
+
+                if (AgriculturalPostscriptRules.RequiresUaPrefix(bank, record))
+                {
+                    return $"UA{time:MMdd}{RandomDigits(12)}{originalPostscript}";
+                }
+
+                return originalPostscript;
             }
 
             var postscriptText = FirstNonEmpty(originalPostscript, ResolveAgriculturalPostscriptText(record));
@@ -5020,9 +5037,8 @@ public sealed class ZhenchengFlowGenerationAdapter
                 return string.Empty;
             }
 
-            if (!AgriculturalPostscriptRules.IsPersonalAgriculturalBank(bank)
-                && (brief.Contains("抖音", StringComparison.Ordinal)
-                    || postscriptText.Contains("抖音", StringComparison.Ordinal)))
+            if (brief.Contains("抖音", StringComparison.Ordinal)
+                || postscriptText.Contains("抖音", StringComparison.Ordinal))
             {
                 return $"NA{time:yyyyMMdd}{RandomDigits(23)}{postscriptText}";
             }
