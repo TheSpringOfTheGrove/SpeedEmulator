@@ -7753,7 +7753,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return;
         }
 
-        NormalizeAgriculturalPaperPaperRowFields(source, values, target);
+        NormalizeAgriculturalPaperPaperRowFields(context, source, values, target);
 
         TrimTextProperty(target, nameof(FlowRecord.NetNum), 8);
         TrimTextProperty(target, nameof(FlowRecord.TradePlace), 8);
@@ -8448,6 +8448,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
     }
 
     private static void NormalizeAgriculturalPaperPaperRowFields(
+        PrintRenderContext context,
         FlowRecord source,
         IReadOnlyDictionary<string, object?> values,
         object target)
@@ -8479,10 +8480,13 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var paperSubrowDetail = NormalizeSingleLinePrintText(longDetail ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(oppositeUsername))
         {
+            var printableOppositeUsername = IsAgriculturalBankPersonalPaperTemplate7(context)
+                ? oppositeUsername
+                : LimitAgriculturalPaperSubrowText(oppositeUsername);
             Set(
                 target,
                 nameof(FlowRecord.OppositeUsername),
-                PrepareAgriculturalPaperCounterpartyText(LimitAgriculturalPaperSubrowText(oppositeUsername)));
+                PrepareAgriculturalPaperCounterpartyText(printableOppositeUsername));
         }
 
         if (!string.IsNullOrWhiteSpace(subAccountToken))
@@ -8944,6 +8948,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             && templateName.Contains("\u7EB8\u8D28\u7248", StringComparison.Ordinal);
 
         return isAgriculturalBank && isPersonalPaper;
+    }
+
+    private static bool IsAgriculturalBankPersonalPaperTemplate7(PrintRenderContext context)
+    {
+        return IsAgriculturalBankPersonalPaperTemplate(context)
+            && string.Equals(context.Template.Name, "农行个人纸质版7", StringComparison.Ordinal);
     }
 
     private static bool IsAgriculturalBankPersonalElectronicTemplate(PrintRenderContext context)
