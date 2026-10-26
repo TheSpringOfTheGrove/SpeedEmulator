@@ -251,6 +251,10 @@ public sealed partial class FlowAutoGenerator
         {
             return GenerateBankOfChinaResult(request, start, end, openingBalance, random);
         }
+        if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
+        {
+            return GenerateConstructionBankResult(request, start, end, openingBalance, random);
+        }
 
         var estimatedRecordCapacity = IsWechatBank(request.Bank)
             ? Math.Max(512, ((end.Date - start.Date).Days + 1) * 24)
@@ -798,6 +802,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
+            return CorrectCcbResult(request, source, repairNegative: true);
         if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
             return CorrectBankOfChinaResult(request, source, repairNegative: true);
         request = ExcludeUngeneratableReferenceRules(request);
@@ -895,6 +901,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
+            return CorrectCcbResult(request, source, repairNegative: true);
         if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
             return CorrectBankOfChinaResult(request, source, repairNegative: false);
         request = ExcludeUngeneratableReferenceRules(request);
