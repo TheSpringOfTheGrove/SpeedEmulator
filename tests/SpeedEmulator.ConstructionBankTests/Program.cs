@@ -5,7 +5,7 @@ using SpeedEmulator.Services;
 
 if (args.Contains("--saved-config", StringComparer.Ordinal))
 {
-    TestSavedConfiguration();
+    TestSavedConfiguration(args.Contains("--vary-counts", StringComparer.Ordinal));
     return 0;
 }
 
@@ -29,7 +29,12 @@ var tests = new (string Name, Action Run)[]
     ("日期密度已满时同参照时间对调修正且不改金额", TestRepairExchange),
     ("利息重算后收支和末余额仍满足预算", TestInterest),
     ("固定次数与均匀金额预算不兼容时明确报错", TestImpossibleBudget),
-    ("相同种子可复现、不同种子有变化且不改配置", TestReproducibility)
+    ("相同种子可复现、不同种子有变化且不改配置", TestReproducibility),
+    ("同配置可选明细条数动态，固定项目和必现次数不变", TestDynamicOptionalCounts),
+    ("仅一个可选金额区间时也选择不同可行条数", TestSingleFamilyDynamicCounts),
+    ("一分尾差可由三笔合法金额共同闭合", TestThreeRowCentClosure),
+    ("一年期宽工资范围配置可完成负余额修正", TestWideSalaryYear),
+    ("工资前支出可顺延，支出软密度限制不能阻断合法生成", TestExpenseDensityFallback)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -512,7 +517,97 @@ static void TestReproducibility()
     Check(before == JsonSerializer.Serialize(request), "不能改写用户参照或配置");
 }
 
-static void TestSavedConfiguration()
+static void TestDynamicOptionalCounts()
+{
+    var totals = new HashSet<int>();
+    var smallRangeCounts = new HashSet<int>();
+    for (var seed = 78001; seed < 78013; seed++)
+    {
+        var request = Reported(); var result = Generate(request, seed); Validate(request, result);
+        Check(result.MinimumBalance >= -0.009, "动态笔数不能留下负余额");
+        totals.Add(result.Records.Count); smallRangeCounts.Add(Source(result, 18).Count);
+        Check(Source(result, 1, "Const").Count == 24, "动态笔数不能改固定工资次数");
+        Check(Source(result, 3).Count == 25, "动态笔数不能改每月必现次数");
+    }
+    Console.WriteLine($"  dynamic counts: totals=[{string.Join(',', totals.Order())}], small-range counts=[{string.Join(',', smallRangeCounts.Order())}]");
+    Check(totals.Count >= 5, "同配置总条数不能固定或仅偶尔相差一条");
+    Check(smallRangeCounts.Count >= 5, "可选明细自己的条数也应动态");
+}
+
+static void TestSingleFamilyDynamicCounts()
+{
+    var counts = new HashSet<int>();
+    for (var seed = 79001; seed < 79021; seed++)
+    {
+        var request = Request(Config(19000, 0), [Rule(1, 10, 200, -1), Rule(2, 100, 300, 2, true)]);
+        var result = Generate(request, seed); Validate(request, result);
+        counts.Add(Source(result, 1).Count);
+        var frequencies = Source(result, 1).GroupBy(Amount).Select(group => group.Count()).ToArray();
+        Check(frequencies.Max() - frequencies.Min() <= 1, "单一区间动态笔数仍保留合法金额均匀覆盖");
+    }
+    Check(counts.Count > 1, "仅一个可选金额区间也不应固定为唯一估计笔数");
+    Console.WriteLine($"  single-family counts=[{string.Join(',', counts.Order())}]");
+    var forced = Request(Config(1000, 0), [Rule(1, 100, 100, 0), Rule(2, 100, 100, 0, true)]);
+    var forcedResult = Generate(forced); Validate(forced, forcedResult);
+    Check(Source(forcedResult, 1).Count == 10 && Source(forcedResult, 2).Count == 10,
+        "金额及预算只允许唯一条数时不能强行随机增删");
+}
+
+static void TestThreeRowCentClosure()
+{
+    for (var seed = 79501; seed < 79521; seed++)
+    {
+        var config = Config(10, 1.99);
+        config.StartTime = new DateTime(2025, 10, 1); config.EndTime = new DateTime(2025, 10, 31);
+        var rules = new[] { Rule(1, 1, 10, 0), Rule(2, 0.01, 0.99, 2), Rule(3, 0.01, 0.99, 2), Rule(4, 10, 10, 0, true) };
+        foreach (var rule in rules) rule.PercentMonth = 1;
+        var request = Request(config, rules); var result = Generate(request, seed); Validate(request, result);
+        Check(result.Records.Count == 4, "不能用增删必现行解决一分尾差");
+    }
+}
+
+static void TestWideSalaryYear()
+{
+    var runs = Environment.GetEnvironmentVariable("SPEEDEMULATOR_CCB_STRESS") == "1" ? 100 : 10;
+    for (var seed = 41026; seed < 41026 + runs; seed++)
+    {
+        var request = Reported(interest: true);
+        request.Config.StartTime = new DateTime(2025, 9, 20);
+        request.Config.EndTime = new DateTime(2026, 9, 23);
+        request.ConstItems[0].MaxMoney = 27000;
+        var result = Generate(request, seed); Validate(request, result);
+        Check(result.MinimumBalance >= -0.009, $"一年期宽工资范围出现负余额: seed={seed}, minimum={result.MinimumBalance:F2}");
+        Check(Source(result, 1, "Const").Count == 12 && Source(result, 1, "Const").All(row => row.AccountTime!.Value.Day == 15),
+            "一年期固定工资日期或次数改变");
+        Check(Source(result, 3).Count == 13, "一年期每月必现次数改变");
+    }
+    Console.WriteLine($"  wide salary/year: {runs} seeds succeeded");
+}
+
+static void TestExpenseDensityFallback()
+{
+    var config = Config(1000, 0); config.OpeningBalance = 0;
+    config.StartTime = new DateTime(2025, 10, 1); config.EndTime = new DateTime(2025, 10, 19);
+    var expense = Rule(1, 100, 200, 0); expense.PercentMonth = 7; expense.TradeHoliday = false;
+    var salary = new GenerateConstRule
+    {
+        Index = 1, IsCheck = true, IncomeAttribute = "收入", MinMoney = 1000, MaxMoney = 1000,
+        FloutLength = 0, FixDay = "15", StartDay = 15, EndDay = 17
+    };
+    for (var seed = 79601; seed < 79606; seed++)
+    {
+        var request = Request(config, [expense], [salary]); var result = Generate(request, seed); Validate(request, result);
+        var rows = Source(result, 1);
+        Check(result.MinimumBalance >= -0.009 && result.OpeningBalance == 0, "不能用负余额或增加期初余额绕过缺口");
+        Check(rows.Count == 7 && rows.All(row => row.AccountTime!.Value.Day is 18 or 19), "7笔必现支出须在工资后且保留周末限制");
+        Check(rows.GroupBy(row => row.AccountTime!.Value.Date).Max(group => group.Count()) >= 4,
+            "不能把自动密度上限3笔当成用户硬限制");
+        var pay = Source(result, 1, "Const").Single();
+        Check(pay.AccountTime!.Value.Day == 15 && pay.TradeMoney == 1000, "工资固定日期和金额不能改动");
+    }
+}
+
+static void TestSavedConfiguration(bool varyCounts = false)
 {
     var root = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SpeedEmulator");
     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -536,6 +631,15 @@ static void TestSavedConfiguration()
     var result = Generate(request, 41026); Validate(request, result, 0.51, 0.51);
     Check(before == JsonSerializer.Serialize(request), "实际配置不能被改写");
     Console.WriteLine($"ACTUAL_CONFIG rows={result.Records.Count} income={result.IncomeTotal:F2} expense={result.ExpenseTotal:F2} ending={result.FinalBalance:F2} minimum={result.MinimumBalance:F2}");
+    if (result.MinimumBalance < -0.009)
+    {
+        var negative = result.Records.First(row => row.Balance < -0.009);
+        var firstPay = result.Records.Where(row => row.TradeMoney > 0 && !FlowGeneratedRowKinds.IsSystemInterest(row))
+            .Min(row => row.AccountTime!.Value);
+        Console.WriteLine($"NEGATIVE_AUDIT first={negative.AccountTime:yyyy-MM-dd HH:mm:ss} amount={negative.TradeMoney:F2} balance={negative.Balance:F2} source={Kind(negative)}#{negative.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex", "system")} firstPay={firstPay:yyyy-MM-dd HH:mm:ss}");
+        var correction = new FlowAutoGenerator().ApplyNegativeBalanceCorrection(request, result);
+        Console.WriteLine($"NEGATIVE_AFTER_CORRECTION minimum={correction.MinimumBalance:F2}");
+    }
     var ordinaryIncome = result.Records.Where(row => row.TradeMoney > 0 && !FlowGeneratedRowKinds.IsSystemInterest(row)).ToList();
     var firstDate = result.Records.Min(row => row.AccountTime!.Value.Date);
     Console.WriteLine($"DATE_AUDIT maxIncomePerDay={ordinaryIncome.GroupBy(row => row.AccountTime!.Value.Date).Max(group => group.Count())} firstDayIncomeCount={ordinaryIncome.Count(row => row.AccountTime!.Value.Date == firstDate)} maxMonthIncomeShare={ordinaryIncome.GroupBy(row => row.AccountTime!.Value.ToString("yyyy-MM")).Max(group => group.Sum(Amount)) / result.IncomeTotal:P1}");
@@ -543,6 +647,21 @@ static void TestSavedConfiguration()
     {
         var rows = Source(result, index);
         Console.WriteLine($"rule={index} count={rows.Count} min={rows.Min(Amount):F2} max={rows.Max(Amount):F2} below10={rows.Count(row => Amount(row) < 10)} distinct={rows.Select(Amount).Distinct().Count()}");
+    }
+    if (varyCounts)
+    {
+        var totals = new List<int> { result.Records.Count };
+        for (var seed = 41027; seed < 41031; seed++)
+        {
+            var variation = Generate(request, seed); Validate(request, variation, 0.51, 0.51);
+            Check(variation.MinimumBalance >= -0.009, "实际配置动态笔数不能出现负余额");
+            Check(Source(variation, 1, "Const").Count == Source(result, 1, "Const").Count, "实际固定工资次数改变");
+            Check(Source(variation, 3).Count == Source(result, 3).Count, "实际每月必现次数改变");
+            totals.Add(variation.Records.Count);
+        }
+        Check(totals.Distinct().Count() > 1, "实际配置总条数仍然固定");
+        Check(before == JsonSerializer.Serialize(request), "多次生成不能改写实际配置");
+        Console.WriteLine($"ACTUAL_COUNT_VARIATION totals=[{string.Join(',', totals)}]");
     }
     Console.WriteLine("READ_ONLY_AUDIT: no repository save, no app restart, no user data written.");
 }

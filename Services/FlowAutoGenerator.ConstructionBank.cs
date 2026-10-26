@@ -275,10 +275,15 @@ public sealed partial class FlowAutoGenerator
                 throw new InvalidOperationException("建行预算不足以覆盖全部勾选参照，请减少勾选项或提高预算。");
             foreach (var plan in optional) plan.Count = 1;
             var remaining = Math.Max(0, target - plans.Sum(plan => plan.Count * plan.Range.Mean));
-            foreach (var family in families)
+            // Vary the optional budget mix, rather than biasing amount samples or
+            // changing required occurrences. Equal ranges remain in one family.
+            var weights = families.Select(_ => 0.8d + random.NextDouble() * 0.4d).ToArray();
+            var weightTotal = weights.Sum();
+            for (var familyIndex = 0; familyIndex < families.Count; familyIndex++)
             {
+                var family = families[familyIndex];
                 var members = family.OrderBy(_ => random.Next()).ToArray();
-                var budget = members.Sum(plan => plan.Range.Mean) + remaining / families.Count;
+                var budget = members.Sum(plan => plan.Range.Mean) + remaining * weights[familyIndex] / weightTotal;
                 var estimate = Math.Round(budget / members.Average(plan => plan.Range.Mean));
                 if (estimate > MaximumFixedRuleRecordCount)
                     throw new InvalidOperationException("建行预计生成笔数超过单次上限，请调整金额范围或总额。");
@@ -300,6 +305,24 @@ public sealed partial class FlowAutoGenerator
                     .OrderBy(choice => choice.Error).ThenBy(_ => random.Next()).ToList();
                 if (choices.Count == 0) break;
                 choices[0].Plan.Count += choices[0].Change;
+            }
+            // With one optional family, normalized budget weights cannot vary.
+            // Try a neighbouring sample size; the existing range/precision solver
+            // retains it only when the configured budget is attainable.
+            if (families.Count == 1)
+            {
+                var change = random.Next(-1, 2);
+                var candidates = optional.Where(plan => plan.Range.Count > 1 && plan.Count + change >= 1)
+                    .OrderBy(_ => random.Next());
+                foreach (var plan in candidates)
+                {
+                    if (plans.Sum(item => (long)item.Count) + records.Count + change > MaximumFixedRuleRecordCount) break;
+                    var min = plans.Sum(item => item.Count * item.Range.Bounds.Min) + change * plan.Range.Bounds.Min;
+                    var max = plans.Sum(item => item.Count * item.Range.Bounds.Max) + change * plan.Range.Bounds.Max;
+                    if (target < min - 0.011d || target > max + 0.011d) continue;
+                    plan.Count += change;
+                    break;
+                }
             }
         }
 
@@ -384,11 +407,22 @@ public sealed partial class FlowAutoGenerator
             }
             return samples;
         }
+        // Rotate leftover strata around the legal-value ring. Always beginning
+        // at rank zero fixes their total range and can force one sample count,
+        // even though neighbouring counts have equally balanced value coverage.
+        var phase = remaining > 0 ? random.NextInt64(plan.Range.Count) : 0;
         for (var i = 0; i < remaining; i++)
         {
-            var lower = i * plan.Range.Count / remaining;
-            var upper = (i + 1L) * plan.Range.Count / remaining - 1;
-            samples.Add(new CcbSample(plan, lower, upper, random.NextInt64(lower, upper + 1)));
+            var lower = (i * plan.Range.Count / remaining + phase) % plan.Range.Count;
+            var upper = ((i + 1L) * plan.Range.Count / remaining - 1 + phase) % plan.Range.Count;
+            if (lower <= upper)
+                samples.Add(new CcbSample(plan, lower, upper, random.NextInt64(lower, upper + 1)));
+            else
+            {
+                var selected = (lower + random.NextInt64(plan.Range.Count - lower + upper + 1)) % plan.Range.Count;
+                samples.Add(new CcbSample(plan, selected >= lower ? lower : 0,
+                    selected >= lower ? plan.Range.Count - 1 : upper, selected));
+            }
         }
         return samples;
     }
@@ -396,6 +430,8 @@ public sealed partial class FlowAutoGenerator
     private static bool BalanceCcbSamples(List<CcbSample> samples, double target, Random random)
     {
         target = NearestCcbBudgetTarget(samples, target);
+        if (target < samples.Sum(sample => sample.Plan.Range.Value(sample.Lower)) - 0.009d
+            || target > samples.Sum(sample => sample.Plan.Range.Value(sample.Upper)) + 0.009d) return false;
         var total = RoundMoney(samples.Sum(sample => sample.Amount));
         for (var pass = 0; pass < 8 && Math.Abs(target - total) > 0.009d; pass++)
         {
@@ -426,7 +462,31 @@ public sealed partial class FlowAutoGenerator
             // to a row without changing its assigned distribution band.
             if (!changed && pass >= 3) break;
         }
-        return Math.Abs(target - total) <= 0.009d || CloseCcbSamplePair(samples, RoundMoney(target - total));
+        return Math.Abs(target - total) <= 0.009d || CloseCcbResidual(samples, RoundMoney(target - total));
+    }
+
+    private static bool CloseCcbResidual(List<CcbSample> samples, double delta)
+    {
+        if (CloseCcbSamplePair(samples, delta)) return true;
+        var movable = samples.Where(sample => sample.Lower < sample.Upper).ToList();
+        if (movable.Count < 3) return false;
+        var finestUnit = movable.Min(sample => sample.Plan.Range.Bounds.Unit);
+        foreach (var primary in movable.OrderBy(sample => sample.Plan.Range.Bounds.Unit <= finestUnit)
+                     .ThenBy(sample => sample.Plan.Range.Bounds.Unit))
+        {
+            var others = movable.Where(sample => !ReferenceEquals(sample, primary)).ToList();
+            foreach (var rank in new[] { primary.Selected - 2, primary.Selected - 1, primary.Selected + 1, primary.Selected + 2 })
+            {
+                if (rank < primary.Lower || rank > primary.Upper) continue;
+                var change = RoundMoney(primary.Plan.Range.Value(rank) - primary.Amount);
+                // Some nonzero-digit totals require a three-row move: e.g.
+                // -1.00 + 0.98 + 0.01 closes -0.01 without inventing a .00 value.
+                if (!CloseCcbSamplePair(others, RoundMoney(delta - change))) continue;
+                primary.Selected = rank;
+                return true;
+            }
+        }
+        return false;
     }
 
     private static double NearestCcbBudgetTarget(List<CcbSample> samples, double target)
@@ -678,7 +738,7 @@ public sealed partial class FlowAutoGenerator
     private sealed record CcbRepairRow(FlowRecord Row, FlowRuleBase Rule, CcbWindow Window,
         IReadOnlyList<DateTime> Dates, int DailyLimit = 0);
 
-    private sealed record CcbRepairMove(CcbRepairRow Item, DateTime Original, DateTime Destination)
+    private sealed record CcbRepairMove(CcbRepairRow Item, DateTime Original, DateTime Destination, int DensityPenalty = 0)
     {
         public bool SameMonth => Original.Year == Destination.Year && Original.Month == Destination.Month;
         public double Distance => Math.Abs((Original - Destination).TotalDays);
@@ -731,40 +791,50 @@ public sealed partial class FlowAutoGenerator
             var negative = records.FirstOrDefault(row => row.Balance < -0.009d);
             if (negative?.AccountTime is not DateTime cutoff) return;
             var deficit = -(negative.Balance ?? 0);
-            var funding = records.FirstOrDefault(row => row.AccountTime > cutoff && row.TradeMoney > 0 && row.Balance >= -0.009d)?.AccountTime;
-            var moves = new List<CcbRepairMove>();
-            foreach (var item in movable)
+            var funding = records.FirstOrDefault(row => row.AccountTime > cutoff && row.TradeMoney > 0
+                && !IsSystemInterestRecord(row))?.AccountTime;
+            CcbRepairMove? move = null;
+            var exchanged = false;
+            for (var expenseOverflow = 0; expenseOverflow <= 1; expenseOverflow++)
             {
-                var original = item.Row.AccountTime!.Value;
-                var income = item.Row.TradeMoney > 0;
-                if (income ? original <= cutoff : original > cutoff) continue;
-                var from = income ? item.Window.Start : new[] { cutoff.AddSeconds(1), funding?.AddSeconds(1) ?? cutoff.AddSeconds(1), item.Window.Start }.Max();
-                var to = income ? new[] { cutoff.AddSeconds(-1), item.Window.End }.Min() : item.Window.End;
-                if (from > to) continue;
-                // Search from the cash-flow gap outwards, never from the beginning
-                // or the end of the entire statement.
-                foreach (var date in income ? item.Dates.Reverse() : item.Dates)
+                var moves = new List<CcbRepairMove>();
+                foreach (var item in movable)
                 {
-                    if (date < from.Date || date > to.Date) continue;
-                    if (date != original.Date && (sourceCounts.GetValueOrDefault((item.Rule, date)) >= item.DailyLimit
-                        || state.GetSameDirectionCount(date, income) >= directionLimits[income])) continue;
-                    if ((date.Year != original.Year || date.Month != original.Month)
-                        && sourceMonthCounts.GetValueOrDefault((item.Rule, date.Year, date.Month))
-                            >= originalMonthCounts.GetValueOrDefault((item.Rule, date.Year, date.Month)) + 1) continue;
-                    if (!TryCcbRepairTime(date, from, to, item.Rule, income, state, random, out var time)) continue;
-                    moves.Add(new CcbRepairMove(item, original, time));
+                    var original = item.Row.AccountTime!.Value;
+                    var income = item.Row.TradeMoney > 0;
+                    if (expenseOverflow > 0 && income || (income ? original <= cutoff : original > cutoff)) continue;
+                    var from = income ? item.Window.Start : new[] { cutoff.AddSeconds(1), funding?.AddSeconds(1) ?? cutoff.AddSeconds(1), item.Window.Start }.Max();
+                    var to = income ? new[] { cutoff.AddSeconds(-1), item.Window.End }.Min() : item.Window.End;
+                    if (from > to) continue;
+                    // Income concentration remains constrained. Expense density is
+                    // a preference: it cannot make a legal cash-flow repair fail.
+                    foreach (var date in income ? item.Dates.Reverse() : item.Dates)
+                    {
+                        if (date < from.Date || date > to.Date) continue;
+                        var penalty = date == original.Date ? 0 : Math.Max(0, sourceCounts.GetValueOrDefault((item.Rule, date)) + 1 - item.DailyLimit)
+                            + Math.Max(0, state.GetSameDirectionCount(date, income) + 1 - directionLimits[income]);
+                        if (expenseOverflow == 0 && penalty > 0) continue;
+                        if (income && (date.Year != original.Year || date.Month != original.Month)
+                            && sourceMonthCounts.GetValueOrDefault((item.Rule, date.Year, date.Month))
+                                >= originalMonthCounts.GetValueOrDefault((item.Rule, date.Year, date.Month)) + 1) continue;
+                        if (!TryCcbRepairTime(date, from, to, item.Rule, income, state, random, out var time)) continue;
+                        moves.Add(new CcbRepairMove(item, original, time, penalty));
+                        if (expenseOverflow == 0) break;
+                    }
+                }
+                move = moves.OrderBy(candidate => !candidate.SameMonth).ThenBy(candidate => candidate.DensityPenalty)
+                    .ThenBy(candidate => candidate.Distance)
+                    .ThenBy(candidate => Math.Abs(candidate.Item.Row.TradeMoney ?? 0) + 0.009d < deficit)
+                    .ThenBy(candidate => Math.Abs(Math.Abs(candidate.Item.Row.TradeMoney ?? 0) - deficit)).FirstOrDefault();
+                if ((move is null || !move.SameMonth) && TryCcbRepairExchange(movable, cutoff, deficit, move))
+                {
+                    // Same-source exchanges preserve all occupied slots and counts.
+                    exchanged = true;
                     break;
                 }
+                if (move is not null) break;
             }
-            var move = moves.OrderBy(move => !move.SameMonth).ThenBy(move => move.Distance)
-                .ThenBy(move => Math.Abs(move.Item.Row.TradeMoney ?? 0) + 0.009d < deficit)
-                .ThenBy(move => Math.Abs(Math.Abs(move.Item.Row.TradeMoney ?? 0) - deficit)).FirstOrDefault();
-            if ((move is null || !move.SameMonth) && TryCcbRepairExchange(movable, cutoff, deficit, move))
-            {
-                // Same-source exchanges preserve every occupied slot and all
-                // source/day/month counts, so the scheduling indexes stay valid.
-                continue;
-            }
+            if (exchanged) continue;
             if (move is null) break;
             // Advancing income or delaying expense only improves intervening
             // balances. No amount, occurrence count, or configured window changes.
