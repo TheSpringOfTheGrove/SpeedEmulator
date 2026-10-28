@@ -50,6 +50,7 @@ internal static partial class Program
         if (args.Contains("--cgb-fields")) { TestGuangfaMerchantMapping(catalog, args); return; }
         if (args.Contains("--bocom-fields")) { TestBocomPersonalPdf(catalog, args); return; }
         if (args.Contains("--wechat-fields")) { TestWechatPersonalStatementFields(catalog); return; }
+        if (args.Contains("--ccb-serials")) { TestConstructionBankCorporateSerialNumbers(catalog, renderPdfs: true); return; }
         RunRegressions(catalog);
         if (args.Contains("--boc-render")) { RenderBankOfChinaTradeNames(catalog); return; }
         if (args.Contains("--abc-render")) { RenderAgriculturalOutlets(catalog); return; }

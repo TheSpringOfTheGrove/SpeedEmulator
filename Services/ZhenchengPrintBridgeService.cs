@@ -1972,7 +1972,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
+                Set(target, "SequenceNum", ResolveVendorPrintSequenceNumber(context, values, serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -2952,7 +2952,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
+                Set(target, "SequenceNum", ResolveVendorPrintSequenceNumber(context, values, serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -4610,7 +4610,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 var logNumber = FirstNotBlank(source.LogNum, GetValue(values, "LogNum"));
                 Set(target, "AccountNum", accountNumber);
                 Set(target, "Account", accountNumber);
-                Set(target, "SequenceNum", FirstNotBlank(GetValue(values, "SequenceNum"), serialNumber));
+                Set(target, "SequenceNum", ResolveVendorPrintSequenceNumber(context, values, serialNumber));
                 Set(target, "SerialNum", serialNumber);
                 if (IsAgriculturalBank(context.Bank))
                 {
@@ -4873,12 +4873,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return source;
         }
 
-        // The vendor CCB batch renderer treats the PDF's 1-based row number as
-        // a date-format token. Keep the original record intact and let the
-        // template use its own rendered row index instead.
+        // The imported PDF row number is not the bank transaction serial. Keep
+        // the real SerialNum and remove only the row-number aliases before the
+        // native templates inspect the record.
         var printRecord = source.Clone();
         printRecord.SequenceNum = string.Empty;
-        printRecord.SerialNum = string.Empty;
         printRecord.ExtraFields.Remove("序号");
         return printRecord;
     }
@@ -11601,32 +11600,12 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             return GetValue(CreateIcbcPersonalPrintValues(context.Bank, source), nameof(FlowRecord.SequenceNum)) ?? string.Empty;
         }
 
-        if (source.IsDocumentImported && IsCcbCorporatePaperSerialNumberTemplate(context))
-        {
-            var importedSerialNumber = NormalizeDocumentImportSerialNumber(FirstNotBlank(
-                source.SerialNum,
-                GetValue(values, "SerialNum"),
-                source.SequenceNum,
-                GetValue(values, "SequenceNum"),
-                source.LogNum,
-                GetValue(values, "LogNum")));
-
-            // These two native vendor documents split SerialNum at fixed positions.
-            // Their 8-14 character branch is invalid and throws from String.Substring;
-            // malformed imported footer text must therefore remain an empty serial cell.
-            return importedSerialNumber.Length is >= 8 and < 15
-                ? string.Empty
-                : importedSerialNumber;
-        }
-
-        if (source.IsDocumentImported && IsConstructionBank(context.Bank))
-        {
-            // Passing the PDF row number (1, 2, 3...) to the vendor CCB renderer
-            // makes its paged layout reduce AccountTime to a day-only token.
-            return $"P{Math.Max(1, source.Index):000000000}";
-        }
-
-        var serialNumber = context.Bank.FlowColumns.Any(column => column.Field == nameof(FlowRecord.SerialNum))
+        var isCcbCorporate = IsCcbCorporatePrintContext(context);
+        var serialNumber = isCcbCorporate
+            ? FirstNotBlank(
+                GetFlowExtraFieldValue(context.Bank, source, values, "交易流水号"),
+                GetValue(values, nameof(FlowRecord.SerialNum)))
+            : context.Bank.FlowColumns.Any(column => column.Field == nameof(FlowRecord.SerialNum))
             ? GetValue(values, nameof(FlowRecord.SerialNum)) ?? string.Empty
             : FirstNotBlank(
             GetValue(values, "SerialNum"),
@@ -11642,12 +11621,49 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (source.IsDocumentImported)
         {
-            return string.IsNullOrWhiteSpace(serialNumber)
+            serialNumber = string.IsNullOrWhiteSpace(serialNumber)
                 ? string.Empty
                 : NormalizeDocumentImportSerialNumber(serialNumber);
         }
+        else
+        {
+            serialNumber = NormalizePrintNumber(context, serialNumber);
+        }
 
-        return NormalizePrintNumber(context, serialNumber);
+        return PrepareCcbCorporatePaperSerialNumber(context, serialNumber);
+    }
+
+    private static string ResolveVendorPrintSequenceNumber(
+        PrintRenderContext context,
+        IReadOnlyDictionary<string, object?> values,
+        string serialNumber)
+    {
+        // Native CCB corporate templates do not agree on whether the transaction
+        // serial column reads SerialNum or SequenceNum. Both must receive the real
+        // transaction serial; never substitute the imported row number.
+        return IsCcbCorporatePrintContext(context)
+            ? serialNumber
+            : FirstNotBlank(GetValue(values, nameof(FlowRecord.SequenceNum)), serialNumber);
+    }
+
+    private static bool IsCcbCorporatePrintContext(PrintRenderContext context)
+    {
+        return IsConstructionBank(context.Bank)
+            && context.Bank.Type == BankTypes.Corporate;
+    }
+
+    private static string PrepareCcbCorporatePaperSerialNumber(PrintRenderContext context, string serialNumber)
+    {
+        if (!IsCcbCorporatePaperSerialNumberTemplate(context)
+            || serialNumber.Length is < 8 or >= 15)
+        {
+            return serialNumber;
+        }
+
+        // The vendor implementations for paper templates 8 and 9 always slice
+        // 6-7 characters after position 8. Invisible padding keeps the displayed
+        // serial unchanged while making those fixed slices safe.
+        return serialNumber.PadRight(15, '\u200B');
     }
 
     private static bool IsCcbCorporatePaperSerialNumberTemplate(PrintRenderContext context)
