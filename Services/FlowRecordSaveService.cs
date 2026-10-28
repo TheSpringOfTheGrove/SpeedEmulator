@@ -72,6 +72,7 @@ public sealed class FlowRecordSaveService : IFlowRecordSaveService
         for (var index = 0; index < source.Count; index++)
         {
             FlowFormulaEvaluator.CopyEvaluatedValues(bank, evaluated[index], source[index]);
+            AlipayGeneratedNumberRules.CopyState(bank, evaluated[index], source[index]);
         }
 
         return new FlowRecordSaveResult(source.Count, summary);
@@ -89,6 +90,7 @@ public sealed class FlowRecordSaveService : IFlowRecordSaveService
         for (var index = 0; index < source.Count; index++)
         {
             FlowFormulaEvaluator.CopyEvaluatedValues(bank, evaluated[index], source[index]);
+            AlipayGeneratedNumberRules.CopyState(bank, evaluated[index], source[index]);
         }
 
         return summary;
@@ -96,7 +98,9 @@ public sealed class FlowRecordSaveService : IFlowRecordSaveService
 
     private FlowFormulaEvaluationSummary Evaluate(Bank bank, IReadOnlyList<FlowRecord> records)
     {
-        return formulaEvaluator.Evaluate(bank, records, formulaDataSetService.Get(bank.Id));
+        var summary = formulaEvaluator.Evaluate(bank, records, formulaDataSetService.Get(bank.Id));
+        if (!summary.HasErrors) AlipayGeneratedNumberRules.Complete(bank, records);
+        return summary;
     }
 
     private static void ThrowIfInvalid(FlowFormulaEvaluationSummary summary)
