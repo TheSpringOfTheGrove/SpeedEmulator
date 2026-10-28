@@ -73,16 +73,19 @@ internal static partial class Program
         }
 
         const string longCounterpartyName = "淘鲜达网络科技有限公司";
-        var paper7 = catalog.Single(entry => entry.Bank.Name == "农行" && entry.Template.Name == "农行个人纸质版7");
-        var paper7Row = AgriculturalOutletRow(1, "139999");
-        paper7Row.OppositeUsername = longCounterpartyName;
-        foreach (var exporter in new[] { "VendorBridge", "DefaultQuestPdfExporter", "DefaultStimulsoftExporter" })
+        foreach (var templateName in new[] { "农行个人纸质版7", "农行个人纸质版8", "农行个人纸质版10" })
         {
-            Equal(
-                longCounterpartyName,
-                Value(Convert(Context(paper7, paper7Row), exporter)[0]!, nameof(FlowRecord.OppositeUsername)),
-                "农行个人纸质版7/完整对方户名/" + exporter);
-            count++;
+            var fullNameTemplate = catalog.Single(entry => entry.Bank.Name == "农行" && entry.Template.Name == templateName);
+            var fullNameRow = AgriculturalOutletRow(1, "139999");
+            fullNameRow.OppositeUsername = longCounterpartyName;
+            foreach (var exporter in new[] { "VendorBridge", "DefaultQuestPdfExporter", "DefaultStimulsoftExporter" })
+            {
+                Equal(
+                    longCounterpartyName,
+                    Value(Convert(Context(fullNameTemplate, fullNameRow), exporter)[0]!, nameof(FlowRecord.OppositeUsername)),
+                    templateName + "/完整对方户名/" + exporter);
+                count++;
+            }
         }
 
         var otherAgriculturalPaper = catalog.Single(entry => entry.Bank.Name == "农行" && entry.Template.Name == "农行个人纸质版6");
@@ -105,7 +108,7 @@ internal static partial class Program
             Equal(
                 longCounterpartyName,
                 Value(Convert(Context(otherBankPaper, otherBankRow), exporter)[0]!, nameof(FlowRecord.OppositeUsername)),
-                "其他银行模板不受农行纸质版7修复影响/" + exporter);
+                "其他银行模板不受农行纸质版7、8和10修复影响/" + exporter);
             count++;
         }
 
@@ -121,12 +124,12 @@ internal static partial class Program
         {
             var records = Enumerable.Range(1, 34).Select(index => AgriculturalOutletRow(index,
                 index % 3 == 0 ? "" : (index % 2 == 0 ? $"00{index:0000}" : $"13{index:0000}"), index % 2 == 0)).ToArray();
-            if (entry.Template.Name == "农行个人纸质版7")
+            if (entry.Template.Name is "农行个人纸质版7" or "农行个人纸质版8" or "农行个人纸质版10")
             {
                 records[0].ProductBrief = "支付宝";
                 records[0].OppositeAccount = "215500690";
                 records[0].OppositeUsername = "淘鲜达网络科技有限公司";
-                records[0].Remark = "纸质版7完整户名验证";
+                records[0].Remark = entry.Template.Name + "完整户名验证";
             }
             var first = Context(entry, records[0]);
             first.BankUser.AccountName = "测试勿作凭证";
@@ -145,7 +148,8 @@ internal static partial class Program
                 if (!text.Contains(row.TradePlace)) throw new Exception(entry.Template.Name + "/PDF缺失交易地点 " + row.TradePlace);
             foreach (var forbidden in new[] { "888888", "777777", "666666" })
                 if (text.Contains(forbidden)) throw new Exception(entry.Template.Name + "/PDF网点借用了其他字段 " + forbidden);
-            if (entry.Template.Name == "农行个人纸质版7" && !text.Contains("淘鲜达网络科技有限公司"))
+            if ((entry.Template.Name is "农行个人纸质版7" or "农行个人纸质版8" or "农行个人纸质版10")
+                && !text.Contains("淘鲜达网络科技有限公司"))
                 throw new Exception(entry.Template.Name + "/PDF仍截断完整对方户名");
             if (pdf.NumberOfPages < 2) throw new Exception(entry.Template.Name + "/未覆盖分页");
             report.Add(new { Template = entry.Template.Name, Path = path, Pages = pdf.NumberOfPages,

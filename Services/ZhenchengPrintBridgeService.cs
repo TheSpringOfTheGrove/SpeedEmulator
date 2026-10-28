@@ -8480,7 +8480,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         var paperSubrowDetail = NormalizeSingleLinePrintText(longDetail ?? string.Empty);
         if (!string.IsNullOrWhiteSpace(oppositeUsername))
         {
-            var printableOppositeUsername = IsAgriculturalBankPersonalPaperTemplate7(context)
+            var printableOppositeUsername = ShouldPreserveFullAgriculturalPaperCounterpartyName(context)
                 ? oppositeUsername
                 : LimitAgriculturalPaperSubrowText(oppositeUsername);
             Set(
@@ -8950,10 +8950,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         return isAgriculturalBank && isPersonalPaper;
     }
 
-    private static bool IsAgriculturalBankPersonalPaperTemplate7(PrintRenderContext context)
+    private static bool ShouldPreserveFullAgriculturalPaperCounterpartyName(PrintRenderContext context)
     {
         return IsAgriculturalBankPersonalPaperTemplate(context)
-            && string.Equals(context.Template.Name, "农行个人纸质版7", StringComparison.Ordinal);
+            && context.Template.Name is "农行个人纸质版7" or "农行个人纸质版8" or "农行个人纸质版10";
     }
 
     private static bool IsAgriculturalBankPersonalElectronicTemplate(PrintRenderContext context)
