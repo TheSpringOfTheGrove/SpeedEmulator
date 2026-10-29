@@ -51,18 +51,26 @@ internal static class SpdbPrintDocumentAdapter
                     foreach (var cell in row)
                     {
                         if (!columns.TryGetValue(Number(cell, "Column"), out var name)) continue;
-                        var field = name switch
+                        var value = name switch
                         {
-                            "交易账号" => nameof(FlowRecord.Account),
-                            "交易摘要" => nameof(FlowRecord.ProductBrief),
-                            "交易名称" => nameof(FlowRecord.ProductName),
+                            "交易账号" => Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.Account))) ?? string.Empty,
+                            "交易摘要" => Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.ProductBrief))) ?? string.Empty,
+                            "交易名称" => ResolveTransactionName(values),
                             _ => null
                         };
-                        if (field is not null) WriteText(cell, Convert.ToString(values.GetValueOrDefault(field)) ?? string.Empty, methods);
+                        if (value is not null) WriteText(cell, value, methods);
                     }
                 }
             }
         }
         if (nextRow != records.Count) throw new InvalidOperationException("未能完整绑定原生模板流水明细，已停止打印。");
+    }
+
+    private static string ResolveTransactionName(IReadOnlyDictionary<string, object?> values)
+    {
+        var transactionName = Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.ProductName))) ?? string.Empty;
+        return string.IsNullOrWhiteSpace(transactionName)
+            ? Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.ProductBrief))) ?? string.Empty
+            : transactionName;
     }
 }
