@@ -6,7 +6,7 @@ using static SpeedEmulator.Services.NativePrintDocumentAdapter;
 
 namespace SpeedEmulator.Services;
 
-/// <summary>修正已确认的原生跨列绑定；不把摘要写进流水号或其他业务字段。</summary>
+/// <summary>修正浦发个人电子版已确认的原生跨列绑定。</summary>
 internal static class SpdbPrintDocumentAdapter
 {
     internal static object Prepare(object document, Bank bank, IReadOnlyList<FlowRecord> records)
@@ -54,7 +54,7 @@ internal static class SpdbPrintDocumentAdapter
                         var value = name switch
                         {
                             "交易账号" => Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.Account))) ?? string.Empty,
-                            "交易摘要" => Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.ProductBrief))) ?? string.Empty,
+                            "交易摘要" => ResolveTransactionSummary(values),
                             "交易名称" => ResolveTransactionName(values),
                             _ => null
                         };
@@ -73,4 +73,7 @@ internal static class SpdbPrintDocumentAdapter
             ? Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.ProductBrief))) ?? string.Empty
             : transactionName;
     }
+
+    private static string ResolveTransactionSummary(IReadOnlyDictionary<string, object?> values)
+        => Convert.ToString(values.GetValueOrDefault(nameof(FlowRecord.SerialNum))) ?? string.Empty;
 }

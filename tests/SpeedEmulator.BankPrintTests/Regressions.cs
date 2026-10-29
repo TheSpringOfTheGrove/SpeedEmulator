@@ -35,7 +35,7 @@ internal static partial class Program
         TestGuangfaMerchantMapping(catalog, []);
         TestConstructionBankCorporateSerialNumbers(catalog);
         TestSpdbTransactionNameFallback(catalog);
-        Console.WriteLine("PASS 11 regression groups: 工行参照地区号、实际字段绑定、招行摘要导出及打印、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射、广发商户分户序号、建行对公交易流水号、浦发导入交易名称");
+        Console.WriteLine("PASS 11 regression groups: 工行参照地区号、实际字段绑定、招行摘要导出及打印、本地空值、操作地区来源、中行交易名称、农行交易网点、全行遗漏映射、广发商户分户序号、建行对公交易流水号、浦发电子版字段映射");
     }
 
     private static void TestDateGeneration(List<Entry> catalog)
