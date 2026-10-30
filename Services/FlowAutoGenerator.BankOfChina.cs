@@ -188,7 +188,7 @@ public sealed partial class FlowAutoGenerator
             var before = Math.Abs(row.TradeMoney ?? 0);
             var next = ClampAmountToBounds(Math.Clamp(before + remaining, bounds.Min, bounds.Max), bounds);
             var tail = (int)Math.Round(next * 100d, MidpointRounding.AwayFromZero) % 100;
-            if (tail is >= 1 and <= 9)
+            if (tail is >= 1 and <= 9 || !increasing && tail == 11 && Math.Floor(next) == Math.Floor(bounds.Min))
             {
                 var ticks = (ulong)(row.AccountTime?.Ticks ?? row.Index);
                 var bucket = (int)((ticks ^ (ticks >> 17) ^ (uint)row.Index * 0x9E3779B9u) % 72);

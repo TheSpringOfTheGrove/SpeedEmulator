@@ -9,6 +9,42 @@ public sealed partial class FlowAutoGenerator
     private const string CentTailLast = "__CentTailLastCents";
     private const int CentTailMaximumMoves = 8192;
 
+    private static void ValidateGeneratedCentTailRules(FlowAutoGenerationRequest request)
+    {
+        var activeConstItems = request.ConstItems.Where(rule => !string.IsNullOrWhiteSpace(rule.FixDay));
+        foreach (var rule in request.References.Cast<FlowRuleBase>().Concat(activeConstItems).Where(rule => rule.IsCheck && rule.FloutLength == 2))
+        {
+            if (TryGetRuleAmountBounds(rule, out _)) continue;
+            var source = rule is GenerateConstRule ? "固定日期项目" : "参照明细";
+            throw new InvalidOperationException(
+                $"{source}第 {rule.Index} 行金额范围 {rule.MinMoney:0.00}～{rule.MaxMoney:0.00} 与尾数规则冲突：" +
+                "普通生成流水严格禁止 .01～.09，且两位小数的末位不能为 0。请调整该行金额范围、固定金额或小数位。");
+        }
+    }
+
+    private static FlowAutoGenerationResult EnsureGeneratedCentTailResult(
+        FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
+    {
+        foreach (var row in result.Records)
+        {
+            if (row.IsDocumentImported || IsSystemInterestRecord(row) || row.BankId != request.Bank.Id || row.BankUserId != request.BankUser.Id) continue;
+            var source = row.ExtraFields.GetValueOrDefault(SourceKindField);
+            // Persisted/manual rows have no generation metadata. ID-zero rows
+            // also cover newly synthesized ordinary rows without a source rule.
+            if (row.Id != 0 && source is not (ReferenceSourceKind or ConstSourceKind)) continue;
+            var money = row.TradeMoney ?? 0;
+            if (!double.IsFinite(money)) continue;
+            var tail = Math.Abs(Math.Round(money * 100d, MidpointRounding.AwayFromZero) % 100d);
+            if (tail is < 1 or > 9) continue;
+            var item = source == ConstSourceKind ? "固定日期项目" : "参照明细";
+            var index = row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? row.Index.ToString(CultureInfo.InvariantCulture);
+            throw new InvalidOperationException(
+                $"生成结果未通过严格尾数校验：{item}第 {index} 行金额 {money:0.00} 命中禁止的 .01～.09 尾数。" +
+                "当前金额范围、固定金额或收支目标无法同时满足本次校验，请调整配置后重新生成；不会返回含禁用尾数的生成结果。");
+        }
+        return result;
+    }
+
     private static FlowAutoGenerationResult CompleteCorrectedGeneratedResult(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult source, FlowAutoGenerationResult corrected)
     {
@@ -26,10 +62,14 @@ public sealed partial class FlowAutoGenerator
             if (!amounts.TryGetValue(key, out var count)) return CompleteGeneratedResult(request, corrected);
             if (count == 1) amounts.Remove(key); else amounts[key] = count - 1;
         }
-        return amounts.Count == 0 ? CompleteAlipayResult(request, corrected) : CompleteGeneratedResult(request, corrected);
+        return amounts.Count == 0 ? EnsureGeneratedCentTailResult(request, CompleteAlipayResult(request, corrected)) : CompleteGeneratedResult(request, corrected);
     }
 
     private static FlowAutoGenerationResult CompleteGeneratedResult(
+        FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
+        => EnsureGeneratedCentTailResult(request, CompleteGeneratedResultCore(request, result));
+
+    private static FlowAutoGenerationResult CompleteGeneratedResultCore(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
     {
         // First establish the final serial order, including any existing Alipay
@@ -46,7 +86,8 @@ public sealed partial class FlowAutoGenerator
         entries = CreateCentTailEntries(request, result.Records);
         if (TryCompleteCentTails(request, result, entries, sameDayOnly: false, out adjusted, checkEachMove: true, preferSmallMoves: true)) return adjusted;
         // A same-day retry preserves the daily ledger even when the interest
-        // configuration cannot verify a cross-day move. Targets remain soft.
+        // configuration cannot verify a cross-day move. The outer guard rejects
+        // any ordinary low tail that the bounded cleanup cannot safely remove.
         entries = CreateCentTailEntries(request, result.Records);
         return TryCompleteCentTails(request, result, entries, sameDayOnly: true, out adjusted) ? adjusted : result;
     }

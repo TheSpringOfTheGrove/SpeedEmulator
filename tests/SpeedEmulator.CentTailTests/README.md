@@ -2,17 +2,20 @@
 
 Run `dotnet run --project tests/SpeedEmulator.CentTailTests -c Release`.
 
-The tests use synthetic records only. They cover all 34 bank categories, separate
-income/expense quotas, unchanged totals/counts/times, per-row cumulative limits,
-monthly and intraday detail budgets, CCB amount strata, interest rollback, negative
-balances, Alipay amount-bearing serials, all correction exits, and a 10,000-row bound.
+Ordinary generated transactions strictly exclude `.01` through `.09` tails.
+The shared two-decimal legal-value predicate excludes them during sampling,
+clamping and closing. CCB ranking enumerates 81 legal cent values per yuan and
+its budget solver can cross the full forbidden interval. Existing nonzero-last-
+digit precision semantics remain in effect.
 
-The policy is a best-effort final pass on variable two-decimal reference records.
-It never changes fixed-date items, fixed amounts, imported/manual records or other
-precisions, and never relaxes mathematical bounds to satisfy a style quota.
+All successful generation and balance-correction exits check the final records.
+There is no successful-return fallback containing forbidden ordinary tails.
+Conflicting reference ranges and fixed amounts are identified before generation;
+the generator does not change the user's configuration to make them fit.
+Automatic settlement interest/tax, document-imported rows and persisted manual
+rows are retained at their actual values, as explicitly requested.
 
-The target is zero `.01` through `.09` tails whenever feasible, including small
-groups. Failed batch interest checks retain safe individual pairs. Personal BOC
-closing first plans non-low, varied tails on references before interest settles;
-an incomplete preferred plan is discarded and the original exact-budget path is
-used. Final interest is always verified from the actual ledger.
+Tests use synthetic data only, including all nine forbidden suffixes, income and
+expense directions, fixed/reference/synthetic rows, all 34 bank categories with
+three seeded public generation runs and every correction exit, exact CCB rank
+round trips, budget/interest constraints, immutable inputs, and 10,000-row cleanup.

@@ -35,6 +35,7 @@ public sealed partial class FlowAutoGenerator
         private readonly long first;
         private readonly long last;
         private readonly bool nonzeroDigit;
+        private readonly bool excludeLowCentTail;
         private readonly long offset;
         public long Count { get; }
         public double Mean => (Value(0) + Value(Count - 1)) / 2d;
@@ -48,17 +49,26 @@ public sealed partial class FlowAutoGenerator
             first = checked((long)Math.Round(bounds.Min / bounds.Unit));
             last = checked((long)Math.Round(bounds.Max / bounds.Unit));
             nonzeroDigit = RequiresNonZeroPrecisionDigit(bounds);
+            excludeLowCentTail = bounds.Precision == 2;
             offset = Through(first - 1);
             Count = Through(last) - offset;
             if (Count <= 0) throw new InvalidOperationException("建行金额区间内没有符合小数位规则的金额。");
         }
 
-        private long Through(long step) => nonzeroDigit ? step - step / 10 : step;
+        private long Through(long step)
+        {
+            if (!excludeLowCentTail) return nonzeroDigit ? step - step / 10 : step;
+            var tail = step % 100;
+            return step / 100 * 81 + (tail < 11 ? 0 : (tail / 10 - 1) * 9 + tail % 10);
+        }
         public double Value(long rank)
         {
             rank = Math.Clamp(rank, 0, Count - 1);
             var position = offset + rank + 1;
-            var step = nonzeroDigit ? ((position - 1) / 9 * 10) + (position - 1) % 9 + 1 : first + rank;
+            var index = position - 1;
+            var step = excludeLowCentTail
+                ? index / 81 * 100 + (index % 81 / 9 + 1) * 10 + index % 9 + 1
+                : nonzeroDigit ? index / 9 * 10 + index % 9 + 1 : first + rank;
             return RoundMoney(step * Bounds.Unit);
         }
 
@@ -389,20 +399,39 @@ public sealed partial class FlowAutoGenerator
         var remaining = (int)(plan.Count % plan.Range.Count);
         if (plan.Range.Count > ReferenceAmountDistributionStepLimit && remaining > 0)
         {
-            // Ten equally sized rank bands keep range coverage stable while leaving
-            // enough room for interest/cent reconciliation inside the assigned bands.
+            // Keep monetary bands uniform even when precision removes a whole
+            // cent interval. Pure rank bands can drift across the original
+            // equal-width boundaries after excluding .01 through .09.
             var bands = Math.Min(10, remaining);
+            var monetary = new (long Lower, long Upper)[bands];
+            var useMonetary = plan.Range.Bounds.Precision == 2;
+            var rawMin = Math.Max(0, plan.Rule.MinMoney ?? plan.Range.Bounds.Min);
+            var rawMax = plan.Rule.MaxMoney ?? plan.Range.Bounds.Max;
+            for (var band = 0; useMonetary && band < bands; band++)
+            {
+                var lower = band == 0 ? 0 : plan.Range.RankAtOrBelow(rawMin + (rawMax - rawMin) * band / bands - 0.00001d) + 1;
+                var upper = band == bands - 1 ? plan.Range.Count - 1 : plan.Range.RankAtOrBelow(rawMin + (rawMax - rawMin) * (band + 1) / bands - 0.00001d);
+                monetary[band] = (lower, upper);
+                if (upper - lower + 1 < remaining / bands + (band < remaining % bands ? 1 : 0)) useMonetary = false;
+            }
             var used = new HashSet<long>();
             foreach (var band in Enumerable.Range(0, bands).OrderBy(_ => random.Next()))
             {
                 var count = remaining / bands + (band < remaining % bands ? 1 : 0);
-                var lower = band * plan.Range.Count / bands;
-                var upper = (band + 1L) * plan.Range.Count / bands - 1;
+                var lower = useMonetary ? monetary[band].Lower : band * plan.Range.Count / bands;
+                var upper = useMonetary ? monetary[band].Upper : (band + 1L) * plan.Range.Count / bands - 1;
                 for (var i = 0; i < count; i++)
                 {
+                    // Preserve small edge strata inside the first/last monetary
+                    // bands. Budget closing must not move every low-end sample
+                    // above the bottom of an otherwise uniform wide range.
+                    var edge = useMonetary && remaining >= 20 && i == 0;
+                    var edgeWidth = Math.Max(1, (upper - lower + 1) / 10);
+                    var sampleLower = edge && band == bands - 1 ? upper - edgeWidth + 1 : lower;
+                    var sampleUpper = edge && band == 0 ? lower + edgeWidth - 1 : upper;
                     long rank;
-                    do { rank = random.NextInt64(lower, upper + 1); } while (!used.Add(rank));
-                    samples.Add(new CcbSample(plan, lower, upper, rank));
+                    do { rank = random.NextInt64(sampleLower, sampleUpper + 1); } while (!used.Add(rank));
+                    samples.Add(new CcbSample(plan, sampleLower, sampleUpper, rank));
                 }
             }
             return samples;
@@ -475,12 +504,12 @@ public sealed partial class FlowAutoGenerator
                      .ThenBy(sample => sample.Plan.Range.Bounds.Unit))
         {
             var others = movable.Where(sample => !ReferenceEquals(sample, primary)).ToList();
-            foreach (var rank in new[] { primary.Selected - 2, primary.Selected - 1, primary.Selected + 1, primary.Selected + 2 })
+            foreach (var rank in CcbClosingNeighborRanks(primary))
             {
                 if (rank < primary.Lower || rank > primary.Upper) continue;
                 var change = RoundMoney(primary.Plan.Range.Value(rank) - primary.Amount);
-                // Some nonzero-digit totals require a three-row move: e.g.
-                // -1.00 + 0.98 + 0.01 closes -0.01 without inventing a .00 value.
+                // Some totals require a three-row move. Look beyond the old
+                // two-rank neighbourhood to cross the new forbidden interval.
                 if (!CloseCcbSamplePair(others, RoundMoney(delta - change))) continue;
                 primary.Selected = rank;
                 return true;
@@ -540,8 +569,7 @@ public sealed partial class FlowAutoGenerator
         {
             var before = sample.Amount;
             var targetRank = sample.Plan.Range.RankAtOrBelow(before + delta);
-            var ranks = new[] { sample.Selected - 2, sample.Selected - 1, sample.Selected + 1,
-                sample.Selected + 2, targetRank, targetRank + 1 };
+            var ranks = CcbClosingNeighborRanks(sample).Concat(new[] { targetRank, targetRank + 1 });
             foreach (var rank in ranks.Distinct().Where(rank => rank >= sample.Lower && rank <= sample.Upper))
             {
                 var change = (long)Math.Round((sample.Plan.Range.Value(rank) - before) * 100);
@@ -568,7 +596,7 @@ public sealed partial class FlowAutoGenerator
             .OrderBy(sample => sample.Plan.Range.Bounds.Unit).ToList();
         foreach (var mover in partners.OrderByDescending(sample => sample.Plan.Range.Bounds.Unit))
         {
-            foreach (var rank in new[] { mover.Selected - 2, mover.Selected - 1, mover.Selected + 1, mover.Selected + 2 })
+            foreach (var rank in CcbClosingNeighborRanks(mover))
             {
                 if (rank < mover.Lower || rank > mover.Upper) continue;
                 var change = RoundMoney(mover.Plan.Range.Value(rank) - mover.Amount);
@@ -587,6 +615,16 @@ public sealed partial class FlowAutoGenerator
             }
         }
         return false;
+    }
+
+    private static IEnumerable<long> CcbClosingNeighborRanks(CcbSample sample)
+    {
+        var radius = sample.Plan.Range.Bounds.Precision == 2 ? 12 : 2;
+        for (var distance = 1; distance <= radius; distance++)
+        {
+            if (sample.Selected - distance >= sample.Lower) yield return sample.Selected - distance;
+            if (sample.Selected + distance <= sample.Upper) yield return sample.Selected + distance;
+        }
     }
 
     private static List<DateTime> GetCcbDates(FlowRuleBase rule, DateTime start, DateTime end)

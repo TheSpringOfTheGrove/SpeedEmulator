@@ -9,14 +9,14 @@ var tests = new (string Name, Action Run)[]
 {
     ("34类银行全部执行尾数策略且保持总额条数日期及输入", TestAllBanks),
     ("有调整空间时收支两侧0几尾数全部消除，整数流水不变", TestDirectionQuotas),
-    ("固定项目、指定金额、导入、利息、其他精度与外部用户不调整", TestExclusions),
-    ("只有0几可选或预算卡在下限时保留原结果，不报错", TestConstrained),
+    ("合法固定项目、导入、利息、其他精度与外部用户不调整", TestExclusions),
+    ("只有0几可选或预算卡在下限时严格拒绝不合规结果", TestConstrained),
     ("单笔累计不超过0.99元，重复执行稳定", TestCumulative),
     ("按月范围及明细保持每月收支金额", TestMonthlyBudgets),
     ("同一天的不同明细预算窗口也不能混用", TestIntradayBudgets),
     ("建行金额分层保持，单值分层不调整", TestCcbBands),
-    ("跨日利息变化时撤销，不改变结息行或余额", TestInterestRollback),
-    ("跨日影响利息时仍可回退到同日配对", TestSameDayFallback),
+    ("跨日利息变化时拒绝不合规结果且输入不变", TestInterestRollback),
+    ("逐对调整只能解决一部分时也不能放行剩余0几", TestSameDayFallback),
     ("未配置利息且没有结息行时允许跨日安全配对", TestNoInterestSetting),
     ("同日微调保留利息、利息税和全部显示字段", TestSameDayInterest),
     ("已有负余额不恶化，收入支出配对均保护余额", TestNegativeBalances),
@@ -26,8 +26,14 @@ var tests = new (string Name, Action Run)[]
     ("统一生成出口涵盖中行、建行、微信及通用路径", TestGenerationExits),
     ("小分组也不预留0几名额，可行时全部消除", TestSmallGroups),
     ("中行收口优先避开0几且尾数有变化，固定项目不动", TestBocPreferredClosing),
-    ("中行偏好容量不足时完整回退原范围和精确预算", TestBocClosingFallback),
-    ("真实结息路径下中行新生成流水避免0几尾数", TestBocGenerationWithInterest)
+    ("中行预算收口不再回退到禁止尾数，窄区间明确拒绝", TestBocClosingFallback),
+    ("真实结息路径下中行新生成流水避免0几尾数", TestBocGenerationWithInterest),
+    ("两位小数整个候选集严格排除01到09且边界完整", TestHardLegalAmounts),
+    ("建行合法金额排名双向映射跳过所有禁用尾数", TestHardCcbRanking),
+    ("所有普通尾数均被出口阻止，结息和导入原值保留", TestHardOutputGuard),
+    ("无合法金额的参照与固定项目在生成前定位冲突", TestHardRuleConflicts),
+    ("34类银行多次真实生成及三种余额修正均无禁用尾数", TestHardPublicGeneration),
+    ("跨整数禁用区间的窄参照仍可使用两侧合法金额", TestNarrowLegalGap)
 };
 var failures = 0;
 foreach (var test in tests)
@@ -50,6 +56,12 @@ static object? Call(string name, params object?[] args)
 static FlowAutoGenerationResult Complete(FlowAutoGenerationRequest request, FlowAutoGenerationResult source) =>
     (FlowAutoGenerationResult)Call("CompleteGeneratedResult", request, source)!;
 static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+static void Reject(Action action)
+{
+    try { action(); }
+    catch (InvalidOperationException e) { Check(e.Message.Contains(".01",StringComparison.Ordinal),"应说明禁止尾数或冲突范围: "+e.Message);return; }
+    throw new Exception("必须拒绝含禁用尾数的结果，不能作为成功结果返回");
+}
 static string Snapshot(object value) => JsonSerializer.Serialize(value);
 static int Tail(FlowRecord row) => (int)Math.Round(Math.Abs(row.TradeMoney ?? 0) * 100, MidpointRounding.AwayFromZero) % 100;
 static Bank Bank(string name = "中行", long id = 18, string type = BankTypes.Personal) => new() { Id = id, Name = name, Type = type };
@@ -168,7 +180,7 @@ static void TestExclusions()
     var rows = Profile(); var time = rows[0].AccountTime!.Value;
     var exempt = new[]
     {
-        Row(1001,-20.01,time,kind:"Const"), Row(1002,-20.01,time,20.01,20.01),
+        Row(1001,-20.13,time,kind:"Const"), Row(1002,-20.13,time,20.13,20.13),
         Row(1003,-20.01,time), Row(1004,-20.1,time,10.1,100.9,precision:1),
         Row(1005,-20,time,10,100,precision:0), Row(1006,-20,time,10,90,precision:-1),
         Row(1007,-20.01,time), Row(1008,-20.01,time), Row(1009,-20.01,time), Row(1010,-20.01,time)
@@ -186,7 +198,7 @@ static void TestConstrained()
     {
         var rows = Enumerable.Range(1, 30).Select(i => Row(i, -20.01, new DateTime(2026, 10, 1).AddMinutes(i), 20.01, max)).ToList();
         var request = Request(rows); var source = Result(request, rows);
-        Check(ReferenceEquals(source, Complete(request, source)), "不可行尾数目标应保留原结果");
+        var before=Snapshot(source);Reject(()=>Complete(request,source));Check(before==Snapshot(source),"冲突不能污染输入");
     }
 }
 static void TestCumulative()
@@ -223,14 +235,15 @@ static void TestIntradayBudgets()
     var request = Request(rows); request.Config.SelectIndex = 2;
     request.Config.MonthGenData.Add(new MonthGenerateRule { StartTime = new DateTime(2026,10,1,8,0,0), EndTime = new DateTime(2026,10,1,12,0,0) });
     request.Config.MonthGenData.Add(new MonthGenerateRule { StartTime = new DateTime(2026,10,1,13,0,0), EndTime = new DateTime(2026,10,1,18,0,0) });
-    var source = Result(request, rows); var result = Complete(request, source);
-    Check(ReferenceEquals(source,result), "不能借其他预算窗口的余额完成尾数调整");
+    var source = Result(request, rows);var before=Snapshot(source);Reject(()=>Complete(request,source));
+    Check(before==Snapshot(source),"不能借其他预算窗口的余额完成尾数调整");
 }
 static void TestCcbBands()
 {
     foreach (var locked in new[] { true, false })
     {
         var rows = Profile();
+        foreach(var row in rows.Where(r=>Tail(r)==1)) row.TradeMoney=-20.11;
         foreach (var row in rows)
         {
             var amount = Math.Abs(row.TradeMoney!.Value);
@@ -263,8 +276,8 @@ static void TestInterestRollback()
     BankInterestCalculationService.Recalculate(request.Bank,request.BankUser,request.InterestSetting,rows,request.Config.OpeningBalance,
         request.Config.StartTime,request.Config.EndTime,random:new Random(17));
     foreach(var row in rows.Where(r=>r.Id==0)) row.Id=2000+rows.IndexOf(row);
-    var source=Result(request,rows); var before=Snapshot(source); var result=Complete(request,source);
-    Check(ReferenceEquals(source,result), "改变利息的跨日方案必须撤销"); Check(before==Snapshot(source),"撤销不能污染原结果");
+    var source=Result(request,rows); var before=Snapshot(source);Reject(()=>Complete(request,source));
+    Check(before==Snapshot(source),"拒绝不能污染原结果或结息行");
 }
 static void TestSameDayInterest()
 {
@@ -293,10 +306,8 @@ static void TestSameDayFallback()
     BankInterestCalculationService.Recalculate(request.Bank,request.BankUser,request.InterestSetting,rows,request.Config.OpeningBalance,
         request.Config.StartTime,request.Config.EndTime,random:new Random(17));
     foreach(var row in rows.Where(r=>r.Id==0)) row.Id=2000+rows.IndexOf(row);
-    var source=Result(request,rows);var result=Complete(request,source);Preserved(source,result);
-    Check(result.Records.Count(r=>Tail(r)==1)<source.Records.Count(r=>Tail(r)==1),"应保留可行的同日调整");
-    foreach(var day in rows.Where(r=>r.GeneratedRowKind==string.Empty).GroupBy(r=>r.AccountTime!.Value.Date))
-        Check(Math.Abs(day.Sum(r=>r.TradeMoney??0)-result.Records.Where(r=>r.GeneratedRowKind==string.Empty && r.AccountTime!.Value.Date==day.Key).Sum(r=>r.TradeMoney??0))<.00001,"回退后日终金额不应变化");
+    var source=Result(request,rows);var before=Snapshot(source);Reject(()=>Complete(request,source));
+    Check(before==Snapshot(source),"部分成功也不能返回含禁用尾数的结果或修改输入");
 }
 static void TestNoInterestSetting()
 {
@@ -309,8 +320,7 @@ static void TestNoInterestSetting()
     var request=Request(rows);request.BankUser.AutoCalculateInterest=true;
     var source=Result(request,rows);var result=Complete(request,source);Preserved(source,result);Quota(result.Records);
     var interest=Row(2000,100,new DateTime(2026,1,21));interest.GeneratedRowKind="Interest";rows.Add(interest);
-    source=Result(request,rows);result=Complete(request,source);
-    Check(ReferenceEquals(source,result),"已有结息且缺配置时不能接受跨日调整");
+    source=Result(request,rows);Reject(()=>Complete(request,source));
 }
 static void TestNegativeBalances()
 {
@@ -352,7 +362,7 @@ static void TestCorrectionExits()
             _=>generator.ApplyOpeningBalanceCorrection(request,source,source.OpeningBalance)};
         Quota(result.Records);
     }
-    var unchangedRows=Profile();var unchangedRequest=Request(unchangedRows);var unchanged=Result(unchangedRequest,unchangedRows);
+    var unchangedRows=Profile();var unchangedRequest=Request(unchangedRows);var unchanged=Complete(unchangedRequest,Result(unchangedRequest,unchangedRows));
     var timeOnlyRows=unchanged.Records.Select(r=>r.Clone()).ToList();
     foreach(var row in timeOnlyRows) row.AccountTime=row.AccountTime!.Value.AddDays(1);
     var timeOnly=Result(unchangedRequest,timeOnlyRows);
@@ -399,22 +409,21 @@ static void TestSmallGroups()
 static void TestBocPreferredClosing()
 {
     var rows=Enumerable.Range(1,80).Select(i=>Row(i,-80.57,new DateTime(2026,10,1,9,0,0).AddMinutes(i),20.01,100.99)).ToList();
-    var fixedRow=Row(1000,-30.07,new DateTime(2026,10,1,20,0,0),10.01,100.99,"Const");rows.Add(fixedRow);
+    var fixedRow=Row(1000,-30.17,new DateTime(2026,10,1,20,0,0),10.01,100.99,"Const");rows.Add(fixedRow);
     var target=Math.Round(rows.Sum(r=>Math.Abs(r.TradeMoney!.Value))-2500,2);
     Check((bool)Call("AdjustBankOfChinaSignedTotal",rows,false,target)!,"应完成优先收口");
     Check(Math.Abs(rows.Sum(r=>Math.Abs(r.TradeMoney!.Value))-target)<.001,"收口总额不准");
     Check(rows.Where(r=>r.Id!=1000).All(r=>Tail(r)>9),"收口不应集中制造0几尾数");
     Check(rows.Where(r=>r.TradeMoney>-80).Select(Tail).Distinct().Count()>8,"收口尾数不应固定为.11");
-    Check(fixedRow.TradeMoney==-30.07,"不应改固定日期项目");
+    Check(fixedRow.TradeMoney==-30.17,"不应改固定日期项目");
 }
 static void TestBocClosingFallback()
 {
     var rows=new List<FlowRecord>{Row(1,-21.11,new DateTime(2026,10,1,9,0,0),20.01,30.99)};
     Check((bool)Call("AdjustBankOfChinaSignedTotal",rows,false,20.05)!,"不足偏好容量时仍应收口成功");
-    Check(rows.Count==1&&Math.Abs(rows[0].TradeMoney!.Value+20.05)<.001,"回退应精确使用原范围，不丢弃流水");
+    Check(rows.Count==1&&Tail(rows[0])>9,"不得为满足不可行的精确目标而回退到20.05");
     rows=[Row(1,-20.01,new DateTime(2026,10,1,9,0,0),20.01,20.09)];
-    Check((bool)Call("AdjustBankOfChinaSignedTotal",rows,false,20.07)!,"只有0几合法时仍应允许增加");
-    Check(Math.Abs(rows[0].TradeMoney!.Value+20.07)<.001,"窄区间回退金额错误");
+    Reject(()=>Call("AdjustBankOfChinaSignedTotal",rows,false,20.07));
 }
 static void TestBocGenerationWithInterest()
 {
@@ -437,6 +446,144 @@ static void TestBocGenerationWithInterest()
             BankInterestCalculationService.Recalculate(bank,request.BankUser,setting,copy,result.OpeningBalance,request.Config.StartTime,request.Config.EndTime,random:new Random(17));
             Check(result.Records.Where(FlowGeneratedRowKinds.IsSystemInterest).Select(r=>r.TradeMoney).SequenceEqual(copy.Where(FlowGeneratedRowKinds.IsSystemInterest).Select(r=>r.TradeMoney)),"最终利息不正确");
             Check(result.Records.Where(r=>r.ExtraFields.GetValueOrDefault("__GeneratedSourceKind")=="Const").All(r=>r.TradeMoney==1000),"固定工资不应改变");
+        }
+    }
+    finally{Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",previous);}
+}
+
+static void TestHardLegalAmounts()
+{
+    var rule=new GenerateReferenceRule{Index=1,IsCheck=true,MinMoney=.01,MaxMoney=3.99,FloutLength=2};
+    var before=Snapshot(rule);var bounds=Call("GetRuleAmountBounds",rule)!;
+    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == .11,"第一个合法两位金额应为0.11");
+    var values=(List<double>)Call("EnumerateDiscreteAmounts",bounds,1000)!;
+    Check(values.Count==324 && values.Distinct().Count()==324,"4个完整元区间各应有81个合法值");
+    Check(values.All(value=>value>=.11&&value<=3.99&&(long)Math.Round(value*100)%100>=11&&(long)Math.Round(value*100)%10!=0),"候选集中仍存在禁止值");
+    foreach(var value in new[]{.01,.05,.09,1.01,1.09,2.00,3.10})
+        Check(!(bool)Call("HasRequiredNonZeroPrecisionDigit",value,bounds)!,"候选校验应拒绝: "+value);
+    Check((double)Call("FindValidAmountAtOrAbove",1d,3.99,bounds)! == 1.11,"整数边界向上必须跨过整段禁止区间");
+    Check((double)Call("FindValidAmountAtOrBelow",2.10,.11,bounds)! == 1.99,"整数边界向下必须跨过整段禁止区间");
+    Check(before==Snapshot(rule),"合法值派生不能改写用户金额配置");
+    foreach(var precision in new[]{-2,-1,0,1})
+    {
+        var other=Call("GetRuleAmountBounds",new GenerateReferenceRule{MinMoney=100,MaxMoney=500,FloutLength=precision})!;
+        var unchanged=(List<double>)Call("EnumerateDiscreteAmounts",other,10000)!;
+        Check(unchanged.Count>0,"其他精度不应失去合法候选");
+    }
+}
+static void TestHardCcbRanking()
+{
+    var type=typeof(FlowAutoGenerator).GetNestedType("CcbAmountRange",BindingFlags.NonPublic)!;
+    foreach(var (min,max) in new[]{(.01,3.99),(.99,1.11),(20.01,20.11),(20.99,21.11),(5.12,5.29)})
+    {
+        var bounds=Call("GetRuleAmountBounds",new GenerateReferenceRule{MinMoney=min,MaxMoney=max,FloutLength=2})!;
+        var range=Activator.CreateInstance(type,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic,null,[bounds],null)!;
+        var count=(long)type.GetProperty("Count")!.GetValue(range)!;
+        var expected=Enumerable.Range((int)Math.Ceiling(min*100-.000001),(int)Math.Floor(max*100+.000001)-(int)Math.Ceiling(min*100-.000001)+1)
+            .Where(cents=>cents%100>=11&&cents%10!=0).Select(cents=>cents/100d).ToArray();
+        Check(count==expected.Length,"建行合法金额数量计算不符");
+        for(long rank=0;rank<count;rank++)
+        {
+            var value=(double)type.GetMethod("Value")!.Invoke(range,[rank])!;
+            Check(value==expected[rank],"建行排序映射包含禁用尾数或漏掉合法值");
+            Check((long)type.GetMethod("RankAtOrBelow")!.Invoke(range,[value])! == rank,"建行反向排序不一致");
+        }
+    }
+}
+static void TestHardOutputGuard()
+{
+    foreach(var sign in new[]{-1,1})
+    foreach(var tail in Enumerable.Range(1,9))
+    foreach(var kind in new[]{"Reference","Const"})
+    {
+        var row=Row(1,sign*(20+tail/100d),new DateTime(2026,10,1),kind:kind);
+        var rows=new List<FlowRecord>{row};var request=Request(rows);var source=Result(request,rows);var before=Snapshot(source);
+        Reject(()=>Call("EnsureGeneratedCentTailResult",request,source));
+        Check(before==Snapshot(source),"出口拒绝不能改写输入或固定值");
+        row.IsDocumentImported=true;Check(ReferenceEquals(source,Call("EnsureGeneratedCentTailResult",request,source)),"导入数据必须原样保留");
+        row.IsDocumentImported=false;row.GeneratedRowKind="Interest";
+        Check(ReferenceEquals(source,Call("EnsureGeneratedCentTailResult",request,source)),"结息金额必须原样保留");
+    }
+    var synthetic=Row(0,-20.01,new DateTime(2026,10,1));synthetic.ExtraFields.Clear();
+    var syntheticRows=new List<FlowRecord>{synthetic};var syntheticRequest=Request(syntheticRows);var syntheticResult=Result(syntheticRequest,syntheticRows);
+    Reject(()=>Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult));
+    synthetic.Id=42;Check(ReferenceEquals(syntheticResult,Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult)),"既有手工记录不应被作为新生成行改动");
+    synthetic.Id=0;synthetic.TradeMoney=-20.11;
+    Check(ReferenceEquals(syntheticResult,Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult)),"合法尾数应通过");
+}
+static void TestHardRuleConflicts()
+{
+    foreach(var fixedItem in new[]{false,true})
+    foreach(var tail in Enumerable.Range(1,9))
+    {
+        var money=20+tail/100d;
+        var request=new FlowAutoGenerationRequest{Bank=Bank(),BankUser=new BankUser{Id=9001,AutoCalculateInterest=false},
+            Config=new FlowGenerationConfig{StartTime=new DateTime(2026,1,1),EndTime=new DateTime(2026,3,31),OpeningBalance=10000,AllInMoney=1000,LastMoney=100},
+            References=fixedItem?[]:[new GenerateReferenceRule{Index=7,IsCheck=true,MinMoney=money,MaxMoney=money,FloutLength=2}],
+            ConstItems=fixedItem?[new GenerateConstRule{Index=7,IsCheck=true,MinMoney=money,MaxMoney=money,FloutLength=2,FixDay="15",ReCnt="1"}]:[]};
+        var before=Snapshot(request);Reject(()=>new FlowAutoGenerator().Generate(request));
+        Check(before==Snapshot(request),"冲突应提示用户，不能改写配置");
+    }
+    var rule=new GenerateReferenceRule{Index=7,IsCheck=true,MinMoney=20.01,MaxMoney=20.11,FloutLength=2};
+    var bounds=Call("GetRuleAmountBounds",rule)!;
+    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == 20.11,"部分合法的窄区间应保留合法值");
+    var inactive=new FlowAutoGenerationRequest{Bank=Bank(),BankUser=new BankUser{Id=9001},Config=new FlowGenerationConfig(),
+        References=[new GenerateReferenceRule{Index=8,IsCheck=false,MinMoney=20.01,MaxMoney=20.09,FloutLength=2}],
+        ConstItems=[new GenerateConstRule{Index=9,IsCheck=true,FixDay=null,MinMoney=20.01,MaxMoney=20.09,FloutLength=2}]};
+    Call("ValidateGeneratedCentTailRules",inactive);
+}
+static void TestHardPublicGeneration()
+{
+    var previous=Environment.GetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED");
+    var categories=0;var generatedRows=0;
+    try
+    {
+        foreach(var field in new[]{"LegacyPersonalBankIds","LegacyCorporateBankIds"})
+        {
+            var catalog=(IReadOnlyDictionary<string,long>)typeof(SpeedEmulator.ViewModels.MainViewModel).GetField(field,BindingFlags.Static|BindingFlags.NonPublic)!.GetValue(null)!;
+            foreach(var item in catalog)
+            {
+                var bank=Bank(item.Key,item.Value,field.Contains("Personal",StringComparison.Ordinal)?BankTypes.Personal:BankTypes.Corporate);
+                foreach(var method in new[]{"ConfigureFlowGenerationColumns","ConfigureFlowRecordColumns"})
+                    typeof(SpeedEmulator.ViewModels.MainViewModel).GetMethod(method,BindingFlags.Static|BindingFlags.NonPublic)!.Invoke(null,[bank]);
+                for(var seed=2201;seed<=2203;seed++)
+                {
+                    Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",seed.ToString(CultureInfo.InvariantCulture));
+                    var request=new FlowAutoGenerationRequest{Bank=bank,BankUser=new BankUser{Id=9001,AutoCalculateInterest=false},
+                        Config=new FlowGenerationConfig{StartTime=new DateTime(2026,1,1),EndTime=new DateTime(2026,3,31),OpeningBalance=50000,AllInMoney=6000,LastMoney=1000},
+                        References=[new GenerateReferenceRule{Index=1,BankId=bank.Id,IsCheck=true,IncomeAttribute="收入",MinMoney=20,MaxMoney=300,FloutLength=2,StartDay=9,EndDay=20,TradeHoliday=true,TradeWeekend=true,ProductBrief="模拟收入"},
+                            new GenerateReferenceRule{Index=2,BankId=bank.Id,IsCheck=true,IncomeAttribute="支出",MinMoney=5,MaxMoney=80,FloutLength=2,StartDay=9,EndDay=20,TradeHoliday=true,TradeWeekend=true,ProductBrief="模拟消费"}],ConstItems=[]};
+                    var generator=new FlowAutoGenerator();var config=Snapshot(request);
+                    var result=generator.Generate(request);Quota(result.Records);generatedRows+=result.Records.Count;
+                    foreach(var corrected in new[]{generator.ApplyNegativeBalanceCorrection(request,result),generator.ApplyFinalBalanceCorrection(request,result),generator.ApplyOpeningBalanceCorrection(request,result,result.OpeningBalance)})
+                        Quota(corrected.Records);
+                    Check(config==Snapshot(request),"不能为避免尾数改写用户配置: "+bank.Name);
+                }
+                categories++;
+            }
+        }
+    }
+    finally{Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",previous);}
+    Check(categories==34,"应真实覆盖全部34类银行");
+    Console.WriteLine($"  strict generation: {categories} bank categories x3 seeds, {generatedRows} rows, plus all correction exits");
+}
+static void TestNarrowLegalGap()
+{
+    var previous=Environment.GetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED");
+    try
+    {
+        foreach(var bank in new[]{Bank(),Bank("建行",8),Bank("工行",4),Bank("微信",2)})
+        for(var seed=3201;seed<=3203;seed++)
+        {
+            Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",seed.ToString(CultureInfo.InvariantCulture));
+            var request=new FlowAutoGenerationRequest{Bank=bank,BankUser=new BankUser{Id=9001,AutoCalculateInterest=false},
+                Config=new FlowGenerationConfig{StartTime=new DateTime(2026,1,1),EndTime=new DateTime(2026,3,31),OpeningBalance=1000,AllInMoney=100,LastMoney=10},
+                References=[new GenerateReferenceRule{Index=1,BankId=bank.Id,IsCheck=true,IncomeAttribute="收入",MinMoney=1.91,MaxMoney=2.19,FloutLength=2,StartDay=9,EndDay=20,TradeHoliday=true,TradeWeekend=true},
+                    new GenerateReferenceRule{Index=2,BankId=bank.Id,IsCheck=true,IncomeAttribute="支出",MinMoney=.91,MaxMoney=1.19,FloutLength=2,StartDay=9,EndDay=20,TradeHoliday=true,TradeWeekend=true}],ConstItems=[]};
+            var result=new FlowAutoGenerator().Generate(request);Quota(result.Records);
+            Check(result.Records.Any(r=>r.TradeMoney<0),"合法窄范围支出不能被省略");
+            foreach(var row in result.Records)
+                Check(Math.Abs(row.TradeMoney!.Value)>=(row.TradeMoney>0?1.91:.91)-.00001&&Math.Abs(row.TradeMoney.Value)<=(row.TradeMoney>0?2.19:1.19)+.00001,"窄区间金额越界");
         }
     }
     finally{Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",previous);}

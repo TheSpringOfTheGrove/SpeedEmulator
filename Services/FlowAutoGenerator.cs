@@ -227,7 +227,10 @@ public sealed partial class FlowAutoGenerator
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public FlowAutoGenerationResult Generate(FlowAutoGenerationRequest request)
-        => CompleteGeneratedResult(request, GenerateCore(request));
+    {
+        ValidateGeneratedCentTailRules(request);
+        return CompleteGeneratedResult(request, GenerateCore(request));
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private FlowAutoGenerationResult GenerateCore(FlowAutoGenerationRequest request)
@@ -20051,7 +20054,7 @@ public sealed partial class FlowAutoGenerator
             var precision = Math.Min(bounds.Precision.Value, 2);
             var scale = precision == 1 ? 10d : 100d;
             var scaled = (long)Math.Round(Math.Abs(RoundMoney(amount)) * scale, MidpointRounding.AwayFromZero);
-            return scaled % 10L != 0L;
+            return scaled % 10L != 0L && (precision != 2 || scaled % 100L >= 11L);
         }
 
         var precisionPlaceValue = Math.Floor((Math.Abs(amount) + 0.0000001d) / bounds.Unit);
@@ -20062,7 +20065,7 @@ public sealed partial class FlowAutoGenerator
     private static double? FindValidAmountAtOrAbove(double start, double maximum, AmountBounds bounds)
     {
         var candidate = CeilAmountToUnit(start, bounds.Unit);
-        for (var offset = 0; offset <= 10 && candidate <= maximum + 0.009d; offset++, candidate = RoundMoney(candidate + bounds.Unit))
+        for (var offset = 0; offset <= 11 && candidate <= maximum + 0.009d; offset++, candidate = RoundMoney(candidate + bounds.Unit))
         {
             if (HasRequiredNonZeroPrecisionDigit(candidate, bounds))
             {
@@ -20076,7 +20079,7 @@ public sealed partial class FlowAutoGenerator
     private static double? FindValidAmountAtOrBelow(double start, double minimum, AmountBounds bounds)
     {
         var candidate = FloorAmountToUnit(start, bounds.Unit);
-        for (var offset = 0; offset <= 10 && candidate >= minimum - 0.009d; offset++, candidate = RoundMoney(candidate - bounds.Unit))
+        for (var offset = 0; offset <= 11 && candidate >= minimum - 0.009d; offset++, candidate = RoundMoney(candidate - bounds.Unit))
         {
             if (HasRequiredNonZeroPrecisionDigit(candidate, bounds))
             {
