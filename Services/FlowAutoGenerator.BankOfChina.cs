@@ -173,6 +173,39 @@ public sealed partial class FlowAutoGenerator
             .Where(row => isIncome ? row.TradeMoney > 0 : row.TradeMoney < 0)
             .OrderBy(row => GetRecordAmountBounds(row).Unit)
             .ThenByDescending(row => row.AccountTime).ToList();
+        // Prefer a legal non-low tail before settlement is calculated. Unlike
+        // a post-settlement edit this does not need to undo rounded interest.
+        // Commit only a complete plan; otherwise retain the original capacity
+        // and closing algorithm, including fixed-date amounts and exact totals.
+        var preferred = new List<(FlowRecord Row, double Amount)>();
+        var preferredTotal = current;
+        foreach (var row in candidates.Where(IsGeneratedReferenceRecord).Where(row => !row.IsDocumentImported))
+        {
+            var remaining = RoundMoney(target - preferredTotal);
+            if (Math.Abs(remaining) <= 0.009d) break;
+            var bounds = GetRecordAmountBounds(row);
+            if (bounds.Precision != 2 || Math.Abs(bounds.Unit - 0.01d) > 0.0000001d || bounds.Max <= bounds.Min) continue;
+            var before = Math.Abs(row.TradeMoney ?? 0);
+            var next = ClampAmountToBounds(Math.Clamp(before + remaining, bounds.Min, bounds.Max), bounds);
+            var tail = (int)Math.Round(next * 100d, MidpointRounding.AwayFromZero) % 100;
+            if (tail is >= 1 and <= 9)
+            {
+                var ticks = (ulong)(row.AccountTime?.Ticks ?? row.Index);
+                var bucket = (int)((ticks ^ (ticks >> 17) ^ (uint)row.Index * 0x9E3779B9u) % 72);
+                var preferredTail = 11 + bucket / 9 * 10 + bucket % 9;
+                next = RoundMoney(Math.Floor(next) - (increasing ? 1 : 0) + preferredTail / 100d);
+            }
+            if (next < bounds.Min - 0.000001d || next > bounds.Max + 0.000001d) continue;
+            var delta = RoundMoney(next - before);
+            if ((delta > 0) != increasing || Math.Abs(delta) <= 0.009d
+                || Math.Abs(target - (preferredTotal + delta)) >= Math.Abs(remaining) - 0.000001d) continue;
+            preferred.Add((row, next)); preferredTotal = RoundMoney(preferredTotal + delta);
+        }
+        if (preferred.Count > 0 && Math.Abs(preferredTotal - target) <= 0.009d)
+        {
+            foreach (var item in preferred) ApplySignedAmount(item.Row, isIncome ? 1 : -1, item.Amount);
+            return true;
+        }
         foreach (var row in candidates)
         {
             var remaining = RoundMoney(target - current);

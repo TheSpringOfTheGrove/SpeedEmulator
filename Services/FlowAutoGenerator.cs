@@ -227,7 +227,7 @@ public sealed partial class FlowAutoGenerator
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public FlowAutoGenerationResult Generate(FlowAutoGenerationRequest request)
-        => CompleteAlipayResult(request, GenerateCore(request));
+        => CompleteGeneratedResult(request, GenerateCore(request));
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private FlowAutoGenerationResult GenerateCore(FlowAutoGenerationRequest request)
@@ -805,7 +805,7 @@ public sealed partial class FlowAutoGenerator
     public FlowAutoGenerationResult ApplyNegativeBalanceCorrection(
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
-        => CompleteAlipayResult(request, ApplyNegativeBalanceCorrectionCore(request, source));
+        => CompleteCorrectedGeneratedResult(request, source, ApplyNegativeBalanceCorrectionCore(request, source));
 
     private FlowAutoGenerationResult ApplyNegativeBalanceCorrectionCore(
         FlowAutoGenerationRequest request,
@@ -909,7 +909,7 @@ public sealed partial class FlowAutoGenerator
     public FlowAutoGenerationResult ApplyFinalBalanceCorrection(
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
-        => CompleteAlipayResult(request, ApplyFinalBalanceCorrectionCore(request, source));
+        => CompleteCorrectedGeneratedResult(request, source, ApplyFinalBalanceCorrectionCore(request, source));
 
     private FlowAutoGenerationResult ApplyFinalBalanceCorrectionCore(
         FlowAutoGenerationRequest request,
@@ -991,7 +991,7 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source,
         double correctedOpeningBalance)
-        => CompleteAlipayResult(request, ApplyOpeningBalanceCorrectionCore(request, source, correctedOpeningBalance));
+        => CompleteCorrectedGeneratedResult(request, source, ApplyOpeningBalanceCorrectionCore(request, source, correctedOpeningBalance));
 
     private FlowAutoGenerationResult ApplyOpeningBalanceCorrectionCore(
         FlowAutoGenerationRequest request,
