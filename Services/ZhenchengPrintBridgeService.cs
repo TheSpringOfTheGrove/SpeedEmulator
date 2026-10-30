@@ -1274,6 +1274,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         private readonly string vendorDir;
         private readonly VendorLoadContext loadContext;
         private readonly Assembly mainAssembly;
+        private readonly IReadOnlyList<Assembly> runtimeAssemblies;
         private readonly Type bankUserType;
         private readonly Type flowType;
         private readonly Type templateType;
@@ -1316,7 +1317,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 {
                     LoadVendorAssemblyIfPresent(Path.GetFileName(stimulsoftDll));
                 }
-                var runtimeAssemblies = loadContext.Assemblies
+                runtimeAssemblies = loadContext.Assemblies
                     .Append(mainAssembly)
                     .Concat(coreAssembly is null ? [] : [coreAssembly])
                     .Distinct()
@@ -1509,6 +1510,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                     }
                 }
 
+                using var registrationScope = IsIcbcPersonalElectronicTemplate(context)
+                    ? IcbcElectronicRegistrationFallback.BeginScope(
+                        runtimeAssemblies,
+                        ResolveIcbcQrCodeValue(context, CreateValueMap(context.BankUser)))
+                    : null;
                 var vendorContext = CreateVendorPrintContext(context);
                 var bankUser = CreateVendorBankUser(vendorContext);
                 var records = CreateVendorFlowRecords(vendorContext);
@@ -2754,6 +2760,11 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
                 return false;
             }
 
+            using var registrationScope = IsIcbcPersonalElectronicTemplate(context)
+                ? IcbcElectronicRegistrationFallback.BeginScope(
+                    AssemblyLoadContext.Default.Assemblies,
+                    ResolveIcbcQrCodeValue(context, CreateValueMap(context.BankUser)))
+                : null;
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
@@ -5798,14 +5809,21 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
         if (IsIcbcPersonalStatementTemplate(context))
         {
-            var qrCode = NormalizeSingleLinePrintText(FirstNotBlank(
-                GetBankUserColumnValue(context, values, "二维码"),
-                GetValue(values, "QrCode"),
-                DefaultIcbcQrCodeValue));
+            var qrCode = ResolveIcbcQrCodeValue(context, values);
             Set(target, "QrCode", qrCode);
         }
 
         SetIcbcPrintTimeAliases(target, ResolveIcbcBankUserPrintTime(context, values));
+    }
+
+    private static string ResolveIcbcQrCodeValue(
+        PrintRenderContext context,
+        IReadOnlyDictionary<string, object?> values)
+    {
+        return NormalizeSingleLinePrintText(FirstNotBlank(
+            GetBankUserColumnValue(context, values, "二维码"),
+            GetValue(values, "QrCode"),
+            DefaultIcbcQrCodeValue));
     }
 
     private static void ApplyIcbcFlowRecordAccountFields(PrintRenderContext context, object target)
