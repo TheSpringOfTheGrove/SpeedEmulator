@@ -19,3 +19,12 @@ Tests use synthetic data only, including all nine forbidden suffixes, income and
 expense directions, fixed/reference/synthetic rows, all 34 bank categories with
 three seeded public generation runs and every correction exit, exact CCB rank
 round trips, budget/interest constraints, immutable inputs, and 10,000-row cleanup.
+
+Closing adjustments use the shared timeline ordering for every bank: available
+months take turns, with evenly spaced dates selected within each month. Existing
+precision and required-rule priorities stay in force. Monthly budget windows
+remain isolated, and fixed transaction dates and existing identifiers do not move.
+BOC, CCB and WeChat closing paths use the same ordering; CCB retains its amount
+bands. Expense increases use a live suffix-balance index so a repair earlier in
+the statement cannot invalidate a later balance. Tests cover both directions,
+exact closing, month-local closing, 19-month coverage and 100,000 candidates.

@@ -1291,33 +1291,21 @@ public sealed partial class FlowAutoGenerator
         }
 
         var changed = false;
+        var closingCandidates = OrderAmountRepairCandidates(records
+            .Where(record => record.TradeMoney < -0.009d && !IsSystemInterestRecord(record)));
         if (diff > 0)
         {
-            var suffixMinimumBalances = new double[records.Count];
-            var suffixMinimum = double.MaxValue;
-            for (var index = records.Count - 1; index >= 0; index--)
-            {
-                suffixMinimum = Math.Min(suffixMinimum, records[index].Balance ?? openingBalance);
-                suffixMinimumBalances[index] = suffixMinimum;
-            }
-
+            var balanceIndex = BalanceRangeIndex.Create(records, openingBalance);
             var remaining = diff;
-            var suffixReduction = 0d;
-            for (var index = records.Count - 1;
-                 index >= 0 && remaining > FinalBalanceHardTolerance;
-                 index--)
+            foreach (var record in closingCandidates)
             {
-                var record = records[index];
-                if (record.TradeMoney >= -0.009d || IsSystemInterestRecord(record))
-                {
-                    continue;
-                }
+                if (remaining <= FinalBalanceHardTolerance) break;
 
                 var absolute = Math.Abs(record.TradeMoney ?? 0);
                 var bounds = GetRecordAmountBounds(record);
                 var unit = Math.Max(0.01d, bounds.Unit);
                 var room = RoundMoney(bounds.Max - absolute);
-                var safeRoom = RoundMoney(suffixMinimumBalances[index] - suffixReduction);
+                var safeRoom = RoundMoney(balanceIndex.GetSuffixMinimum(record, openingBalance));
                 var allowed = Math.Min(Math.Min(room, safeRoom), remaining);
                 var increase = FloorAmountToUnit(allowed, unit);
                 if (increase <= 0.009d)
@@ -1334,22 +1322,16 @@ public sealed partial class FlowAutoGenerator
 
                 ApplySignedAmount(record, -1d, nextAmount);
                 remaining = RoundMoney(remaining - actualIncrease);
-                suffixReduction = RoundMoney(suffixReduction + actualIncrease);
+                balanceIndex.AddToSuffix(record, -actualIncrease);
                 changed = true;
             }
         }
         else
         {
             var remaining = Math.Abs(diff);
-            for (var index = records.Count - 1;
-                 index >= 0 && remaining > FinalBalanceHardTolerance;
-                 index--)
+            foreach (var record in closingCandidates)
             {
-                var record = records[index];
-                if (record.TradeMoney >= -0.009d || IsSystemInterestRecord(record))
-                {
-                    continue;
-                }
+                if (remaining <= FinalBalanceHardTolerance) break;
 
                 var absolute = Math.Abs(record.TradeMoney ?? 0);
                 var bounds = GetRecordAmountBounds(record);
@@ -2443,27 +2425,17 @@ public sealed partial class FlowAutoGenerator
             return false;
         }
 
-        var suffixMinimumBalances = new double[records.Count];
-        var suffixMinimum = double.MaxValue;
-        for (var index = records.Count - 1; index >= 0; index--)
-        {
-            suffixMinimum = Math.Min(suffixMinimum, records[index].Balance ?? openingBalance);
-            suffixMinimumBalances[index] = suffixMinimum;
-        }
-
+        var balanceIndex = BalanceRangeIndex.Create(records, openingBalance);
+        var closingCandidates = OrderAmountRepairCandidates(records
+            .Where(record => record.TradeMoney < -0.009d && !IsSystemInterestRecord(record)));
         var changed = false;
-        var suffixReduction = 0d;
         var hasNonLowCapacityExpense = records.Any(item =>
             item.TradeMoney < -0.009d
             && !IsSystemInterestRecord(item)
             && !IsGeneratedLowAmountReferenceRecord(item));
-        for (var index = records.Count - 1; index >= 0 && remaining > FinalBalanceTolerance; index--)
+        foreach (var record in closingCandidates)
         {
-            var record = records[index];
-            if (record.TradeMoney >= -0.009d || IsSystemInterestRecord(record))
-            {
-                continue;
-            }
+            if (remaining <= FinalBalanceTolerance) break;
 
             if (hasNonLowCapacityExpense && IsGeneratedLowAmountReferenceRecord(record))
             {
@@ -2473,7 +2445,7 @@ public sealed partial class FlowAutoGenerator
             var absolute = Math.Abs(record.TradeMoney ?? 0);
             var bounds = GetRecordAmountBounds(record);
             var room = RoundMoney(bounds.Max - absolute);
-            var safeRoom = RoundMoney(suffixMinimumBalances[index] - 1d - suffixReduction);
+            var safeRoom = RoundMoney(balanceIndex.GetSuffixMinimum(record, openingBalance) - 1d);
             var allowed = Math.Min(room, safeRoom);
             if (allowed <= 0.009d)
             {
@@ -2492,7 +2464,7 @@ public sealed partial class FlowAutoGenerator
 
             ApplySignedAmount(record, -1d, nextAmount);
             remaining = RoundMoney(remaining - actualIncrease);
-            suffixReduction = RoundMoney(suffixReduction + actualIncrease);
+            balanceIndex.AddToSuffix(record, -actualIncrease);
             changed = true;
         }
 
@@ -2505,22 +2477,15 @@ public sealed partial class FlowAutoGenerator
                 .Where(IsGeneratedLowAmountReferenceRecord)
                 .Sum(item => Math.Abs(item.TradeMoney ?? 0)));
             var lowCapacityRoom = RoundMoney(Math.Max(0, lowCapacityLimit - currentLowCapacityExpense));
-            for (var index = records.Count - 1;
-                 index >= 0 && remaining > FinalBalanceTolerance && lowCapacityRoom > 0.009d;
-                 index--)
+            foreach (var record in closingCandidates)
             {
-                var record = records[index];
-                if (record.TradeMoney >= -0.009d
-                    || IsSystemInterestRecord(record)
-                    || !IsGeneratedLowAmountReferenceRecord(record))
-                {
-                    continue;
-                }
+                if (remaining <= FinalBalanceTolerance || lowCapacityRoom <= 0.009d) break;
+                if (!IsGeneratedLowAmountReferenceRecord(record)) continue;
 
                 var absolute = Math.Abs(record.TradeMoney ?? 0);
                 var bounds = GetRecordAmountBounds(record);
                 var room = RoundMoney(bounds.Max - absolute);
-                var safeRoom = RoundMoney(suffixMinimumBalances[index] - 1d - suffixReduction);
+                var safeRoom = RoundMoney(balanceIndex.GetSuffixMinimum(record, openingBalance) - 1d);
                 var allowed = Math.Min(Math.Min(room, safeRoom), lowCapacityRoom);
                 if (allowed <= 0.009d)
                 {
@@ -2539,7 +2504,7 @@ public sealed partial class FlowAutoGenerator
 
                 ApplySignedAmount(record, -1d, nextAmount);
                 remaining = RoundMoney(remaining - actualIncrease);
-                suffixReduction = RoundMoney(suffixReduction + actualIncrease);
+                balanceIndex.AddToSuffix(record, -actualIncrease);
                 lowCapacityRoom = RoundMoney(lowCapacityRoom - actualIncrease);
                 changed = true;
             }
@@ -3523,10 +3488,8 @@ public sealed partial class FlowAutoGenerator
         var increased = 0d;
         ApplyBalances(records, openingBalance);
         var balanceIndex = BalanceRangeIndex.Create(records, openingBalance);
-        foreach (var record in candidates
-                     .OrderByDescending(item => item.AccountTime ?? DateTime.MinValue)
-                     .ThenByDescending(item => GetRecordAmountBounds(item).Max)
-                     .ToList())
+        foreach (var record in OrderAmountRepairCandidates(candidates
+                     .OrderByDescending(item => GetRecordAmountBounds(item).Max)))
         {
             if (remaining <= MonthlyClosingBalanceTolerance)
             {
@@ -4517,10 +4480,8 @@ public sealed partial class FlowAutoGenerator
         }
 
         var changed = false;
-        var candidates = GetAdjustableMonthlyExpenseRecords(records, monthStart, monthEnd)
-            .OrderByDescending(item => Math.Abs(item.TradeMoney ?? 0))
-            .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
-            .ToList();
+        var candidates = OrderAmountRepairCandidates(GetAdjustableMonthlyExpenseRecords(records, monthStart, monthEnd)
+            .OrderByDescending(item => Math.Abs(item.TradeMoney ?? 0)));
         foreach (var record in candidates)
         {
             if (remaining <= MonthlyClosingBalanceTolerance)
@@ -6947,18 +6908,17 @@ public sealed partial class FlowAutoGenerator
         bool isIncome,
         AmountBounds targetBounds)
     {
-        return GetSignedRecords(records, isIncome)
+        return OrderAmountRepairCandidates(GetSignedRecords(records, isIncome)
             .Where(IsGeneratedReferenceRecord)
             .Where(item => Math.Abs(item.TradeMoney ?? 0) > 0.009d)
             .Where(item => !IsLowValueFinalCoverageRecord(item))
-            .Where(item => GetRecordReducibleSignedCapacity(item) > 0.009d)
+            .Where(item => GetRecordReducibleSignedCapacity(item) > 0.009d))
             .OrderBy(item => IsSmallDiscreteAmountRecord(item) ? 1 : 0)
             .ThenBy(item => IsRequiredGeneratedRecord(item) ? 1 : 0)
             .ThenBy(item => GetRecordAmountBounds(item).Unit > targetBounds.Unit + 0.0000001d ? 1 : 0)
             .ThenBy(item => GetRecordAmountBounds(item).Unit)
             .ThenByDescending(item => GetRecordAmountBounds(item).Max)
-            .ThenByDescending(item => Math.Abs(item.TradeMoney ?? 0))
-            .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue);
+            .ThenByDescending(item => Math.Abs(item.TradeMoney ?? 0));
     }
 
     private static bool IsLowValueFinalCoverageRecord(FlowRecord record)
@@ -12066,10 +12026,9 @@ public sealed partial class FlowAutoGenerator
         var remaining = RoundMoney(amount);
         var sign = isIncome ? 1d : -1d;
         var increased = 0d;
-        var candidates = GetLargeSignedTransferCandidates(records, isIncome)
+        var candidates = OrderAmountRepairCandidates(GetLargeSignedTransferCandidates(records, isIncome))
             .OrderByDescending(item => GetRecordAmountBounds(item).Max)
             .ThenBy(item => GetRecordAmountUnit(item))
-            .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
             .ToList();
 
         foreach (var record in candidates)
@@ -16998,9 +16957,7 @@ public sealed partial class FlowAutoGenerator
         bool isIncome,
         string balancingBrief)
     {
-        var signedRecords = GetSignedRecords(records, isIncome)
-            .OrderByDescending(item => item.AccountTime ?? DateTime.MinValue)
-            .ToList();
+        var signedRecords = GetSignedRecords(records, isIncome).ToList();
         var currentTotal = RoundMoney(signedRecords.Sum(item => Math.Abs(item.TradeMoney ?? 0)));
         var diff = RoundMoney(targetTotal - currentTotal);
         if (Math.Abs(diff) <= 0.009d)
@@ -17025,6 +16982,7 @@ public sealed partial class FlowAutoGenerator
         }
 
         targetTotal = RoundMoney(Math.Max(0, targetTotal));
+        signedRecords = OrderAmountRepairCandidates(signedRecords);
         var sign = signedRecords.Any(item => item.TradeMoney < 0) ? -1d : 1d;
         var amounts = new double[signedRecords.Count];
         var mins = new double[signedRecords.Count];
@@ -18715,11 +18673,10 @@ public sealed partial class FlowAutoGenerator
         bool allowDropOptional)
     {
         var remaining = RoundMoney(amount);
-        var candidates = GetSignedRecords(records, isIncome)
+        var candidates = OrderAmountRepairCandidates(GetSignedRecords(records, isIncome)
+                .OrderByDescending(item => Math.Abs(item.TradeMoney ?? 0)))
             .OrderBy(item => IsRequiredGeneratedRecord(item) ? 1 : 0)
             .ThenBy(item => IsSmallDiscreteAmountRecord(item) ? 1 : 0)
-            .ThenByDescending(item => Math.Abs(item.TradeMoney ?? 0))
-            .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
             .ToList();
         var monthlyIncomeCounts = isIncome && allowDropOptional
             ? BuildMonthlyIncomeCounts(candidates)
@@ -18835,13 +18792,12 @@ public sealed partial class FlowAutoGenerator
         var hasNonSmallRecords = signedRecords.Any(item =>
             !IsSmallDiscreteAmountRecord(item)
             && !IsLowCapacityReferenceRecord(item));
-        var orderedRecords = signedRecords
+        var orderedRecords = OrderAmountRepairCandidates(signedRecords
             .Where(item => !hasNonSmallRecords
-                || !IsSmallDiscreteAmountRecord(item) && !IsLowCapacityReferenceRecord(item))
+                || !IsSmallDiscreteAmountRecord(item) && !IsLowCapacityReferenceRecord(item)))
             .OrderBy(item => IsRequiredGeneratedRecord(item) ? 1 : 0)
             .ThenBy(item => IsAgriculturalSmallExpenseRecord(item) ? 1 : 0)
             .ThenBy(item => GetRecordAmountUnit(item))
-            .ThenByDescending(item => item.AccountTime ?? DateTime.MinValue)
             .ToList();
 
         for (var pass = 0; pass < 2 && remaining > 0.009d; pass++)

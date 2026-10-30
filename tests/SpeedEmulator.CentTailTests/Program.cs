@@ -33,7 +33,12 @@ var tests = new (string Name, Action Run)[]
     ("所有普通尾数均被出口阻止，结息和导入原值保留", TestHardOutputGuard),
     ("无合法金额的参照与固定项目在生成前定位冲突", TestHardRuleConflicts),
     ("34类银行多次真实生成及三种余额修正均无禁用尾数", TestHardPublicGeneration),
-    ("跨整数禁用区间的窄参照仍可使用两侧合法金额", TestNarrowLegalGap)
+    ("跨整数禁用区间的窄参照仍可使用两侧合法金额", TestNarrowLegalGap),
+    ("修补候选按月及日期均匀轮转，不改变流水或日期", TestTimelineRepairOrdering),
+    ("共用收支增减修补均匀落在全年各月，金额精度不变", TestTimelineSignedClosing),
+    ("中行收口不再把修补集中于末尾月份", TestTimelineBocClosing),
+    ("最终精确收口分散修补且实时保护所有后续余额", TestTimelineExactClosing),
+    ("按月修补只在原预算月份内分散，不动其他月份", TestTimelineMonthlyClosing)
 };
 var failures = 0;
 foreach (var test in tests)
@@ -587,4 +592,105 @@ static void TestNarrowLegalGap()
         }
     }
     finally{Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED",previous);}
+}
+
+static List<FlowRecord> TimelineRows(int months = 12, int perMonth = 10, double amount = -80.57) =>
+    Enumerable.Range(0, months).SelectMany(month => Enumerable.Range(0, perMonth).Select(day =>
+        Row(month * perMonth + day + 1, amount, new DateTime(2025, 1, 1, 9, 0, 0).AddMonths(month).AddDays(day), 20.11, 100.99))).ToList();
+
+static void CheckTimelineSpread(IEnumerable<FlowRecord> rows, int months, int maxDifference = 1)
+{
+    var counts = rows.GroupBy(row => row.AccountTime!.Value.ToString("yyyy-MM")).Select(group => group.Count()).ToArray();
+    Check(counts.Length == months && counts.Max() - counts.Min() <= maxDifference,
+        "修补条数未均匀覆盖可用月份: " + string.Join(",", counts));
+}
+
+static void TestTimelineRepairOrdering()
+{
+    var rows = TimelineRows(19, 14);
+    var before = Snapshot(rows);
+    var ordered = (List<FlowRecord>)Call("OrderAmountRepairCandidates", rows)!;
+    Check(before == Snapshot(rows), "候选排序不能改动输入流水");
+    Check(ordered.Count == rows.Count && ordered.ToHashSet().SetEquals(rows), "不能复制、增删流水");
+    for (var round = 1; round <= 7; round++) CheckTimelineSpread(ordered.Take(round * 19), 19, 0);
+    Check(ordered.Select(row => row.Id).SequenceEqual(((List<FlowRecord>)Call("OrderAmountRepairCandidates", rows)!).Select(row => row.Id)), "同一候选集顺序应稳定");
+    var monthRows = TimelineRows(1, 28);
+    var monthOrder = (List<FlowRecord>)Call("OrderAmountRepairCandidates", monthRows)!;
+    var dates = monthOrder.Take(7).Select(row => row.AccountTime!.Value.Day).Order().ToArray();
+    Check(dates.First() <= 4 && dates.Last() >= 25 && dates.Zip(dates.Skip(1), (a,b) => b-a).Max() <= 5, "单月修补应覆盖月初月中月末");
+    var unknown = Row(9999, -80.57, new DateTime(2026,1,1)); unknown.AccountTime = null; rows.Add(unknown);
+    Check(((List<FlowRecord>)Call("OrderAmountRepairCandidates", rows)!).Last() == unknown, "无日期候选不能被丢弃或补造日期");
+    Check(((List<FlowRecord>)Call("OrderAmountRepairCandidates", new List<FlowRecord>())!).Count == 0, "空候选必须可用");
+    var large = Enumerable.Range(0, 100000).Select(i => Row(i+1, -80.57, new DateTime(2026,1,1).AddSeconds(i))).ToList();
+    var watch = Stopwatch.StartNew(); var largeOrder = (List<FlowRecord>)Call("OrderAmountRepairCandidates", large)!;
+    Check(largeOrder.Count == large.Count && largeOrder.ToHashSet().Count == large.Count, "大批量不能遗漏候选");
+    Check(watch.Elapsed < TimeSpan.FromSeconds(10), "候选轮转不能按已耗尽月份反复扫描");
+}
+
+static void TestTimelineSignedClosing()
+{
+    foreach (var sign in new[] { -1, 1 })
+    foreach (var increase in new[] { false, true })
+    {
+        var rows = TimelineRows(amount: sign * (increase ? 20.11 : 80.57));
+        var times = rows.Select(row => row.AccountTime).ToArray();
+        var before = rows.ToDictionary(row => row.Id, row => row.TradeMoney);
+        var bounds = Call("GetRecordAmountBounds", rows[0])!;
+        var unitMove = increase ? (double)Call("GetPreferredAmountUpperBound", rows[0], bounds)! - 20.11 : 80.57 - 20.11;
+        var amount = Math.Round(unitMove * 24, 2);
+        var total = rows.Sum(row => Math.Abs(row.TradeMoney!.Value));
+        if (increase) Call("IncreaseSignedRecordsWithinBounds", rows, sign > 0, amount);
+        else Call("DecreaseSignedRecordsWithinBounds", rows, sign > 0, amount, false);
+        var changed = rows.Where(row => Math.Abs(row.TradeMoney!.Value - before[row.Id]!.Value) > .001).ToList();
+        CheckTimelineSpread(changed, 12, 0);
+        Check(Math.Abs(rows.Sum(row => Math.Abs(row.TradeMoney!.Value)) - total - (increase ? amount : -amount)) < .001, "修补收支总额不准确");
+        Check(rows.Select(row => row.AccountTime).SequenceEqual(times), "金额修补不能移动日期");
+        Check(rows.All(row => Math.Abs(row.TradeMoney!.Value) is >= 20.11 and <= 100.99 && Math.Sign(row.TradeMoney.Value) == sign && Tail(row) >= 11 && Tail(row)%10 != 0), "修补不能改变范围、方向或精度");
+    }
+}
+
+static void TestTimelineBocClosing()
+{
+    foreach (var sign in new[] { -1, 1 })
+    {
+        var rows = TimelineRows(amount: sign * 80.57);
+        var before = rows.ToDictionary(row => row.Id, row => row.TradeMoney);
+        var times = rows.Select(row => row.AccountTime).ToArray();
+        var target = Math.Round(rows.Sum(row => Math.Abs(row.TradeMoney!.Value)) - (80.57 - 20.11) * 24, 2);
+        Call("AdjustBankOfChinaSignedTotal", rows, sign > 0, target);
+        var changed = rows.Where(row => row.TradeMoney != before[row.Id]).ToList();
+        CheckTimelineSpread(changed, 12);
+        Check(rows.Select(row => row.AccountTime).SequenceEqual(times), "中行收口不能移动日期");
+        Check(Math.Abs(rows.Sum(row => Math.Abs(row.TradeMoney!.Value)) - target) < .001, "中行收口总额变化");
+        Check(changed.Select(Tail).Distinct().Count() > 8, "有空间时修补尾数也应变化");
+    }
+}
+
+static void TestTimelineExactClosing()
+{
+    var rows = TimelineRows(); var request = Request(rows);
+    var expense = rows.Sum(row => Math.Abs(row.TradeMoney!.Value));
+    request.Config.LastMoney = -Math.Round(expense - (80.57 - 20.11) * 24, 2);
+    Call("CloseExactFinalBalanceWithExistingRecords", rows, request, request.Config.OpeningBalance);
+    CheckTimelineSpread(rows.Where(row => Tail(row) == 11), 12, 0);
+    Check(Math.Abs(rows.Last().Balance!.Value - request.Config.OpeningBalance - request.Config.LastMoney) < .001, "精确收口未满足余额");
+
+    rows = TimelineRows(perMonth: 1, amount: -80.57);
+    rows.AddRange(Enumerable.Range(0,12).Select(month => Row(1000+month,100,new DateTime(2025,1,1,8,0,0).AddMonths(month),100,100,"Const",0)));
+    request = Request(rows); request.Config.OpeningBalance = 0; request.Config.LastMoney = 50;
+    Call("CloseExactFinalBalanceWithExistingRecords", rows, request, 0d);
+    Check(rows.All(row => row.Balance >= -.009), "分散增加支出时必须实时检查后续最低余额");
+    Check(Math.Abs(rows.Last().Balance!.Value - 50) < .009, "有充足容量时不应因保守静态余额而收口失败");
+    Check(rows.Where(row => row.TradeMoney > 0).All(row => row.TradeMoney == 100), "不得修改固定收入");
+    Quota(rows);
+}
+
+static void TestTimelineMonthlyClosing()
+{
+    var rows = TimelineRows(perMonth: 28);
+    var before = rows.ToDictionary(row => row.Id, row => row.TradeMoney);
+    Call("ReduceMonthlyOptionalExpense", rows, new DateTime(2025,6,1), new DateTime(2025,7,1).AddTicks(-1), Math.Round(80.57*7,2));
+    var changed = rows.Where(row => row.TradeMoney != before[row.Id]).ToList();
+    Check(changed.Count == 7 && changed.All(row => row.AccountTime!.Value.Month == 6), "按月预算不可跨月修补");
+    Check(changed.Min(row => row.AccountTime!.Value.Day) <= 4 && changed.Max(row => row.AccountTime!.Value.Day) >= 25, "修补不能只落在当月末尾");
 }

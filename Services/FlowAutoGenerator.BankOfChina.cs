@@ -169,10 +169,9 @@ public sealed partial class FlowAutoGenerator
         var current = isIncome ? SumIncome(records) : SumExpense(records);
         var changed = false;
         var increasing = target > current;
-        var candidates = records.Where(row => !IsSystemInterestRecord(row))
-            .Where(row => isIncome ? row.TradeMoney > 0 : row.TradeMoney < 0)
-            .OrderBy(row => GetRecordAmountBounds(row).Unit)
-            .ThenByDescending(row => row.AccountTime).ToList();
+        var candidates = OrderAmountRepairCandidates(records.Where(row => !IsSystemInterestRecord(row))
+                .Where(row => isIncome ? row.TradeMoney > 0 : row.TradeMoney < 0))
+            .OrderBy(row => GetRecordAmountBounds(row).Unit).ToList();
         // Prefer a legal non-low tail before settlement is calculated. Unlike
         // a post-settlement edit this does not need to undo rounded interest.
         // Commit only a complete plan; otherwise retain the original capacity

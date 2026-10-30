@@ -469,7 +469,10 @@ public sealed partial class FlowAutoGenerator
             var capacity = samples.Sum(sample => initialDelta > 0
                 ? sample.Plan.Range.Value(sample.Upper) - sample.Amount
                 : sample.Amount - sample.Plan.Range.Value(sample.Lower));
-            foreach (var sample in samples.OrderBy(sample => pass < 3 ? 0 : sample.Plan.Range.Bounds.Unit).ThenBy(_ => random.Next()))
+            var candidates = pass < 3 ? samples.OrderBy(_ => random.Next()).ToList()
+                : OrderTimelineRepairCandidates(samples, sample => sample.Row?.AccountTime)
+                    .OrderBy(sample => sample.Plan.Range.Bounds.Unit).ToList();
+            foreach (var sample in candidates)
             {
                 var delta = RoundMoney(target - total);
                 if (Math.Abs(delta) <= 0.009d) return true;
@@ -497,7 +500,7 @@ public sealed partial class FlowAutoGenerator
     private static bool CloseCcbResidual(List<CcbSample> samples, double delta)
     {
         if (CloseCcbSamplePair(samples, delta)) return true;
-        var movable = samples.Where(sample => sample.Lower < sample.Upper).ToList();
+        var movable = OrderTimelineRepairCandidates(samples.Where(sample => sample.Lower < sample.Upper), sample => sample.Row?.AccountTime);
         if (movable.Count < 3) return false;
         var finestUnit = movable.Min(sample => sample.Plan.Range.Bounds.Unit);
         foreach (var primary in movable.OrderBy(sample => sample.Plan.Range.Bounds.Unit <= finestUnit)
@@ -563,6 +566,7 @@ public sealed partial class FlowAutoGenerator
 
     private static bool CloseCcbSamplePair(List<CcbSample> samples, double delta)
     {
+        samples = OrderTimelineRepairCandidates(samples, sample => sample.Row?.AccountTime);
         var needed = (long)Math.Round(delta * 100);
         var moves = new Dictionary<long, List<(CcbSample Sample, long Rank)>>();
         foreach (var sample in samples)

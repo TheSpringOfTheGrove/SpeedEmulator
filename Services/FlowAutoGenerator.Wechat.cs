@@ -386,8 +386,9 @@ public sealed partial class FlowAutoGenerator
     private static void AdjustWechatDirectionAmounts(IReadOnlyList<FlowRecord> records, double target, bool isIncome, Random random)
     {
         var difference = RoundMoney(target - (isIncome ? SumIncome(records) : SumExpense(records)));
-        foreach (var record in records.Where(record => (record.TradeMoney > 0) == isIncome)
-                     .OrderBy(record => GetRecordAmountBounds(record).Unit).ThenBy(_ => random.Next()))
+        foreach (var record in OrderAmountRepairCandidates(records.Where(record => (record.TradeMoney > 0) == isIncome)
+                     .OrderBy(_ => random.Next()))
+                     .OrderBy(record => GetRecordAmountBounds(record).Unit))
         {
             if (Math.Abs(difference) <= 0.009d)
             {
