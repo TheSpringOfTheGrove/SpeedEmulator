@@ -48,8 +48,8 @@ public sealed partial class FlowAutoGenerator
     private static FlowAutoGenerationResult CompleteCorrectedGeneratedResult(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult source, FlowAutoGenerationResult corrected)
     {
-        // Time-only balance repairs promise to preserve the generated amounts.
-        // Revisit style only if the repair actually changed reference amounts.
+        // Revisit low-tail cleanup only if a repair changed reference amounts.
+        // Chronological spacing is checked after time-only repairs as well.
         var amounts = new Dictionary<(string Source, double Amount), int>();
         foreach (var row in source.Records.Where(IsGeneratedReferenceRecord))
         {
@@ -62,12 +62,17 @@ public sealed partial class FlowAutoGenerator
             if (!amounts.TryGetValue(key, out var count)) return CompleteGeneratedResult(request, corrected);
             if (count == 1) amounts.Remove(key); else amounts[key] = count - 1;
         }
-        return amounts.Count == 0 ? EnsureGeneratedCentTailResult(request, CompleteAlipayResult(request, corrected)) : CompleteGeneratedResult(request, corrected);
+        return amounts.Count == 0
+            ? EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, CompleteAlipayResult(request, corrected), preserveAmounts: true))
+            : CompleteGeneratedResult(request, corrected);
     }
 
     private static FlowAutoGenerationResult CompleteGeneratedResult(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
-        => EnsureGeneratedCentTailResult(request, CompleteGeneratedResultCore(request, result));
+    {
+        result = EnsureGeneratedCentTailResult(request, CompleteGeneratedResultCore(request, result));
+        return EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, result));
+    }
 
     private static FlowAutoGenerationResult CompleteGeneratedResultCore(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
@@ -324,7 +329,7 @@ public sealed partial class FlowAutoGenerator
         for (var offset = 0; offset < 100 && minimum + offset <= maximum; offset++)
         {
             var tail = (minimum + offset) % 100;
-            if (tail is >= 11 and < 90 && tail % 10 != 0) return true;
+            if (tail is >= 11 and <= 99 && tail % 10 != 0) return true;
         }
         return false;
     }

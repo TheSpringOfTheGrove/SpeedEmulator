@@ -15686,10 +15686,10 @@ public sealed partial class FlowAutoGenerator
         ApplyRuleColumnAliases(request.Bank, ruleColumns, rule, record);
         AlipayGeneratedNumberRules.CopyGenerationContext(request.Bank, rule, record);
 
-        record.ExtraFields[AmountUnitField] = FormatInvariant(GetAmountUnit(rule.FloutLength));
+        record.ExtraFields[AmountUnitField] = FormatInvariant(amountBounds.Unit);
         record.ExtraFields[AmountMinField] = FormatInvariant(amountBounds.Min);
         record.ExtraFields[AmountMaxField] = FormatInvariant(amountBounds.Max);
-        record.ExtraFields[AmountPrecisionField] = (rule.FloutLength ?? 0).ToString(CultureInfo.InvariantCulture);
+        record.ExtraFields[AmountPrecisionField] = (amountBounds.Precision ?? 0).ToString(CultureInfo.InvariantCulture);
         record.ExtraFields[SourceKindField] = rule is GenerateConstRule ? ConstSourceKind : ReferenceSourceKind;
         record.ExtraFields[SourceIndexField] = rule.Index.ToString(CultureInfo.InvariantCulture);
         record.ExtraFields[AmountDistributionKeyField] = GetRuleAmountDistributionKey(rule);
@@ -19892,6 +19892,17 @@ public sealed partial class FlowAutoGenerator
 
     private static bool TryGetRuleAmountBounds(FlowRuleBase rule, out AmountBounds bounds)
     {
+        // An explicitly fixed integer takes precedence over fractional precision.
+        // Keep the user's setting intact, but propagate integer bounds/metadata
+        // so sampling, closing and final tail spacing all retain that exact value.
+        if (rule.FloutLength is > 0 && rule.MinMoney is { } fixedMoney
+            && rule.MaxMoney == fixedMoney && double.IsFinite(fixedMoney)
+            && fixedMoney > 0 && fixedMoney == Math.Truncate(fixedMoney))
+        {
+            bounds = new AmountBounds(fixedMoney, fixedMoney, 1d, 0);
+            return true;
+        }
+
         var unit = GetAmountUnit(rule.FloutLength);
         var min = Math.Max(0.01d, rule.MinMoney ?? 10d);
         var max = Math.Max(min, rule.MaxMoney ?? min);
