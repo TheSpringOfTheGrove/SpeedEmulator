@@ -4,6 +4,24 @@ namespace SpeedEmulator.Services;
 
 public sealed partial class FlowAutoGenerator
 {
+    private static FlowAutoGenerationResult WithBankOfChinaDiagnostics(
+        FlowAutoGenerationRequest request, string operation, Func<FlowAutoGenerationResult> generate)
+    {
+        if (!BankOfChinaGenerationBudget.AppliesTo(request.Bank)) return generate();
+        using var scope = BankOfChinaGenerationDiagnostics.Begin(operation, request);
+        try
+        {
+            var result = generate();
+            BankOfChinaGenerationDiagnostics.Result(result);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            BankOfChinaGenerationDiagnostics.Failure(exception);
+            throw;
+        }
+    }
+
     private static FlowAutoGenerationResult GenerateBankOfChinaResult(
         FlowAutoGenerationRequest request, DateTime start, DateTime end, double openingBalance, Random random)
     {
@@ -41,10 +59,12 @@ public sealed partial class FlowAutoGenerator
         if (SumExpense(records) > constExpenseCap + 0.009d)
             AdjustBankOfChinaSignedTotal(records, isIncome: false, Math.Max(0, constExpenseCap));
         GenerateBankOfChinaRequiredReferences(request, plan, incomeCap, random, records, schedule, usage);
+        BankOfChinaGenerationDiagnostics.Stage("after-required-references", records);
         EnsureNativeOptionalReferenceRuleCoverage(request, plan, incomeCap, random, records, schedule, usage);
         GenerateNativeOptionalReferenceRecords(request, plan, incomeCap, random, records, schedule, usage);
         EnsureNativeOptionalReferenceRuleCoverage(request, plan, incomeCap, random, records, schedule, usage);
         CompleteNativeConfiguredTotals(request, plan, start, end, incomeTarget, random, records, schedule, usage);
+        BankOfChinaGenerationDiagnostics.Stage("before-closing", records);
         foreach (var rule in request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0))
         foreach (var month in plan.Months)
         {
@@ -94,11 +114,11 @@ public sealed partial class FlowAutoGenerator
                     var available = RoundMoney((income ? incomeCap : expenseCap) - current - futureMinimum);
                     if (available < bounds.Min - 0.009d)
                         throw new InvalidOperationException("中行每月必现项目无法在总预算±10%内满足配置次数");
-                    var monthCurrent = income ? SumIncome(records.Where(row => IsRecordInRange(row, month.Start, month.End)))
-                        : SumExpense(records.Where(row => IsRecordInRange(row, month.Start, month.End)));
-                    var monthTarget = income ? plan.IncomeTargets[monthIndex] : plan.ExpenseTargets[monthIndex];
-                    // Monthly allocation is a soft budget; it cannot erase an explicit occurrence.
-                    var cap = Math.Min(available, Math.Min(bounds.Max, Math.Max(bounds.Min, monthTarget - monthCurrent)));
+                    // Required occurrences already reserve their future minima in
+                    // the actual BOC direction budget. A soft monthly allocation
+                    // (possibly zero for a one-day final month) must not narrow
+                    // their configured range and force a batch of .11 minima.
+                    var cap = Math.Min(available, bounds.Max);
                     if (!TryCreateNativeUniqueAmount(rule, cap, random, preferLower: true, records, income, usage, out var amount))
                         amount = bounds.Min;
                     var time = PickNativeDistributedTime(month.Start, month.End, rule, income, random, schedule);
@@ -118,7 +138,9 @@ public sealed partial class FlowAutoGenerator
         var end = NormalizeEndDate(request.Config.EndTime);
         if (end < start) (start, end) = (request.Config.EndTime.Date, NormalizeEndDate(request.Config.StartTime));
         var records = source.Records.Select(row => row.Clone()).ToList();
-        var random = new Random(CreateRunSeed(request, start, end, records.Count ^ 0x61B0C));
+        var runSeed = CreateRunSeed(request, start, end, records.Count ^ 0x61B0C);
+        BankOfChinaGenerationDiagnostics.Seed(runSeed);
+        var random = new Random(runSeed);
         return FinalizeBankOfChinaResult(request, records, start, end, source.OpeningBalance, random, repairNegative);
     }
 
@@ -133,9 +155,13 @@ public sealed partial class FlowAutoGenerator
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             ApplyBalances(records, openingBalance);
             var signature = CalculateBalanceInputSignature(records);
+            BankOfChinaGenerationDiagnostics.Stage("before-closing-pass", records);
             var income = SumIncome(records);
             if (income < incomeBounds.Min - 0.009d || income > incomeBounds.Max + 0.009d)
+            {
                 AdjustBankOfChinaSignedTotal(records, isIncome: true, Math.Clamp(income, incomeBounds.Min, incomeBounds.Max));
+                MoveBankOfChinaIncomeInsideBand(records, incomeBounds.Min, incomeBounds.Max);
+            }
 
             // Debit budget follows actual gross income (including settlement interest).
             // If the percentage band limits it, the original final-balance tolerance applies.
@@ -143,12 +169,16 @@ public sealed partial class FlowAutoGenerator
             AdjustBankOfChinaSignedTotal(records, isIncome: false, desiredExpense);
             ApplyBalances(records, openingBalance);
             if (repairNegative && GetMinimumBalance(records, openingBalance) < -0.009d)
+            {
                 RepairBankOfChinaNegativeBalances(request, records, start, end, openingBalance, random);
+                BankOfChinaGenerationDiagnostics.Stage("after-negative-balance-repair", records);
+            }
 
             // Time/amount repair changes the daily ledger, so recompute settlement before
             // deciding whether this candidate is stable. Never close by deleting income.
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             ApplyBalances(records, openingBalance);
+            BankOfChinaGenerationDiagnostics.Stage("after-settlement", records);
             if (signature == CalculateBalanceInputSignature(records)) break;
         }
 
@@ -167,11 +197,41 @@ public sealed partial class FlowAutoGenerator
     private static bool AdjustBankOfChinaSignedTotal(List<FlowRecord> records, bool isIncome, double target)
     {
         var current = isIncome ? SumIncome(records) : SumExpense(records);
+        var initial = current;
         var changed = false;
         var increasing = target > current;
         var candidates = OrderAmountRepairCandidates(records.Where(row => !IsSystemInterestRecord(row))
                 .Where(row => isIncome ? row.TradeMoney > 0 : row.TradeMoney < 0))
             .OrderBy(row => GetRecordAmountBounds(row).Unit).ToList();
+        // Settle the bulk with coarser reference amounts first. Consuming the
+        // cent-precision capacity first can pin almost every small payment to
+        // its minimum, leaving no budget for the final chronological tail pass.
+        // Never overshoot: finer rows only need to cover the remaining residue.
+        foreach (var row in candidates.Where(IsGeneratedReferenceRecord).Where(row => !row.IsDocumentImported)
+                     .Where(row => GetRecordAmountBounds(row).Unit >= 0.1d - 0.0000001d)
+                     .OrderByDescending(row => GetRecordAmountBounds(row).Unit))
+        {
+            var remaining = RoundMoney(target - current);
+            if (Math.Abs(remaining) <= 0.009d)
+            {
+                BankOfChinaGenerationDiagnostics.Closing("coarse-complete", records, isIncome, target, initial, current);
+                return changed;
+            }
+            var before = Math.Abs(row.TradeMoney ?? 0);
+            var bounds = GetRecordAmountBounds(row);
+            var step = FloorAmountToUnit(Math.Abs(remaining), bounds.Unit);
+            if (step < bounds.Unit - 0.0000001d) continue;
+            var next = increasing
+                ? FindValidAmountAtOrBelow(Math.Min(bounds.Max, before + step), before + bounds.Unit, bounds)
+                : FindValidAmountAtOrAbove(Math.Max(bounds.Min, before - step), before - bounds.Unit, bounds);
+            if (!next.HasValue) continue;
+            var delta = RoundMoney(next.Value - before);
+            if ((delta > 0) != increasing || Math.Abs(delta) <= 0.009d || Math.Abs(delta) > Math.Abs(remaining) + 0.000001d) continue;
+            ApplySignedAmount(row, isIncome ? 1 : -1, next.Value);
+            current = RoundMoney(current + delta);
+            changed = true;
+        }
+        BankOfChinaGenerationDiagnostics.Closing("coarse-residue", records, isIncome, target, initial, current);
         // Prefer a legal non-low tail before settlement is calculated. Unlike
         // a post-settlement edit this does not need to undo rounded interest.
         // Commit only a complete plan; otherwise retain the original capacity
@@ -203,8 +263,10 @@ public sealed partial class FlowAutoGenerator
         if (preferred.Count > 0 && Math.Abs(preferredTotal - target) <= 0.009d)
         {
             foreach (var item in preferred) ApplySignedAmount(item.Row, isIncome ? 1 : -1, item.Amount);
+            BankOfChinaGenerationDiagnostics.Closing("fractional-preferred", records, isIncome, target, initial, preferredTotal);
             return true;
         }
+        BankOfChinaGenerationDiagnostics.Closing("fractional-fallback", records, isIncome, target, initial, current);
         foreach (var row in candidates)
         {
             var remaining = RoundMoney(target - current);
@@ -221,7 +283,37 @@ public sealed partial class FlowAutoGenerator
             current = RoundMoney(current + delta);
             changed = true;
         }
+        BankOfChinaGenerationDiagnostics.Closing("closing-complete", records, isIncome, target, initial, current);
         return changed;
+    }
+
+    private static void MoveBankOfChinaIncomeInsideBand(List<FlowRecord> records, double minimum, double maximum)
+    {
+        var income = SumIncome(records);
+        if (income >= minimum - 0.009d && income <= maximum + 0.009d) return;
+        var increasing = income < minimum;
+        foreach (var row in OrderAmountRepairCandidates(records.Where(row => row.TradeMoney > 0)
+                         .Where(IsGeneratedReferenceRecord).Where(row => !row.IsDocumentImported))
+                     .OrderBy(row => GetRecordAmountBounds(row).Unit))
+        {
+            var before = row.TradeMoney!.Value;
+            var bounds = GetRecordAmountBounds(row);
+            var difference = increasing ? minimum - income : income - maximum;
+            // Gross income includes cents of interest, but a transfer can still
+            // have a 100/1000-yuan denomination. Enter the existing permitted
+            // band at the next legal denomination, rather than demanding its
+            // generally unattainable exact cent boundary.
+            var next = increasing
+                ? FindValidAmountAtOrAbove(before + difference, bounds.Max, bounds)
+                : FindValidAmountAtOrBelow(before - difference, bounds.Min, bounds);
+            if (!next.HasValue) continue;
+            var total = RoundMoney(income + next.Value - before);
+            if (total < minimum - 0.009d || total > maximum + 0.009d) continue;
+            ApplySignedAmount(row, 1, next.Value);
+            BankOfChinaGenerationDiagnostics.Closing("income-band-denomination", records, true,
+                Math.Clamp(income, minimum, maximum), income, total);
+            return;
+        }
     }
 
     private static void RepairBankOfChinaNegativeBalances(

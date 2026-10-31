@@ -26,6 +26,7 @@ var tests = new (string Name, Action Run)[]
     ("统一生成出口涵盖中行、建行、微信及通用路径", TestGenerationExits),
     ("小分组也不预留0几名额，可行时全部消除", TestSmallGroups),
     ("中行收口优先避开0几且尾数有变化，固定项目不动", TestBocPreferredClosing),
+    ("中行混合精度收口由粗粒度承担大额补差，不成批压低小数", TestBocCoarseFirstClosing),
     ("中行预算收口不再回退到禁止尾数，窄区间明确拒绝", TestBocClosingFallback),
     ("真实结息路径下中行新生成流水避免0几尾数", TestBocGenerationWithInterest),
     ("两位小数整个候选集严格排除01到09且边界完整", TestHardLegalAmounts),
@@ -431,6 +432,30 @@ static void TestBocPreferredClosing()
     Check(rows.Where(r=>r.TradeMoney>-80).Select(Tail).Distinct().Count()>8,"收口尾数不应固定为.11");
     Check(fixedRow.TradeMoney==-30.17,"不应改固定日期项目");
 }
+static void TestBocCoarseFirstClosing()
+{
+    foreach (var sign in new[] { -1, 1 })
+    {
+        var rows = Enumerable.Range(0, 140).Select(i => Row(i + 1, sign * 20.57,
+            new DateTime(2025, 4, 1, 9, 0, 0).AddDays(i), 10.11, 80.99)).ToList();
+        var coarse = Row(200, sign * 20100, rows[0].AccountTime!.Value, 5100, 29900, precision: -2);
+        coarse.ExtraFields["__GeneratedAmountUnit"] = "100";
+        var fixedRow = Row(201, sign * 80.57, rows[0].AccountTime!.Value, 20.11, 100.99, "Const");
+        var imported = coarse.Clone(); imported.Id = 202; imported.IsDocumentImported = true;
+        rows.AddRange([coarse, fixedRow, imported]);
+        var times = rows.Select(row => row.AccountTime).ToArray();
+        var target = Math.Round(rows.Sum(row => Math.Abs(row.TradeMoney!.Value)) - (140 * (20.57 - 10.11) - .03), 2);
+        Call("AdjustBankOfChinaSignedTotal", rows, sign > 0, target);
+        Check(Math.Abs(rows.Sum(row => Math.Abs(row.TradeMoney!.Value)) - target) < .001, "必须精确完成原收支目标");
+        Check(Math.Abs(coarse.TradeMoney!.Value) <= 18700, "大额参照流水必须先分担补差");
+        Check(rows.Take(140).Count(row => Math.Abs(Math.Abs(row.TradeMoney!.Value) - 10.11) < .001) < 10,
+            "不得将140条小数流水成批压到.11下限");
+        Check(fixedRow.TradeMoney == sign * 80.57 && imported.TradeMoney == sign * 20100, "不得改动固定项目或导入数据");
+        Check(rows.Select(row => row.AccountTime).SequenceEqual(times), "金额收口不能移动日期");
+        Quota(rows);
+    }
+}
+
 static void TestBocClosingFallback()
 {
     var rows=new List<FlowRecord>{Row(1,-21.11,new DateTime(2026,10,1,9,0,0),20.01,30.99)};

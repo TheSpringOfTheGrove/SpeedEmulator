@@ -48,3 +48,28 @@ Effective bounds and row metadata both use unit 1 / precision 0; the user's
 configuration is unchanged. This covers references and fixed-date projects in
 all 34 bank categories and all correction exits. Variable ranges, fixed decimals,
 forbidden .01..09 tails and negative rounding precisions keep their rules.
+
+Personal BOC closing settles the bulk with coarse reference amounts before
+touching cent-precision payments. This prevents a mixed-precision budget from
+exhausting the small-payment allowance and pinning most tails to `.11` minima.
+The coarse pass retains legal denominations, source ranges and chronology;
+fixed/imported rows are excluded from this new priority pass. An unattainable
+exact income-band boundary is resolved with a legal denomination inside the
+existing band. Opening-balance correction uses the same BOC finalizer.
+Required monthly BOC occurrences sample their original range subject to the
+real direction budget and reserved future minima. A soft monthly allocation
+cannot narrow this range to its minimum: in particular, a one-day final month
+must not generate its whole mandatory batch at `.11`. Counts and eligible dates
+stay unchanged. Regression tests force that month's soft budget to zero and
+replay the reported run's seed, checking concentration separately on every date.
+
+BOC desktop runs write bounded JSON-lines diagnostics to
+`%LOCALAPPDATA%/SpeedEmulator/logs/generation-boc.log` (4 MiB plus one previous
+file). They contain a run ID, seed, closing stages, amount/tail counts and a
+concentration flag, including same-day repeats; names, account numbers and raw reference text are omitted.
+The concentration flag is diagnostic, not a new rejection of constrained ranges.
+Other banks bypass this logger and retain their existing generation paths.
+Console tests opt in through `SPEEDEMULATOR_BOC_LOG_DIR` using an isolated folder.
+`SpeedEmulator.BankOfChinaTests` covers 40 mixed-precision seeds plus the reported seed and all three
+correction exits; the cent-tail suite also tests adversarial closing in both
+income and expense directions, fixed amounts and imported rows.
