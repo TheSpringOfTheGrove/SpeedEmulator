@@ -8,6 +8,33 @@ public sealed partial class FlowAutoGenerator
     private const string CentTailBaseline = "__CentTailBaselineCents";
     private const string CentTailLast = "__CentTailLastCents";
     private const int CentTailMaximumMoves = 8192;
+    private const double PreferredLowCentTailRatio = 0.02d;
+    // Nine low and 81 regular nonzero-ending tails per yuan.
+    private const double LowCentTailSampleAcceptance = PreferredLowCentTailRatio * 9d / (1d - PreferredLowCentTailRatio);
+
+    private static bool IsLowCentTail(long cents) => cents % 100 is >= 1 and <= 9;
+    private static int LowCentTailLimit(int count) => Math.Max(1, (int)Math.Floor(count * PreferredLowCentTailRatio));
+    private static bool HasGeneratedCentTailSource(FlowRecord row) =>
+        row.ExtraFields.GetValueOrDefault(SourceKindField) is ReferenceSourceKind or ConstSourceKind;
+
+    private static HashSet<int> ExcessLowCentTailIndices(List<CentTailEntry> entries)
+    {
+        // A preference, not a legal-amount restriction. Keep a small number of
+        // isolated existing low tails; do not manufacture them to fill a quota.
+        var excess = new HashSet<int>();
+        var quota = LowCentTailLimit(entries.Count);
+        var gap = Math.Max(20, (int)Math.Ceiling((double)entries.Count / quota));
+        var kept = 0; var previous = -gap;
+        var ordered = entries.OrderBy(entry => entry.Time).ThenBy(entry => entry.Index).ToArray();
+        for (var position = 0; position < ordered.Length; position++)
+        {
+            var entry = ordered[position];
+            if (!IsLowCentTail(entry.Cents)) continue;
+            if (kept < quota && position - previous >= gap) { kept++; previous = position; }
+            else excess.Add(entry.Index);
+        }
+        return excess;
+    }
 
     private static void ValidateGeneratedCentTailRules(FlowAutoGenerationRequest request)
     {
@@ -18,31 +45,8 @@ public sealed partial class FlowAutoGenerator
             var source = rule is GenerateConstRule ? "固定日期项目" : "参照明细";
             throw new InvalidOperationException(
                 $"{source}第 {rule.Index} 行金额范围 {rule.MinMoney:0.00}～{rule.MaxMoney:0.00} 与尾数规则冲突：" +
-                "普通生成流水严格禁止 .01～.09，且两位小数的末位不能为 0。请调整该行金额范围、固定金额或小数位。");
+                "两位小数的末位不能为 0。请调整该行金额范围、固定金额或小数位。");
         }
-    }
-
-    private static FlowAutoGenerationResult EnsureGeneratedCentTailResult(
-        FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
-    {
-        foreach (var row in result.Records)
-        {
-            if (row.IsDocumentImported || IsSystemInterestRecord(row) || row.BankId != request.Bank.Id || row.BankUserId != request.BankUser.Id) continue;
-            var source = row.ExtraFields.GetValueOrDefault(SourceKindField);
-            // Persisted/manual rows have no generation metadata. ID-zero rows
-            // also cover newly synthesized ordinary rows without a source rule.
-            if (row.Id != 0 && source is not (ReferenceSourceKind or ConstSourceKind)) continue;
-            var money = row.TradeMoney ?? 0;
-            if (!double.IsFinite(money)) continue;
-            var tail = Math.Abs(Math.Round(money * 100d, MidpointRounding.AwayFromZero) % 100d);
-            if (tail is < 1 or > 9) continue;
-            var item = source == ConstSourceKind ? "固定日期项目" : "参照明细";
-            var index = row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? row.Index.ToString(CultureInfo.InvariantCulture);
-            throw new InvalidOperationException(
-                $"生成结果未通过严格尾数校验：{item}第 {index} 行金额 {money:0.00} 命中禁止的 .01～.09 尾数。" +
-                "当前金额范围、固定金额或收支目标无法同时满足本次校验，请调整配置后重新生成；不会返回含禁用尾数的生成结果。");
-        }
-        return result;
     }
 
     private static FlowAutoGenerationResult CompleteCorrectedGeneratedResult(
@@ -50,52 +54,56 @@ public sealed partial class FlowAutoGenerator
     {
         // Revisit low-tail cleanup only if a repair changed reference amounts.
         // Chronological spacing is checked after time-only repairs as well.
-        var amounts = new Dictionary<(string Source, double Amount), int>();
-        foreach (var row in source.Records.Where(IsGeneratedReferenceRecord))
+        var amounts = new Dictionary<(string Kind, string Source, double Amount), int>();
+        foreach (var row in source.Records.Where(HasGeneratedCentTailSource))
         {
-            var key = (row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? string.Empty, RoundMoney(row.TradeMoney ?? 0));
+            var key = (row.ExtraFields.GetValueOrDefault(SourceKindField) ?? string.Empty,
+                row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? string.Empty, RoundMoney(row.TradeMoney ?? 0));
             amounts[key] = amounts.GetValueOrDefault(key) + 1;
         }
-        foreach (var row in corrected.Records.Where(IsGeneratedReferenceRecord))
+        foreach (var row in corrected.Records.Where(HasGeneratedCentTailSource))
         {
-            var key = (row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? string.Empty, RoundMoney(row.TradeMoney ?? 0));
+            var key = (row.ExtraFields.GetValueOrDefault(SourceKindField) ?? string.Empty,
+                row.ExtraFields.GetValueOrDefault(SourceIndexField) ?? string.Empty, RoundMoney(row.TradeMoney ?? 0));
             if (!amounts.TryGetValue(key, out var count)) return CompleteGeneratedResult(request, corrected);
             if (count == 1) amounts.Remove(key); else amounts[key] = count - 1;
         }
         return amounts.Count == 0
             ? HasVerifiedAmountPatterns(corrected)
-                ? EnsureGeneratedCentTailResult(request, CompleteAlipayResult(request, corrected))
-                : EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, CompleteAlipayResult(request, corrected), preserveAmounts: true))
+                ? CompleteAlipayResult(request, corrected)
+                : CompleteGeneratedTailSpacing(request, CompleteAlipayResult(request, corrected), preserveAmounts: true)
             : CompleteGeneratedResult(request, corrected);
     }
 
     private static FlowAutoGenerationResult CompleteGeneratedResult(
         FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
     {
-        result = EnsureGeneratedCentTailResult(request, CompleteGeneratedResultCore(request, result));
-        return EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, result));
+        result = CompleteGeneratedResultCore(request, result);
+        return CompleteGeneratedTailSpacing(request, result);
     }
 
     private static FlowAutoGenerationResult CompleteGeneratedResultCore(
-        FlowAutoGenerationRequest request, FlowAutoGenerationResult result)
+        FlowAutoGenerationRequest request, FlowAutoGenerationResult result, bool generatedOnly = false)
     {
         // First establish the final serial order, including any existing Alipay
         // date corrections. The optional amount pass must preserve this baseline.
         result = CompleteAlipayResult(request, result);
-        var entries = CreateCentTailEntries(request, result.Records);
-        if (!entries.GroupBy(entry => entry.Group).Any(CentTailGroupNeedsAdjustment)) return result;
+        List<CentTailEntry> Entries() => CreateCentTailEntries(request, result.Records)
+            .Where(entry => !generatedOnly || result.Records[entry.Index].Id == 0).ToList();
+        var entries = Entries();
+        if (ExcessLowCentTailIndices(entries).Count == 0) return result;
 
         if (TryCompleteCentTails(request, result, entries, sameDayOnly: false, out var adjusted)) return adjusted;
-        entries = CreateCentTailEntries(request, result.Records);
+        entries = Entries();
         if (TryCompleteCentTails(request, result, entries, sameDayOnly: false, out adjusted, preferSmallMoves: true)) return adjusted;
         // Keep safe individual moves when a batch crosses an interest rounding
         // boundary. One rejected move must not discard every other valid pair.
-        entries = CreateCentTailEntries(request, result.Records);
+        entries = Entries();
         if (TryCompleteCentTails(request, result, entries, sameDayOnly: false, out adjusted, checkEachMove: true, preferSmallMoves: true)) return adjusted;
         // A same-day retry preserves the daily ledger even when the interest
-        // configuration cannot verify a cross-day move. The outer guard rejects
-        // any ordinary low tail that the bounded cleanup cannot safely remove.
-        entries = CreateCentTailEntries(request, result.Records);
+        // configuration cannot verify a cross-day move. Preserve actual amounts
+        // if further frequency reduction would violate settlements or budgets.
+        entries = Entries();
         return TryCompleteCentTails(request, result, entries, sameDayOnly: true, out adjusted) ? adjusted : result;
     }
 
@@ -109,17 +117,22 @@ public sealed partial class FlowAutoGenerator
         var working = checkEachMove ? source.Records.Select(row => row.Clone()).ToList() : null;
         var balances = new CentTailBalanceHeadroom(source.Records.Select(row => row.Balance ?? source.OpeningBalance).ToArray());
         var balanceFloor = Math.Max(0, source.MinimumBalance);
+        var excess = ExcessLowCentTailIndices(entries);
         foreach (var group in entries.GroupBy(entry => entry.Group))
         {
             if (moves >= CentTailMaximumMoves) break;
-            if (!CentTailGroupNeedsAdjustment(group)) continue;
+            if (!group.Any(entry => excess.Contains(entry.Index))) continue;
             var rows = group.OrderBy(entry => entry.Index).ToArray();
             var usage = new int[100];
             foreach (var row in rows) usage[row.Tail]++;
-            var regularTailLimit = Math.Max(3, (int)Math.Ceiling(rows.Length * 0.04d));
+            var regularTails = Enumerable.Range(11, 89).Where(tail => tail % 10 != 0).ToArray();
+            var availableTails = regularTails.Count(tail => rows.Any(row => row.Accepts(row.Cents + tail - row.Tail)
+                || row.Accepts(row.Cents + tail - row.Tail - 100) || row.Accepts(row.Cents + tail - row.Tail + 100)));
+            var regularTailLimit = Math.Max(Math.Max(3, (int)Math.Ceiling(rows.Length * 0.04d)),
+                (int)Math.Ceiling((double)rows.Length / Math.Max(1, availableTails)) + 1);
             var lowCount = usage.Skip(1).Take(9).Sum();
             var targets = rows.Select((row, index) => (Row: row, Position: index))
-                .Where(item => item.Row.Tail is >= 1 and <= 9)
+                .Where(item => excess.Contains(item.Row.Index))
                 .OrderBy(item => item.Row.Tail == 1 ? 0 : 1)
                 .ThenBy(item => item.Row.Sign > 0 ? item.Row.Index : -item.Row.Index).ToArray();
             foreach (var (target, position) in targets)
@@ -128,7 +141,6 @@ public sealed partial class FlowAutoGenerator
                 if (target.Tail is < 1 or > 9) continue;
                 var targetChecks = 0;
                 var partners = GetCentTailPartners(rows, position, sameDayOnly);
-                var regularTails = Enumerable.Range(11, 79).Where(tail => tail % 10 != 0);
                 var tails = preferSmallMoves
                     ? regularTails.OrderBy(tail => Math.Min(
                         target.Accepts(target.Cents + tail - target.Tail) ? Math.Abs(tail - target.Tail) : int.MaxValue,
@@ -159,7 +171,7 @@ public sealed partial class FlowAutoGenerator
                             if (balanceChange < 0 && balances.Minimum(first, last) + balanceChange < balanceFloor - 0.000001d) continue;
                             var nextPartner = partner.Cents - delta;
                             var partnerTail = (int)(nextPartner % 100);
-                            if (!partner.Accepts(nextPartner) || partnerTail < 11 || partnerTail >= 90 || partnerTail % 10 == 0) continue;
+                            if (!partner.Accepts(nextPartner) || partnerTail < 11 || partnerTail % 10 == 0) continue;
                             // Bound both resulting tails. Balancing the target
                             // alone can repeatedly leave its donors on one tail.
                             var partnerTailCount = usage[partnerTail] + 1 + (tail == partnerTail ? 1 : 0)
@@ -276,11 +288,6 @@ public sealed partial class FlowAutoGenerator
         };
     }
 
-    private static bool CentTailGroupNeedsAdjustment(IEnumerable<CentTailEntry> group)
-    {
-        return group.Any(entry => entry.Tail is >= 1 and <= 9);
-    }
-
     private static List<CentTailEntry> CreateCentTailEntries(
         FlowAutoGenerationRequest request, IReadOnlyList<FlowRecord> records)
     {
@@ -289,7 +296,7 @@ public sealed partial class FlowAutoGenerator
         for (var i = 0; i < records.Count; i++)
         {
             var row = records[i];
-            if (row.IsDocumentImported || IsSystemInterestRecord(row) || !IsGeneratedReferenceRecord(row)
+            if (row.IsDocumentImported || IsSystemInterestRecord(row) || !HasGeneratedCentTailSource(row)
                 || row.BankId != request.Bank.Id || row.BankUserId != request.BankUser.Id
                 || row.AccountTime is not { } time || !double.IsFinite(row.TradeMoney ?? double.NaN)) continue;
             var bounds = GetRecordAmountBounds(row);

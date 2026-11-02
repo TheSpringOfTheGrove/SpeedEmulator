@@ -12,6 +12,7 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request, FlowAutoGenerationResult source, bool allowTimePermutation = true)
     {
         if (source.Records.Count < 2) return source;
+        source = CompleteGeneratedResultCore(request, source, generatedOnly: true);
         source = PrepareGeneratedTailDistribution(request, source);
         var rows = source.Records;
         var referencePriority = UsesReferencePriority(request.Config, rows);
@@ -33,6 +34,8 @@ public sealed partial class FlowAutoGenerator
         var interestChecks = 0;
         var tailUsage = new int[100];
         foreach (var entry in entries.OfType<AdjacentAmountEntry>().Where(entry => entry.HasCentTail)) tailUsage[amounts[entry.Index] % 100]++;
+        var lowCount = tailUsage.Skip(1).Take(9).Sum();
+        var lowLimit = LowCentTailLimit(tailUsage.Sum());
 
         bool TryChange(AdjacentAmountEntry target, long next, AdjacentAmountEntry? partner = null, long peerNext = 0)
         {
@@ -40,6 +43,10 @@ public sealed partial class FlowAutoGenerator
             var a = target.Index; var b = partner?.Index ?? a;
             var old = amounts[a]; var peerOld = amounts[b];
             if (old == next || partner is not null && target.Sign * (next - old) + partner.Sign * (peerNext - peerOld) != 0) return false;
+            var nextLowCount = lowCount
+                + (target.HasCentTail ? (IsLowCentTail(next) ? 1 : 0) - (IsLowCentTail(old) ? 1 : 0) : 0)
+                + (partner?.HasCentTail == true ? (IsLowCentTail(peerNext) ? 1 : 0) - (IsLowCentTail(peerOld) ? 1 : 0) : 0);
+            if (nextLowCount > lowLimit && nextLowCount > lowCount) return false;
             var edges = patterns.Edges(a, b);
             var before = edges.Count(Conflict);
             var previous = edges.ToDictionary(i => i, Conflict);
@@ -73,6 +80,7 @@ public sealed partial class FlowAutoGenerator
             if (partner is not null) { amounts[b] = peerNext; changed.Add(b); }
             if (target.HasCentTail) { tailUsage[old % 100]--; tailUsage[next % 100]++; }
             if (partner?.HasCentTail == true) { tailUsage[peerOld % 100]--; tailUsage[peerNext % 100]++; }
+            lowCount = nextLowCount;
             balances.Add(first, last, delta);
             return true;
         }
@@ -89,8 +97,11 @@ public sealed partial class FlowAutoGenerator
                 if (position + offset < peers.Length) indices.Add(position + offset);
             }
             for (var sample = 0; sample < 32; sample++) indices.Add((int)((long)sample * (peers.Length - 1) / 31));
+            var targetSource = rows[target.Index].ExtraFields;
             var partners = indices.Where(i => i != position).Select(i => peers[i])
-                .OrderBy(peer => peer.Time.Date == target.Time.Date ? 0 : 1).ThenBy(peer => Math.Abs(peer.Index - target.Index)).ToArray();
+                .OrderBy(peer => rows[peer.Index].ExtraFields.GetValueOrDefault(SourceKindField) == targetSource.GetValueOrDefault(SourceKindField)
+                    && rows[peer.Index].ExtraFields.GetValueOrDefault(SourceIndexField) == targetSource.GetValueOrDefault(SourceIndexField) ? 0 : 1)
+                .ThenBy(peer => peer.Time.Date == target.Time.Date ? 0 : 1).ThenBy(peer => Math.Abs(peer.Index - target.Index)).ToArray();
             // Preserve the existing amount distribution whenever a swap suffices.
             foreach (var partner in partners)
                 if (TryChange(target, amounts[partner.Index], partner, amounts[target.Index])) return true;
@@ -134,10 +145,11 @@ public sealed partial class FlowAutoGenerator
         }
         if (unresolved > 0 && request.Config.SelectIndex == 0)
         {
-            // When every candidate is pinned at the legal upper boundary, even
-            // a time permutation cannot separate them. In total-income mode a
-            // final small reduction of one income and one expense preserves net
-            // cash, ending and opening. Explicit monthly totals never use this.
+            // Keep the established decreasing pass first. If rows are instead
+            // pinned at their legal minima, increase one income and one expense
+            // by the same legal step. Both directions preserve net cash, opening
+            // and ending; explicit monthly totals never use this fallback.
+            foreach (var direction in new[] { -1L, 1L })
             for (var pass = 0; pass < 3; pass++)
             {
                 var progress = false;
@@ -151,15 +163,15 @@ public sealed partial class FlowAutoGenerator
                         var repaired = false;
                         foreach (var peer in peers)
                         {
-                            // Reducing an adjacent equal opposite pair leaves
+                            // Equal changes to an adjacent opposite pair leave
                             // that pair equal and causes a second repair. Prefer
                             // a nonadjacent partner that solves it in one move.
                             if (Math.Abs(peer.Index - target.Index) == 1 && amounts[peer.Index] == amounts[target.Index]) continue;
                             var step = Math.Max(target.Unit, peer.Unit);
                             for (var offset = 1; offset <= (step >= 100 ? 2 : 12); offset++)
                             {
-                                var delta = step * offset;
-                                if (!TryChange(target, amounts[target.Index] - delta, peer, amounts[peer.Index] - delta)) continue;
+                                var delta = direction * step * offset;
+                                if (!TryChange(target, amounts[target.Index] + delta, peer, amounts[peer.Index] + delta)) continue;
                                 repaired = true; break;
                             }
                             if (repaired) break;
@@ -328,6 +340,6 @@ public sealed partial class FlowAutoGenerator
         public bool HasCentTail => Bounds.Precision == 2 && Unit == 1;
         public (int Sign, string Account, string Period) Group => (Sign, Account, Period);
         public bool Accepts(long cents) => cents > 0 && cents >= Minimum && cents <= Maximum
-            && cents % 100 is not (>= 1 and <= 9) && IsReferenceNaturalLegalAmount(cents / 100d, Bounds);
+            && IsReferenceNaturalLegalAmount(cents / 100d, Bounds);
     }
 }

@@ -17,7 +17,12 @@ var tests = new (string Name, Action Run)[]
     ("结息保持原值且真实利息重算一致", TestInterest),
     ("所有余额修正出口再次检查且正常结果幂等", TestCorrectionExits),
     ("建行实际数值配置连续30次无相邻尾数重复及11集中", TestReportedCcb),
-    ("无解尾数配置明确定位冲突且不修改输入", TestImpossible)
+    ("无解尾数配置明确定位冲突且不修改输入", TestImpossible),
+    ("少量孤立低尾数允许原样通过，不主动凑满比例", TestIsolatedLowTail),
+    ("34类银行三种模式均阻止不同低尾数连续出现", TestDifferentLowTails),
+    ("低尾数不能用整数或相反方向的流水隔开检查", TestLowIntegerBridge),
+    ("集中低尾数压低至约2%且不改总额日期和原始输入", TestLowTailFrequency),
+    ("新生成低尾数降频不借用已保存流水金额", TestLowTailPersisted)
 };
 var failures = 0;
 foreach (var test in tests)
@@ -62,7 +67,8 @@ static void AssertTails(FlowAutoGenerationResult result)
 {
     var rows = result.Records.Where(Eligible).ToArray();
     Check(rows.Zip(rows.Skip(1)).All(pair => Tail(pair.First) != Tail(pair.Second)), "两位小数序列存在连续相同尾数: " + string.Join(',', rows.Select(row => row.TradeMoney)));
-    Check(rows.All(row => Tail(row) is >= 11 and <= 99 && Tail(row) % 10 != 0), "仍需遵守合法尾数规则");
+    Check(rows.All(row => Tail(row) is >= 1 and <= 99 && Tail(row) % 10 != 0), "仍需遵守两位非零末位规则");
+    Check(rows.Zip(rows.Skip(1)).All(pair => Tail(pair.First) > 9 || Tail(pair.Second) > 9), "不同低尾数也不能连续出现");
 }
 static void TestAllBanks()
 {
@@ -191,4 +197,75 @@ static void TestImpossible()
     try { Repair(request, Row(request, rule, 0, -10.11), Row(request, rule, 1, -10.11)); }
     catch (InvalidOperationException error) { Check(error.Message.Contains("尾数"), "需要定位到尾数冲突"); return; }
     throw new Exception("不能把不可行重复尾数当成功输出");
+}
+
+static void TestIsolatedLowTail()
+{
+    var rule = Rule(); var request = Request([rule]);
+    var rows = new[] { Row(request, rule, 0, -10.03), Row(request, rule, 1, -44.27), Row(request, rule, 2, -140.58) };
+    var amounts = rows.Select(row => row.TradeMoney).ToArray();
+    var result = Repair(request, rows);
+    Check(result.Records.Select(row => row.TradeMoney).SequenceEqual(amounts), "孤立且少量的低尾数不应再被禁用或强制调整");
+}
+static void TestDifferentLowTails()
+{
+    var cases = 0;
+    foreach (var field in new[] { "LegacyPersonalBankIds", "LegacyCorporateBankIds" })
+    foreach (var pair in (IReadOnlyDictionary<string, long>)typeof(SpeedEmulator.ViewModels.MainViewModel).GetField(field, BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!)
+    foreach (var mode in new[] { 0, 1, 2 })
+    {
+        var rule = Rule(); var request = Request([rule], pair.Value, pair.Key); request.Config.SelectIndex = mode;
+        var rows = new[] { 10.03, 44.07, 140.28, 25.56 }.Select((money, i) => Row(request, rule, i, -money)).ToArray();
+        var times = rows.Select(row => row.AccountTime).ToArray();
+        var result = Repair(request, rows); Near(219.94, result.ExpenseTotal);
+        Check(result.Records.Select(row => row.AccountTime).SequenceEqual(times), "同日金额有解时不能改日期");
+        cases++;
+    }
+    Check(cases == 102, "应覆盖34类银行三种模式");
+}
+static void TestLowIntegerBridge()
+{
+    var income = Rule(1, true); var expense = Rule(2); var integer = Rule(3, precision: 0);
+    var request = Request([income, expense, integer]);
+    var result = Repair(request, Row(request, income, 0, 10.03), Row(request, integer, 1, -30),
+        Row(request, expense, 2, -44.07), Row(request, expense, 3, -40.51));
+    Check(result.Records[1].TradeMoney == -30, "整数不应被低尾数分配修改");
+    Near(-104.55, result.FinalBalance - result.OpeningBalance);
+}
+static void TestLowTailFrequency()
+{
+    foreach (var fixedDate in new[] { false, true })
+    {
+        var rule = Rule();
+        var basic = Request([rule], opening: 100000);
+        FlowRuleBase sourceRule = fixedDate ? new GenerateConstRule { Index = 1, IsCheck = true, IncomeAttribute = "支出", MinMoney = 5, MaxMoney = 300,
+            FloutLength = 2, FixDay = "5", StartDay = 8, EndDay = 22 } : rule;
+        var request = new FlowAutoGenerationRequest { Bank = basic.Bank, BankUser = basic.BankUser, Config = basic.Config,
+            References = fixedDate ? [] : [rule], ConstItems = fixedDate ? [(GenerateConstRule)sourceRule] : [], InterestSetting = basic.InterestSetting };
+        var rows = Enumerable.Range(0, 200).Select(i => Row(request, sourceRule, i,
+            -(20 + i % 100 + (i % 5 < 2 ? (i % 5 == 0 ? .03 : .07) : (11 + i % 8 * 10) / 100d)))).ToArray();
+        var times = rows.Select(row => row.AccountTime).ToArray();
+        var total = rows.Sum(row => -row.TradeMoney!.Value);
+        var result = Repair(request, rows);
+        Check(result.Records.Count(row => Tail(row) is >= 1 and <= 9) <= 4, "200条可变小数流水低尾数应不超过4条");
+        Near(total, result.ExpenseTotal);
+        Check(result.Records.Select(row => row.AccountTime).SequenceEqual(times), "降低低尾数频率不能挪动日期");
+        var corrected = new FlowAutoGenerator().ApplyNegativeBalanceCorrection(request, result);
+        AssertTails(corrected);
+        Check(result.Records.Select(row => row.TradeMoney).SequenceEqual(corrected.Records.Select(row => row.TradeMoney)), "已合规结果重复修正应幂等");
+    }
+}
+static void TestLowTailPersisted()
+{
+    var rule = Rule(); var request = Request([rule]);
+    var persisted = Row(request, rule, 0, -20.03); persisted.Id = 42;
+    var original = JsonSerializer.Serialize(persisted);
+    var rows = new[] { persisted, Row(request, rule, 1, -24.07), Row(request, rule, 2, -25.03),
+        Row(request, rule, 3, -30.27), Row(request, rule, 4, -40.58) };
+    var result = Repair(request, rows);
+    var saved = result.Records.Single(row => row.Id == 42);
+    Check(saved.TradeMoney == persisted.TradeMoney && saved.AccountTime == persisted.AccountTime
+        && saved.SerialNum == persisted.SerialNum && saved.VoucherNum == persisted.VoucherNum,
+        "不能借用已保存记录完成新生成流水的降频");
+    Check(JsonSerializer.Serialize(persisted) == original, "不能改写原已保存对象");
 }

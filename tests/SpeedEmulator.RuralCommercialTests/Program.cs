@@ -78,7 +78,6 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         var unit = double.Parse(row.ExtraFields["__GeneratedAmountUnit"], CultureInfo.InvariantCulture);
         Check(amount >= min - .000001 && amount <= max + .000001, "来源金额范围不可突破");
         Check(Math.Abs(Math.Round(amount / unit) - amount / unit) < .000001, "精度不可突破");
-        Check((int)Math.Round(amount * 100, MidpointRounding.AwayFromZero) % 100 is not (>= 1 and <= 9), "不得出现.01至.09");
         if (unit < 1 || unit >= 10) Check((long)Math.Round(amount / unit) % 10 != 0, "有效金额位不能为零");
         if (Kind(row) == "Reference")
         {
@@ -88,6 +87,12 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         }
     }
     Near(balance, result.FinalBalance);
+    var tails = result.Records.Where(row => !FlowGeneratedRowKinds.IsSystemInterest(row) && !row.IsDocumentImported
+        && row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2"
+        && row.ExtraFields.GetValueOrDefault("__GeneratedAmountMin") != row.ExtraFields.GetValueOrDefault("__GeneratedAmountMax"))
+        .Select(row => (int)Math.Round(Math.Abs(row.TradeMoney ?? 0) * 100) % 100).ToArray();
+    Check(tails.Zip(tails.Skip(1)).All(pair => pair.First > 9 || pair.Second > 9), "低尾数不能连续出现");
+    Check(tails.Count(tail => tail is >= 1 and <= 9) <= Math.Max(1, (int)Math.Floor(tails.Length * .02)), "有调整空间时应降低低尾数频率");
 }
 static void TestScope()
 {

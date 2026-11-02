@@ -6,8 +6,8 @@ public sealed partial class FlowAutoGenerator
 {
     public FlowAutoGenerationResult ApplyAutomaticOpeningBalance(FlowAutoGenerationRequest request,
         IEnumerable<FlowRecord> records, double openingBalance)
-        => CompleteGeneratedDateCorrection(request, EnsureGeneratedCentTailResult(request, EnsureAutomaticOpeningBalance(request,
-            CreateAutomaticBalanceResult(records.Select(row => row.Clone()).ToList(), openingBalance), recalculateInterest: true)));
+        => CompleteGeneratedDateCorrection(request, EnsureAutomaticOpeningBalance(request,
+            CreateAutomaticBalanceResult(records.Select(row => row.Clone()).ToList(), openingBalance), recalculateInterest: true));
 
     private static FlowAutoGenerationResult EnsureAutomaticOpeningBalance(FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source, double? openingOverride = null, bool cloneRecords = false, bool recalculateInterest = false)

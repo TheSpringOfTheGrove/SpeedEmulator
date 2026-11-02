@@ -167,10 +167,16 @@ public sealed partial class FlowAutoGenerator
         var first = (long)Math.Ceiling(bounds.Min / bounds.Unit - .000001d);
         var last = (long)Math.Floor(maximum / bounds.Unit + .000001d);
         if (last < first) return false;
+        // Reduce low tails at the initial draw too: one income per month may
+        // have no same-budget partner for a later cents-only redistribution.
+        // Never reject a legal narrow range that contains only low tails.
+        var preferRegularTail = bounds.Precision == 2 && CentTailHasRegularValue(first, last);
         for (var attempt = 0; attempt < 256; attempt++)
         {
             var candidate = RoundMoney(random.NextInt64(first, last + 1) * bounds.Unit);
             if (!IsReferenceNaturalLegalAmount(candidate, bounds)) continue;
+            if (preferRegularTail && IsLowCentTail((long)Math.Round(candidate * 100d, MidpointRounding.AwayFromZero))
+                && random.NextDouble() >= LowCentTailSampleAcceptance) continue;
             amount = candidate; return true;
         }
         var fallback = FindValidAmountAtOrAbove(bounds.Min, maximum, bounds);
@@ -180,8 +186,8 @@ public sealed partial class FlowAutoGenerator
 
     private static void DistributeReferenceNaturalCentTails(List<FlowRecord> rows, Random random, bool income)
     {
-        // Flooring an illegal .01-.09 fraction into the preceding .99 creates
-        // another spike. Assign least-used legal tails before interest exists;
+        // Prefer regular tails without flooring .01-.09 into the preceding .99,
+        // which creates another spike. Low tails remain legal for narrow ranges;
         // the full source ranges and selected transaction counts stay intact.
         var candidates = rows.Where(row => income ? row.TradeMoney > 0 : row.TradeMoney < 0)
             .Where(IsGeneratedReferenceRecord).Where(row =>

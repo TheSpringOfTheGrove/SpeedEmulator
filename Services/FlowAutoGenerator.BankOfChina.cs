@@ -54,7 +54,7 @@ public sealed partial class FlowAutoGenerator
         var requiredExpenseMinimum = RoundMoney(occurrences.Where(item => !IsIncomeRuleSafe(item.Rule))
             .Sum(item => GetRuleAmountBounds(item.Rule).Min));
         if (requiredIncomeMinimum > incomeCap + 0.009d)
-            throw new InvalidOperationException("中行每月必现收入项目的最低金额已超过总预算允许的10%浮动范围");
+            throw new ReferenceBudgetConflictException("中行每月必现收入项目的最低金额已超过总预算允许的10%浮动范围");
         GenerateNativeConstRecords(request, start, end, RoundMoney(incomeCap - requiredIncomeMinimum), random, records, schedule, usage);
         var constExpenseCap = RoundMoney(BankOfChinaGenerationBudget.Bounds(expenseTarget).Max - requiredExpenseMinimum);
         if (SumExpense(records) > constExpenseCap + 0.009d)
@@ -125,7 +125,7 @@ public sealed partial class FlowAutoGenerator
         var expenseCap = BankOfChinaGenerationBudget.Bounds(BankOfChinaGenerationBudget.ExpenseTarget(request.Config)).Max;
         if (incomeMinimum + SumIncome(records) > incomeCap + 0.009d
             || expenseMinimum + SumExpense(records) > expenseCap + 0.009d)
-            throw new InvalidOperationException("中行固定及每月必现项目的最低金额已超过总预算允许的10%浮动范围");
+            throw new ReferenceBudgetConflictException("中行固定及每月必现项目的最低金额已超过总预算允许的10%浮动范围");
 
         foreach (var occurrence in occurrences)
         {
@@ -136,7 +136,7 @@ public sealed partial class FlowAutoGenerator
             var current = income ? SumIncome(records) : SumExpense(records);
             var available = RoundMoney((income ? incomeCap : expenseCap) - current - futureMinimum);
             if (available < bounds.Min - 0.009d)
-                throw new InvalidOperationException("中行每月必现项目无法在总预算±10%内满足配置次数");
+                throw new ReferenceBudgetConflictException("中行每月必现项目无法在总预算±10%内满足配置次数");
             // Soft month allocations must not collapse an otherwise feasible range.
             var cap = Math.Min(available, bounds.Max);
             if (!TryCreateNativeUniqueAmount(rule, cap, random, preferLower: true, records, income, usage, out var amount))
@@ -204,9 +204,9 @@ public sealed partial class FlowAutoGenerator
 
         var result = CreateBankOfChinaBalanceResult(records, openingBalance, request.Config.LastMoney);
         if (!BankOfChinaGenerationBudget.TryValidate(request.Bank, request.Config, result, out var reason))
-            throw new InvalidOperationException(reason);
+            throw new ReferenceBudgetConflictException(reason);
         if (IsFinalBalanceOutsideTolerance(result.FinalBalance, openingBalance, request.Config.LastMoney))
-            throw new InvalidOperationException(
+            throw new ReferenceBudgetConflictException(
                 $"中行无法在保留流水、金额范围和总收支±10%的条件下满足期末余额：" +
                 $"目标 {CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney):N2}，实际 {result.FinalBalance:N2}");
         // The shared cashflow planner handles a remaining deficit without an

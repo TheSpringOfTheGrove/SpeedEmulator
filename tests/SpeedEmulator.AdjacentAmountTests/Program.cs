@@ -17,6 +17,8 @@ var tests = new (string Name, Action Run)[]
     ("已有结息保持原值且符合重算结果", TestInterest),
     ("窄区间金额被预算锁定时交换合法时间，原金额及结息不变", TestTimePermutation),
     ("总额模式全部命中区间顶端时等额减少一收一支，净额及期初不改", TestNetNeutralFallback),
+    ("总额模式支出卡在下限时等额增加一收一支，金额精度及净额保留", TestNetNeutralLowerBound),
+    ("相邻去重优先同参照互换，保留每条参照金额分布", TestSourceSwap),
     ("真实Generate与三种修正均启用且重复执行幂等", TestGenerate),
     ("农商期末无法达到时不再冻结全部可用普通支出", TestRcbReserve),
     ("可实现的期末预留及其它银行预留逻辑保持", TestReserveScope),
@@ -116,7 +118,8 @@ static void TestPrecision()
         foreach (var row in result.Records)
         {
             var value = Math.Abs(row.TradeMoney!.Value); Check(value >= rule.MinMoney && value <= rule.MaxMoney, "超出原范围");
-            var cents = (long)Math.Round(value * 100); Check(cents % 100 is not (>= 1 and <= 9), "禁止小数尾数");
+            var cents = (long)Math.Round(value * 100);
+            if (precision == 2) Check(cents % 10 != 0, "两位小数末位不能为0");
             if (precision == -2) Check(cents % 10000 == 0 && cents / 10000 % 10 != 0, "百位精度不能改变");
         }
     }
@@ -151,6 +154,35 @@ static void TestInterest()
     BankInterestCalculationService.RecalculatePreservingImported(request.Bank, request.BankUser, request.InterestSetting, rows,
         result.OpeningBalance, request.Config.StartTime, request.Config.EndTime.Date.AddDays(1).AddSeconds(-1));
     Near(result.IncomeTotal, rows.Where(row => row.TradeMoney > 0).Sum(row => row.TradeMoney ?? 0));
+}
+static void TestNetNeutralLowerBound()
+{
+    var income = Rule(1, true, 5000, 50000, -1); var expense = Rule(2, false, 5000, 50000, -1);
+    var request = Request([income, expense], 14, opening: 0);
+    var rows = new[] { Row(request, income, 1, 20010), Row(request, expense, 2, -5010), Row(request, expense, 3, -5010) };
+    var originalTimes = rows.Select(row => row.AccountTime).ToArray();
+    var result = Repair(request, rows); Distinct(result);
+    Near(0, result.OpeningBalance); Near(9990, result.FinalBalance);
+    Check(result.IncomeTotal > 20010 && result.ExpenseTotal > 10020, "下限无空间时应尝试等额增加");
+    Near(result.IncomeTotal - 20010, result.ExpenseTotal - 10020);
+    Check(result.Records.Select(row => row.AccountTime).SequenceEqual(originalTimes), "金额可解时不改日期");
+    foreach (var row in result.Records)
+    {
+        var amount = Math.Abs(row.TradeMoney!.Value);
+        Check(amount >= 5000 && amount <= 50000 && amount % 10 == 0 && amount / 10 % 10 != 0, "不能越过原范围或破坏负精度");
+    }
+}
+static void TestSourceSwap()
+{
+    var a = Rule(1, false, 10, 200, 0); var b = Rule(2, false, 10, 200, 0);
+    var request = Request([a, b]);
+    var rows = new[] { Row(request, a, 1, -100), Row(request, a, 2, -100), Row(request, b, 3, -90),
+        Row(request, a, 4, -110), Row(request, b, 5, -50), Row(request, a, 6, -120) };
+    var before = rows.GroupBy(row => row.ExtraFields["__GeneratedSourceIndex"])
+        .ToDictionary(group => group.Key, group => group.Select(row => row.TradeMoney).Order().ToArray());
+    var result = Repair(request, rows); Distinct(result);
+    foreach (var group in result.Records.GroupBy(row => row.ExtraFields["__GeneratedSourceIndex"]))
+        Check(group.Select(row => row.TradeMoney).Order().SequenceEqual(before[group.Key]), "有同参照互换解时不能改变各参照的原金额集合");
 }
 static void TestGenerate()
 {

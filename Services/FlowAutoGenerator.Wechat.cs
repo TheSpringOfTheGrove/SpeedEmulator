@@ -112,7 +112,7 @@ public sealed partial class FlowAutoGenerator
             .Sum(item => GetRuleAmountBounds(item.Rule).Min));
         if (remainingIncomeMinimum > incomeTarget + 0.009d || remainingExpenseMinimum > expenseTarget + 0.009d)
         {
-            throw new InvalidOperationException(
+            throw new ReferenceBudgetConflictException(
                 $"微信固定日期及每月必现项目的最低收入/支出为 {remainingIncomeMinimum:N2}/{remainingExpenseMinimum:N2} 元，" +
                 $"超过目标 {incomeTarget:N2}/{expenseTarget:N2} 元，请调整必现次数或金额范围。");
         }
@@ -354,7 +354,7 @@ public sealed partial class FlowAutoGenerator
         var maximum = FindValidAmountAtOrBelow(Math.Min(bounds.Max, budget), bounds.Min, bounds);
         if (!maximum.HasValue)
         {
-            throw new InvalidOperationException("微信金额预算不足，无法满足配置的最小金额及小数位。");
+            throw new ReferenceBudgetConflictException("微信金额预算不足，无法满足配置的最小金额及小数位。");
         }
         var first = (long)Math.Round(bounds.Min / bounds.Unit);
         var last = (long)Math.Round(maximum.Value / bounds.Unit);
@@ -454,7 +454,7 @@ public sealed partial class FlowAutoGenerator
         var actual = isIncome ? SumIncome(records) : SumExpense(records);
         if (Math.Abs(RoundMoney(target - actual)) > AcceptedFinalBalanceTolerance + 0.009d)
         {
-            throw new InvalidOperationException(
+            throw new ReferenceBudgetConflictException(
                 $"微信{(isIncome ? "收入" : "支出")}目标 {target:N2} 元，配置范围内只能生成 {actual:N2} 元。" +
                 "请检查该方向是否有可选参照明细、可交易日期，或必现项目的金额容量是否足够。");
         }

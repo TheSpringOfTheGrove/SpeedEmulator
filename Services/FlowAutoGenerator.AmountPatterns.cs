@@ -43,7 +43,8 @@ public sealed partial class FlowAutoGenerator
         var patterns = new AmountPatternIndex(entries);
         var cap = Math.Max(3, (int)Math.Ceiling(tails.Length / 81d) + 1);
         if (!tails.GroupBy(entry => amounts[entry.Index] % 100).Any(group => group.Count() > cap)
-            && !tails.Any(entry => patterns.TailConflict(amounts, entry.Index))) return source;
+            && !tails.Any(entry => patterns.TailConflict(amounts, entry.Index))
+            && tails.Count(entry => IsLowCentTail(amounts[entry.Index])) <= LowCentTailLimit(tails.Length)) return source;
 
         // CCB bands describe the initial sampling distribution. They must not
         // pin dozens of independently adjustable rows at a band's .11 boundary.
@@ -69,7 +70,7 @@ public sealed partial class FlowAutoGenerator
                 row.ExtraFields[CcbStratumMax] = Math.Min(entry.Bounds.Max, amounts[entry.Index] / 100d + .99d).ToString("R", CultureInfo.InvariantCulture);
         }
         var relaxed = CreateAutomaticBalanceResult(records, source.OpeningBalance);
-        var result = CompleteGeneratedTailSpacing(request, relaxed);
+        var result = CompleteGeneratedTailSpacing(request, CompleteGeneratedResultCore(request, relaxed, generatedOnly: true));
         var changed = false;
         // Serial completion can reorder tied timestamps; retain provenance by
         // row identity rather than restoring protected metadata by list position.
@@ -97,6 +98,8 @@ public sealed partial class FlowAutoGenerator
         {
             if (!patterns.Conflict(amounts, right)) continue;
             var left = patterns.LeftIndex(amounts, right);
+            if (patterns.TailConflict(amounts, right) && IsLowCentTail(amounts[left]) && IsLowCentTail(amounts[right]))
+                throw new InvalidOperationException($"相邻小数尾数校验未通过：第{left + 1}、{right + 1}条普通两位小数连续出现 .01～.09。请检查可用金额范围及收支约束。固定金额、结息及导入原值保留。");
             if (patterns.TailConflict(amounts, right))
                 throw new InvalidOperationException($"相邻小数尾数校验未通过：第{left + 1}、{right + 1}条普通两位小数的尾数均为.{amounts[right] % 100:00}。当前金额区间、精度和收支约束未找到合法分配，不能返回重复尾数的数据。");
             throw new InvalidOperationException($"相邻金额校验未通过：第{left + 1}、{right + 1}条金额绝对值均为{amounts[right] / 100d:0.00}，请检查金额范围、精度及收支约束。固定金额、结息及导入原值保留。");
@@ -105,7 +108,7 @@ public sealed partial class FlowAutoGenerator
             ?? entries.OfType<AdjacentAmountEntry>().FirstOrDefault();
         if (anchor is not null)
             result.Records[anchor.Index].ExtraFields[AmountPatternSignature] = CalculateAmountPatternSignature(result.Records);
-        return EnsureGeneratedCentTailResult(request, result);
+        return result;
     }
 
     private static IEnumerable<long> PatternAmountCandidates(AdjacentAmountEntry entry, long current, long step,
@@ -113,11 +116,12 @@ public sealed partial class FlowAutoGenerator
     {
         if (!entry.HasCentTail || step != 1) return AdjacentAmountCandidates(entry, current, step, random);
         var whole = current - current % 100;
-        return Enumerable.Range(11, 89).Where(tail => tail % 10 != 0)
+        return Enumerable.Range(1, 99).Where(tail => tail % 10 != 0)
             .SelectMany(tail => new[] { whole + tail, whole - 100 + tail, whole + 100 + tail })
             .Where(next => next != current && Math.Abs(next - current) <= 99 && entry.Accepts(next))
             .Select(next => (Next: next, Tie: random.Next()))
-            .OrderBy(item => usage[item.Next % 100]).ThenBy(item => Math.Abs(item.Next - current)).ThenBy(item => item.Tie)
+            .OrderBy(item => IsLowCentTail(item.Next) ? 1 : 0)
+            .ThenBy(item => usage[item.Next % 100]).ThenBy(item => Math.Abs(item.Next - current)).ThenBy(item => item.Tie)
             .Select(item => item.Next);
     }
 
@@ -145,7 +149,8 @@ public sealed partial class FlowAutoGenerator
         // Integers/one-decimal rows do not hide a repeated hundredths tail.
         // Fixed, imported, persisted and settlement amounts are not candidates.
         public bool TailConflict(long[] amounts, int right) => right >= 0 && HasTail[right] && PreviousTail[right] >= 0
-            && amounts[right] % 100 == amounts[PreviousTail[right]] % 100;
+            && (amounts[right] % 100 == amounts[PreviousTail[right]] % 100
+                || IsLowCentTail(amounts[right]) && IsLowCentTail(amounts[PreviousTail[right]]));
         public bool Conflict(long[] amounts, int right) => right > 0 && right < amounts.Length
             && (TailConflict(amounts, right) || mutable[right] && mutable[right - 1] && amounts[right] > 0 && amounts[right] == amounts[right - 1]);
         public int LeftIndex(long[] amounts, int right) => TailConflict(amounts, right) ? PreviousTail[right] : right - 1;

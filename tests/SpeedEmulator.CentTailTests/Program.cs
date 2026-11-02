@@ -8,15 +8,15 @@ using SpeedEmulator.Services;
 var tests = new (string Name, Action Run)[]
 {
     ("34类银行全部执行尾数策略且保持总额条数日期及输入", TestAllBanks),
-    ("有调整空间时收支两侧0几尾数全部消除，整数流水不变", TestDirectionQuotas),
+    ("有调整空间时低尾数控制在约2%且不连续，整数流水不变", TestDirectionQuotas),
     ("合法固定项目、导入、利息、其他精度与外部用户不调整", TestExclusions),
-    ("只有0几可选或预算卡在下限时严格拒绝不合规结果", TestConstrained),
+    ("低尾数合法且软性降频不能突破固定范围和实际预算", TestConstrained),
     ("单笔累计不超过0.99元，重复执行稳定", TestCumulative),
     ("按月范围及明细保持每月收支金额", TestMonthlyBudgets),
     ("同一天的不同明细预算窗口也不能混用", TestIntradayBudgets),
     ("建行金额分层保持，单值分层不调整", TestCcbBands),
-    ("跨日利息变化时拒绝不合规结果且输入不变", TestInterestRollback),
-    ("逐对调整只能解决一部分时也不能放行剩余0几", TestSameDayFallback),
+    ("降频与跨日利息冲突时保留结息及输入", TestInterestRollback),
+    ("逐对安全调整降低频率且不污染输入", TestSameDayFallback),
     ("未配置利息且没有结息行时允许跨日安全配对", TestNoInterestSetting),
     ("同日微调保留利息、利息税和全部显示字段", TestSameDayInterest),
     ("已有负余额不恶化，收入支出配对均保护余额", TestNegativeBalances),
@@ -24,17 +24,17 @@ var tests = new (string Name, Action Run)[]
     ("余额修正三个出口保持尾数且时间修正保留金额", TestCorrectionExits),
     ("大批量处理有界且新尾数不过度集中", TestVolume),
     ("统一生成出口涵盖中行、建行、微信及通用路径", TestGenerationExits),
-    ("小分组也不预留0几名额，可行时全部消除", TestSmallGroups),
+    ("小分组仅保留少量孤立低尾数", TestSmallGroups),
     ("中行收口优先避开0几且尾数有变化，固定项目不动", TestBocPreferredClosing),
     ("中行混合精度收口由粗粒度承担大额补差，不成批压低小数", TestBocCoarseFirstClosing),
-    ("中行预算收口不再回退到禁止尾数，窄区间明确拒绝", TestBocClosingFallback),
+    ("中行精确收口允许单笔低尾数且保留窄区间", TestBocClosingFallback),
     ("真实结息路径下中行新生成流水避免0几尾数", TestBocGenerationWithInterest),
-    ("两位小数整个候选集严格排除01到09且边界完整", TestHardLegalAmounts),
-    ("建行合法金额排名双向映射跳过所有禁用尾数", TestHardCcbRanking),
-    ("所有普通尾数均被出口阻止，结息和导入原值保留", TestHardOutputGuard),
-    ("无合法金额的参照与固定项目在生成前定位冲突", TestHardRuleConflicts),
-    ("34类银行多次真实生成及三种余额修正均无禁用尾数", TestHardPublicGeneration),
-    ("跨整数禁用区间的窄参照仍可使用两侧合法金额", TestNarrowLegalGap),
+    ("两位小数候选完整包含01到09且保持非零末位", TestHardLegalAmounts),
+    ("建行合法金额排名双向映射包含低尾数", TestHardCcbRanking),
+    ("孤立低尾数可原样通过，结息和导入原值保留", TestHardOutputGuard),
+    ("参照与固定项目的合法低尾数不再被预检禁止", TestHardRuleConflicts),
+    ("34类银行多次真实生成及三种余额修正均控制低尾数", TestHardPublicGeneration),
+    ("跨整数窄区间真实生成保留金额范围并降低低尾数频率", TestNarrowLegalGap),
     ("修补候选按月及日期均匀轮转，不改变流水或日期", TestTimelineRepairOrdering),
     ("共用收支增减修补均匀落在全年各月，金额精度不变", TestTimelineSignedClosing),
     ("中行收口不再把修补集中于末尾月份", TestTimelineBocClosing),
@@ -48,7 +48,9 @@ var tests = new (string Name, Action Run)[]
     ("仅移动日期引入的尾数碰撞也会经过最终间隔检查", TestFinalTailTimeCorrection),
     ("相等的固定整数优先于正数小数位且不改配置", TestFixedIntegerBounds),
     ("34类银行固定整数参照和固定日期项目均可生成修正", TestFixedIntegerGeneration),
-    ("非固定整数的范围及禁止尾数仍保留原校验", TestFixedIntegerScope)
+    ("放开低尾数后仍保留非固定范围及取整粒度", TestFixedIntegerScope),
+    ("初次采样允许少量低尾数并兼容只有低尾数的合法范围", TestLowSamplingRate),
+    ("偶发低尾数不提前终止常用81种尾数轮次", TestLowTailRegularCycle)
 };
 var failures = 0;
 foreach (var test in tests)
@@ -71,12 +73,6 @@ static object? Call(string name, params object?[] args)
 static FlowAutoGenerationResult Complete(FlowAutoGenerationRequest request, FlowAutoGenerationResult source) =>
     (FlowAutoGenerationResult)Call("CompleteGeneratedResult", request, source)!;
 static void Check(bool value, string message) { if (!value) throw new Exception(message); }
-static void Reject(Action action)
-{
-    try { action(); }
-    catch (InvalidOperationException e) { Check(e.Message.Contains(".01",StringComparison.Ordinal),"应说明禁止尾数或冲突范围: "+e.Message);return; }
-    throw new Exception("必须拒绝含禁用尾数的结果，不能作为成功结果返回");
-}
 static string Snapshot(object value) => JsonSerializer.Serialize(value);
 static int Tail(FlowRecord row) => (int)Math.Round(Math.Abs(row.TradeMoney ?? 0) * 100, MidpointRounding.AwayFromZero) % 100;
 static Bank Bank(string name = "中行", long id = 18, string type = BankTypes.Personal) => new() { Id = id, Name = name, Type = type };
@@ -143,7 +139,8 @@ static void Preserved(FlowAutoGenerationResult before, FlowAutoGenerationResult 
         var old = original[row.Id];
         Check(row.AccountTime == old.AccountTime && row.Account == old.Account && row.VoucherNum == old.VoucherNum, "日期、账户或指定凭证变化");
         Check(Math.Abs(Math.Abs(row.TradeMoney ?? 0) - Math.Abs(old.TradeMoney ?? 0)) <= .990001, "单笔调整超过0.99元");
-        if (row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2")
+        if (!row.IsDocumentImported && !FlowGeneratedRowKinds.IsSystemInterest(row)
+            && row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2")
         {
             var amount = Math.Abs(row.TradeMoney ?? 0);
             var min = double.Parse(row.ExtraFields["__GeneratedAmountMin"], CultureInfo.InvariantCulture);
@@ -154,11 +151,14 @@ static void Preserved(FlowAutoGenerationResult before, FlowAutoGenerationResult 
 }
 static void Quota(IEnumerable<FlowRecord> rows)
 {
-    foreach (var group in rows.Where(r => r.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") == "Reference"
-                 && r.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2").GroupBy(r => Math.Sign(r.TradeMoney ?? 0)))
-    {
-        Check(group.All(r => Tail(r) is < 1 or > 9), "有调整空间时不应保留0几尾数");
-    }
+    var eligible = rows.Where(r => !r.IsDocumentImported && !FlowGeneratedRowKinds.IsSystemInterest(r)
+        && r.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") is "Reference" or "Const"
+        && r.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2"
+        && r.ExtraFields.GetValueOrDefault("__GeneratedAmountMin") != r.ExtraFields.GetValueOrDefault("__GeneratedAmountMax"))
+        .OrderBy(r => r.AccountTime).ToArray();
+    Check(eligible.Count(r => Tail(r) is >= 1 and <= 9) <= Math.Max(1, (int)Math.Floor(eligible.Length * .02)),
+        $"有调整空间时低尾数应控制在约2%以内；bank={eligible.FirstOrDefault()?.BankId}, low={eligible.Count(r=>Tail(r) is >=1 and <=9)}, total={eligible.Length}");
+    Check(eligible.Zip(eligible.Skip(1)).All(pair => Tail(pair.First) > 9 || Tail(pair.Second) > 9), "低尾数不能连续出现");
 }
 
 static void TestAllBanks()
@@ -195,7 +195,7 @@ static void TestExclusions()
     var rows = Profile(); var time = rows[0].AccountTime!.Value;
     var exempt = new[]
     {
-        Row(1001,-20.13,time,kind:"Const"), Row(1002,-20.13,time,20.13,20.13),
+        Row(1001,-20.13,time,20.13,20.13,kind:"Const"), Row(1002,-20.13,time,20.13,20.13),
         Row(1003,-20.01,time), Row(1004,-20.1,time,10.1,100.9,precision:1),
         Row(1005,-20,time,10,100,precision:0), Row(1006,-20,time,10,90,precision:-1),
         Row(1007,-20.01,time), Row(1008,-20.01,time), Row(1009,-20.01,time), Row(1010,-20.01,time)
@@ -213,7 +213,9 @@ static void TestConstrained()
     {
         var rows = Enumerable.Range(1, 30).Select(i => Row(i, -20.01, new DateTime(2026, 10, 1).AddMinutes(i), 20.01, max)).ToList();
         var request = Request(rows); var source = Result(request, rows);
-        var before=Snapshot(source);Reject(()=>Complete(request,source));Check(before==Snapshot(source),"冲突不能污染输入");
+        var before=Snapshot(source);var result=Complete(request,source);Preserved(source,result);
+        Check(before==Snapshot(source),"软性尾数偏好不能污染输入");
+        Check(result.Records.All(row => row.TradeMoney == -20.01), "预算锁在下限时不能擅自改变总额");
     }
 }
 static void TestCumulative()
@@ -250,7 +252,10 @@ static void TestIntradayBudgets()
     var request = Request(rows); request.Config.SelectIndex = 2;
     request.Config.MonthGenData.Add(new MonthGenerateRule { StartTime = new DateTime(2026,10,1,8,0,0), EndTime = new DateTime(2026,10,1,12,0,0) });
     request.Config.MonthGenData.Add(new MonthGenerateRule { StartTime = new DateTime(2026,10,1,13,0,0), EndTime = new DateTime(2026,10,1,18,0,0) });
-    var source = Result(request, rows);var before=Snapshot(source);Reject(()=>Complete(request,source));
+    var source = Result(request, rows);var before=Snapshot(source);var result=Complete(request,source);Preserved(source,result);
+    foreach(var period in request.Config.MonthGenData)
+        Check(source.Records.Where(row=>row.AccountTime>=period.StartTime&&row.AccountTime<=period.EndTime).Sum(row=>row.TradeMoney)
+            ==result.Records.Where(row=>row.AccountTime>=period.StartTime&&row.AccountTime<=period.EndTime).Sum(row=>row.TradeMoney), "不能串用日内预算");
     Check(before==Snapshot(source),"不能借其他预算窗口的余额完成尾数调整");
 }
 static void TestCcbBands()
@@ -291,7 +296,9 @@ static void TestInterestRollback()
     BankInterestCalculationService.Recalculate(request.Bank,request.BankUser,request.InterestSetting,rows,request.Config.OpeningBalance,
         request.Config.StartTime,request.Config.EndTime,random:new Random(17));
     foreach(var row in rows.Where(r=>r.Id==0)) row.Id=2000+rows.IndexOf(row);
-    var source=Result(request,rows); var before=Snapshot(source);Reject(()=>Complete(request,source));
+    var source=Result(request,rows); var before=Snapshot(source);var result=Complete(request,source);Preserved(source,result);
+    Check(source.Records.Where(FlowGeneratedRowKinds.IsSystemInterest).Select(row=>row.TradeMoney)
+        .SequenceEqual(result.Records.Where(FlowGeneratedRowKinds.IsSystemInterest).Select(row=>row.TradeMoney)),"不能为降低频率改变原结息");
     Check(before==Snapshot(source),"拒绝不能污染原结果或结息行");
 }
 static void TestSameDayInterest()
@@ -321,7 +328,8 @@ static void TestSameDayFallback()
     BankInterestCalculationService.Recalculate(request.Bank,request.BankUser,request.InterestSetting,rows,request.Config.OpeningBalance,
         request.Config.StartTime,request.Config.EndTime,random:new Random(17));
     foreach(var row in rows.Where(r=>r.Id==0)) row.Id=2000+rows.IndexOf(row);
-    var source=Result(request,rows);var before=Snapshot(source);Reject(()=>Complete(request,source));
+    var source=Result(request,rows);var before=Snapshot(source);var result=Complete(request,source);Preserved(source,result);
+    Check(result.Records.Count(row=>Tail(row) is >=1 and <=9) <= source.Records.Count(row=>Tail(row) is >=1 and <=9), "安全调整不能增加低尾数数量");
     Check(before==Snapshot(source),"部分成功也不能返回含禁用尾数的结果或修改输入");
 }
 static void TestNoInterestSetting()
@@ -335,7 +343,8 @@ static void TestNoInterestSetting()
     var request=Request(rows);request.BankUser.AutoCalculateInterest=true;
     var source=Result(request,rows);var result=Complete(request,source);Preserved(source,result);Quota(result.Records);
     var interest=Row(2000,100,new DateTime(2026,1,21));interest.GeneratedRowKind="Interest";rows.Add(interest);
-    source=Result(request,rows);Reject(()=>Complete(request,source));
+    source=Result(request,rows);result=Complete(request,source);Preserved(source,result);
+    Check(result.Records.Single(row=>row.GeneratedRowKind=="Interest").TradeMoney==100,"缺少计息配置时不能擅自改变原结息");
 }
 static void TestNegativeBalances()
 {
@@ -460,9 +469,9 @@ static void TestBocClosingFallback()
 {
     var rows=new List<FlowRecord>{Row(1,-21.11,new DateTime(2026,10,1,9,0,0),20.01,30.99)};
     Check((bool)Call("AdjustBankOfChinaSignedTotal",rows,false,20.05)!,"不足偏好容量时仍应收口成功");
-    Check(rows.Count==1&&Tail(rows[0])>9,"不得为满足不可行的精确目标而回退到20.05");
+    Check(rows.Count==1&&rows[0].TradeMoney==-20.05,"单笔低尾数现在应允许满足合法精确目标");
     rows=[Row(1,-20.01,new DateTime(2026,10,1,9,0,0),20.01,20.09)];
-    Reject(()=>Call("AdjustBankOfChinaSignedTotal",rows,false,20.07));
+    Check((bool)Call("AdjustBankOfChinaSignedTotal",rows,false,20.07)! && rows[0].TradeMoney==-20.07,"窄区间应允许合法低尾数收口");
 }
 static void TestBocGenerationWithInterest()
 {
@@ -494,14 +503,16 @@ static void TestHardLegalAmounts()
 {
     var rule=new GenerateReferenceRule{Index=1,IsCheck=true,MinMoney=.01,MaxMoney=3.99,FloutLength=2};
     var before=Snapshot(rule);var bounds=Call("GetRuleAmountBounds",rule)!;
-    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == .11,"第一个合法两位金额应为0.11");
+    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == .01,"第一个合法两位金额应为0.01");
     var values=(List<double>)Call("EnumerateDiscreteAmounts",bounds,1000)!;
-    Check(values.Count==324 && values.Distinct().Count()==324,"4个完整元区间各应有81个合法值");
-    Check(values.All(value=>value>=.11&&value<=3.99&&(long)Math.Round(value*100)%100>=11&&(long)Math.Round(value*100)%10!=0),"候选集中仍存在禁止值");
-    foreach(var value in new[]{.01,.05,.09,1.01,1.09,2.00,3.10})
+    Check(values.Count==360 && values.Distinct().Count()==360,"4个完整元区间各应有90个合法值");
+    Check(values.All(value=>value>=.01&&value<=3.99&&(long)Math.Round(value*100)%10!=0),"候选集必须保持两位非零末位");
+    foreach(var value in new[]{.01,.05,.09,1.01,1.09})
+        Check((bool)Call("HasRequiredNonZeroPrecisionDigit",value,bounds)!,"低尾数现在应合法: "+value);
+    foreach(var value in new[]{2.00,3.10})
         Check(!(bool)Call("HasRequiredNonZeroPrecisionDigit",value,bounds)!,"候选校验应拒绝: "+value);
-    Check((double)Call("FindValidAmountAtOrAbove",1d,3.99,bounds)! == 1.11,"整数边界向上必须跨过整段禁止区间");
-    Check((double)Call("FindValidAmountAtOrBelow",2.10,.11,bounds)! == 1.99,"整数边界向下必须跨过整段禁止区间");
+    Check((double)Call("FindValidAmountAtOrAbove",1d,3.99,bounds)! == 1.01,"整数边界向上应能取.01");
+    Check((double)Call("FindValidAmountAtOrBelow",2.10,.01,bounds)! == 2.09,"整数边界向下应能取.09");
     Check(before==Snapshot(rule),"合法值派生不能改写用户金额配置");
     foreach(var precision in new[]{-2,-1,0,1})
     {
@@ -519,7 +530,7 @@ static void TestHardCcbRanking()
         var range=Activator.CreateInstance(type,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic,null,[bounds],null)!;
         var count=(long)type.GetProperty("Count")!.GetValue(range)!;
         var expected=Enumerable.Range((int)Math.Ceiling(min*100-.000001),(int)Math.Floor(max*100+.000001)-(int)Math.Ceiling(min*100-.000001)+1)
-            .Where(cents=>cents%100>=11&&cents%10!=0).Select(cents=>cents/100d).ToArray();
+            .Where(cents=>cents%10!=0).Select(cents=>cents/100d).ToArray();
         Check(count==expected.Length,"建行合法金额数量计算不符");
         for(long rank=0;rank<count;rank++)
         {
@@ -537,18 +548,18 @@ static void TestHardOutputGuard()
     {
         var row=Row(1,sign*(20+tail/100d),new DateTime(2026,10,1),kind:kind);
         var rows=new List<FlowRecord>{row};var request=Request(rows);var source=Result(request,rows);var before=Snapshot(source);
-        Reject(()=>Call("EnsureGeneratedCentTailResult",request,source));
-        Check(before==Snapshot(source),"出口拒绝不能改写输入或固定值");
-        row.IsDocumentImported=true;Check(ReferenceEquals(source,Call("EnsureGeneratedCentTailResult",request,source)),"导入数据必须原样保留");
+        Check(ReferenceEquals(source,Complete(request,source)),"单笔孤立的低尾数应该原样通过");
+        Check(before==Snapshot(source),"合法低尾数不能被擅自改写");
+        row.IsDocumentImported=true;Check(ReferenceEquals(source,Complete(request,source)),"导入数据必须原样保留");
         row.IsDocumentImported=false;row.GeneratedRowKind="Interest";
-        Check(ReferenceEquals(source,Call("EnsureGeneratedCentTailResult",request,source)),"结息金额必须原样保留");
+        Check(ReferenceEquals(source,Complete(request,source)),"结息金额必须原样保留");
     }
     var synthetic=Row(0,-20.01,new DateTime(2026,10,1));synthetic.ExtraFields.Clear();
     var syntheticRows=new List<FlowRecord>{synthetic};var syntheticRequest=Request(syntheticRows);var syntheticResult=Result(syntheticRequest,syntheticRows);
-    Reject(()=>Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult));
-    synthetic.Id=42;Check(ReferenceEquals(syntheticResult,Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult)),"既有手工记录不应被作为新生成行改动");
+    Check(ReferenceEquals(syntheticResult,Complete(syntheticRequest,syntheticResult)),"不再以低尾数绝对拦截合计修补行");
+    synthetic.Id=42;Check(ReferenceEquals(syntheticResult,Complete(syntheticRequest,syntheticResult)),"既有手工记录不应被作为新生成行改动");
     synthetic.Id=0;synthetic.TradeMoney=-20.11;
-    Check(ReferenceEquals(syntheticResult,Call("EnsureGeneratedCentTailResult",syntheticRequest,syntheticResult)),"合法尾数应通过");
+    Check(ReferenceEquals(syntheticResult,Complete(syntheticRequest,syntheticResult)),"合法尾数应通过");
 }
 static void TestHardRuleConflicts()
 {
@@ -560,12 +571,15 @@ static void TestHardRuleConflicts()
             Config=new FlowGenerationConfig{StartTime=new DateTime(2026,1,1),EndTime=new DateTime(2026,3,31),OpeningBalance=10000,AllInMoney=1000,LastMoney=100},
             References=fixedItem?[]:[new GenerateReferenceRule{Index=7,IsCheck=true,MinMoney=money,MaxMoney=money,FloutLength=2}],
             ConstItems=fixedItem?[new GenerateConstRule{Index=7,IsCheck=true,MinMoney=money,MaxMoney=money,FloutLength=2,FixDay="15",ReCnt="1"}]:[]};
-        var before=Snapshot(request);Reject(()=>new FlowAutoGenerator().Generate(request));
-        Check(before==Snapshot(request),"冲突应提示用户，不能改写配置");
+        var before=Snapshot(request);Call("ValidateGeneratedCentTailRules",request);
+        var activeRule=request.References.Cast<FlowRuleBase>().Concat(request.ConstItems).Single();
+        var fixedBounds=Call("GetRuleAmountBounds",activeRule)!;
+        Check((double)fixedBounds.GetType().GetProperty("Min")!.GetValue(fixedBounds)! == money,"不能拒绝或扩大合法固定低尾数");
+        Check(before==Snapshot(request),"放开尾数不能改写配置");
     }
     var rule=new GenerateReferenceRule{Index=7,IsCheck=true,MinMoney=20.01,MaxMoney=20.11,FloutLength=2};
     var bounds=Call("GetRuleAmountBounds",rule)!;
-    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == 20.11,"部分合法的窄区间应保留合法值");
+    Check((double)bounds.GetType().GetProperty("Min")!.GetValue(bounds)! == 20.01,"窄区间的低尾数应保留");
     var inactive=new FlowAutoGenerationRequest{Bank=Bank(),BankUser=new BankUser{Id=9001},Config=new FlowGenerationConfig(),
         References=[new GenerateReferenceRule{Index=8,IsCheck=false,MinMoney=20.01,MaxMoney=20.09,FloutLength=2}],
         ConstItems=[new GenerateConstRule{Index=9,IsCheck=true,FixDay=null,MinMoney=20.01,MaxMoney=20.09,FloutLength=2}]};
@@ -716,7 +730,8 @@ static void TestTimelineExactClosing()
     Check(rows.All(row => row.Balance >= -.009), "分散增加支出时必须实时检查后续最低余额");
     Check(Math.Abs(rows.Last().Balance!.Value - 50) < .009, "有充足容量时不应因保守静态余额而收口失败");
     Check(rows.Where(row => row.TradeMoney > 0).All(row => row.TradeMoney == 100), "不得修改固定收入");
-    Quota(rows);
+    var source = Result(request, rows); var completed = Complete(request, source);
+    Preserved(source, completed); Quota(completed.Records);
 }
 
 static void TestTimelineMonthlyClosing()
@@ -894,7 +909,7 @@ static void TestFixedIntegerGeneration()
                     Check(fixedRows.Length==3&&fixedRows.All(row=>row.TradeMoney==-100),"固定100元及每月次数必须保留: "+bank.Name);
                     Check(salary.Length==3&&salary.All(row=>row.TradeMoney==1000),"固定日期1000元必须保留: "+bank.Name);
                     Check(fixedRows.Concat(salary).All(row=>row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision")=="0"&&row.ExtraFields.GetValueOrDefault("__GeneratedAmountUnit")=="1"),"元数据必须使用有效整数精度: "+bank.Name);
-                    Check(result.Records.Where(row=>row.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex")=="57").All(row=>Tail(row)>=11&&Tail(row)%10!=0),"其他明细仍应遵守两位小数规则");
+                    Check(result.Records.Where(row=>row.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex")=="57").All(row=>Tail(row)>=1&&Tail(row)%10!=0),"其他明细仍应遵守两位小数规则");
                 }
                 Check(config==Snapshot(request),"不能改写用户配置: "+bank.Name);count++;
             }
@@ -911,7 +926,10 @@ static void TestFixedIntegerScope()
         var rule=new GenerateReferenceRule{Index=56,IsCheck=true,MinMoney=min,MaxMoney=max,FloutLength=2};
         var args=new object?[]{rule,null};var method=typeof(FlowAutoGenerator).GetMethod("TryGetRuleAmountBounds",BindingFlags.Static|BindingFlags.NonPublic)!;
         var valid=(bool)method.Invoke(null,args)!;
-        Check(!valid,"不能把非固定整数的冲突范围自动扩大或取整");
+        Check(valid,"非固定整数范围的合法低尾数应允许");
+        var derived=args[1]!;
+        Check((double)derived.GetType().GetProperty("Min")!.GetValue(derived)!>=min &&
+            (double)derived.GetType().GetProperty("Max")!.GetValue(derived)!<=max,"不能扩大原金额范围或自动取整");
     }
     var narrow=Call("GetRuleAmountBounds",new GenerateReferenceRule{MinMoney=99.99,MaxMoney=100,FloutLength=2})!;
     Check((double)narrow.GetType().GetProperty("Min")!.GetValue(narrow)! == 99.99 &&
@@ -921,4 +939,39 @@ static void TestFixedIntegerScope()
     Check((int)fractional.GetType().GetProperty("Precision")!.GetValue(fractional)! == 2,"合法固定小数仍应保留原精度");
     var coarse=Call("GetRuleAmountBounds",new GenerateReferenceRule{MinMoney=1000,MaxMoney=5000,FloutLength=-2})!;
     Check((double)coarse.GetType().GetProperty("Unit")!.GetValue(coarse)! == 100,"非固定整数的负数取整粒度不变");
+}
+static void TestLowSamplingRate()
+{
+    var sampler = typeof(FlowAutoGenerator).GetMethod("TrySampleReferenceNaturalRangeAmount", BindingFlags.Static | BindingFlags.NonPublic)!;
+    var rule = new GenerateReferenceRule { MinMoney = .01, MaxMoney = 1000.99, FloutLength = 2 };
+    var random = new Random(20261102); var low = 0;
+    for (var sample = 0; sample < 10000; sample++)
+    {
+        object?[] arguments = [rule, double.MaxValue, random, null];
+        Check((bool)sampler.Invoke(null, arguments)!, "合法采样不应失败");
+        var amount = (double)arguments[3]!; var tail = (int)Math.Round(amount * 100) % 100;
+        Check(amount >= .01 && amount <= 1000.99 && tail % 10 != 0, "采样必须保持范围和两位非零末位");
+        if (tail is >= 1 and <= 9) low++;
+    }
+    Check(low is >= 100 and <= 300, $"一万次采样低尾数应少量出现且接近2%，实际{low}");
+    rule.MinMoney = 20.01; rule.MaxMoney = 20.09;
+    var seen = new HashSet<int>();
+    for (var sample = 0; sample < 200; sample++)
+    {
+        object?[] arguments = [rule, double.MaxValue, random, null];
+        Check((bool)sampler.Invoke(null, arguments)!, "不能因只有低尾数而拒绝合法窄范围");
+        var amount = (double)arguments[3]!; Check(amount >= 20.01 && amount <= 20.09, "不能扩大窄范围");
+        seen.Add((int)Math.Round(amount * 100) % 100);
+    }
+    Check(seen.Count == 9, "低尾数不能仍被隐藏排除");
+}
+static void TestLowTailRegularCycle()
+{
+    var rows = RepeatedTailRows(244);
+    rows[0].TradeMoney = -20.03; rows[0].ExtraFields["__GeneratedAmountMin"] = "20.01";
+    var request = Request(rows); var source = Result(request, rows); var result = Complete(request, source);
+    Preserved(source, result); Quota(result.Records);
+    var regular = result.Records.Select(Tail).Where(tail => tail >= 11).ToArray();
+    Check(regular.Take(81).Distinct().Count() == 81, "偶发低尾数不能让首轮常用尾数提前重复");
+    Check(regular.Skip(81).Take(81).Distinct().Count() == 81, "后续常用尾数仍应按完整轮次变化");
 }

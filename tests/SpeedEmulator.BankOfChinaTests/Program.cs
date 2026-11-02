@@ -323,7 +323,8 @@ static void TestMixedPrecisionClosing()
         var p2 = result.Records.Where(row => Kind(row) == "Reference" && row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2").ToArray();
         Check(p2.Length is >= 126 and < 134, "九个完整月保留126笔两位小数，最后一天按整月抽样筛选");
         var tails = p2.Select(row => (int)Math.Round(Math.Abs(row.TradeMoney!.Value) * 100, MidpointRounding.AwayFromZero) % 100).ToArray();
-        Check(tails.All(tail => tail >= 11 && tail % 10 != 0), "必须保留原合法小数约束");
+        Check(tails.All(tail => tail >= 1 && tail % 10 != 0), "必须保留两位非零末位约束");
+        Check(tails.Zip(tails.Skip(1)).All(pair => pair.First > 9 || pair.Second > 9), "低尾数不能连续出现");
         Check(tails.GroupBy(tail => tail).Max(group => group.Count()) <= 5, "不能再成批集中为同一个尾数");
         foreach (var day in p2.GroupBy(row => row.AccountTime!.Value.Date))
         {

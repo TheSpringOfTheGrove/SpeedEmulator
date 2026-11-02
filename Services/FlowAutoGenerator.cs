@@ -264,15 +264,18 @@ public sealed partial class FlowAutoGenerator
             return GenerateReferenceNaturalResult(request, start, end, openingBalance, random, runSeed);
         if (IsWechatBank(request.Bank))
         {
-            return GenerateWechatNaturalResult(request, start, end, openingBalance, random);
+            return GenerateWithReferenceBudgetFallback(request, start, end, openingBalance, runSeed,
+                () => GenerateWechatNaturalResult(request, start, end, openingBalance, random));
         }
         if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
         {
-            return GenerateBankOfChinaResult(request, start, end, openingBalance, random);
+            return GenerateWithReferenceBudgetFallback(request, start, end, openingBalance, runSeed,
+                () => GenerateBankOfChinaResult(request, start, end, openingBalance, random));
         }
         if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
         {
-            return GenerateConstructionBankResult(request, start, end, openingBalance, random);
+            return GenerateWithReferenceBudgetFallback(request, start, end, openingBalance, runSeed,
+                () => GenerateConstructionBankResult(request, start, end, openingBalance, random));
         }
 
         var estimatedRecordCapacity = IsWechatBank(request.Bank)
@@ -821,8 +824,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
         => WithBankOfChinaDiagnostics(request, "negative-balance-correction",
-            () => CompleteGeneratedDateCorrection(request, EnsureGeneratedCentTailResult(request, EnsureAutomaticOpeningBalance(request, source,
-                cloneRecords: true, recalculateInterest: true))));
+            () => CompleteGeneratedDateCorrection(request, EnsureAutomaticOpeningBalance(request, source,
+                cloneRecords: true, recalculateInterest: true)));
 
     public FlowAutoGenerationResult ApplyFinalBalanceCorrection(
         FlowAutoGenerationRequest request,
@@ -916,8 +919,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationResult source,
         double correctedOpeningBalance)
         => WithBankOfChinaDiagnostics(request, "opening-balance-correction",
-            () => CompleteGeneratedDateCorrection(request, EnsureGeneratedCentTailResult(request, EnsureAutomaticOpeningBalance(request, source,
-                correctedOpeningBalance, cloneRecords: true, recalculateInterest: true))));
+            () => CompleteGeneratedDateCorrection(request, EnsureAutomaticOpeningBalance(request, source,
+                correctedOpeningBalance, cloneRecords: true, recalculateInterest: true)));
 
     internal static FlowRecord CreateRecordFromExternalPlan(
         FlowAutoGenerationRequest request,
@@ -19888,7 +19891,7 @@ public sealed partial class FlowAutoGenerator
             var precision = Math.Min(bounds.Precision.Value, 2);
             var scale = precision == 1 ? 10d : 100d;
             var scaled = (long)Math.Round(Math.Abs(RoundMoney(amount)) * scale, MidpointRounding.AwayFromZero);
-            return scaled % 10L != 0L && (precision != 2 || scaled % 100L >= 11L);
+            return scaled % 10L != 0L;
         }
 
         var precisionPlaceValue = Math.Floor((Math.Abs(amount) + 0.0000001d) / bounds.Unit);

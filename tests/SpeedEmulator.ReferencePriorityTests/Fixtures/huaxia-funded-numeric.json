@@ -1,0 +1,26 @@
+{
+  "Config": {
+    "SelectIndex": 0,
+    "StartTime": "2025-06-04T13:24:00",
+    "EndTime": "2026-06-08T13:24:00",
+    "OpeningBalance": 96300.52,
+    "AllInMoney": 30000,
+    "LastMoney": 10000,
+    "MinInMoneyMonth1": 2307.69,
+    "MaxInMoneyMonth1": 2307.69,
+    "MinOutMoneyMonth1": 1538.46,
+    "MaxOutMoneyMonth1": 1538.46
+  },
+  "References": [
+    { "Index": 1, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 5, "MaxMoney": 100, "FloutLength": 0, "StartDay": 9, "EndDay": 22, "PercentMonth": 1, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 2, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 5, "MaxMoney": 100, "FloutLength": 0, "StartDay": 9, "EndDay": 22, "PercentMonth": 1, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 3, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 2000, "MaxMoney": 10000, "FloutLength": 2, "StartDay": 9, "EndDay": 22, "PercentMonth": 1, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 4, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 10, "MaxMoney": 40, "FloutLength": 2, "StartDay": 9, "EndDay": 22, "PercentMonth": 1, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 5, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 2000, "MaxMoney": 10000, "FloutLength": 0, "StartDay": 9, "EndDay": 22, "PercentMonth": 1, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 6, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 100, "MaxMoney": 200, "FloutLength": 1, "StartDay": 9, "EndDay": 22, "PercentMonth": 4, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 7, "IsCheck": true, "IncomeAttribute": "收入", "MinMoney": 10000, "MaxMoney": 80000, "FloutLength": 0, "StartDay": 9, "EndDay": 16, "PercentMonth": 0, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 8, "IsCheck": true, "IncomeAttribute": "收入", "MinMoney": 10000, "MaxMoney": 40000, "FloutLength": 0, "StartDay": 9, "EndDay": 16, "PercentMonth": 0, "TradeHoliday": false, "TradeWeekend": false },
+    { "Index": 9, "IsCheck": true, "IncomeAttribute": "支出", "MinMoney": 10000, "MaxMoney": 160000, "FloutLength": 0, "StartDay": 9, "EndDay": 16, "PercentMonth": 0, "TradeHoliday": false, "TradeWeekend": false }
+  ],
+  "ConstItems": []
+}

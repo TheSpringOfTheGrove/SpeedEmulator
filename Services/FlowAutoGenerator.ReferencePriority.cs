@@ -46,6 +46,10 @@ public sealed partial class FlowAutoGenerator
 
     private static bool TryGenerateReferencePriorityResult(FlowAutoGenerationRequest request, DateTime start, DateTime end,
         double opening, Random random, int seed, out FlowAutoGenerationResult? result)
+        => TryGenerateReferencePriorityResultCore(request, start, end, opening, random, seed, forceBudgetPriority: false, out result);
+
+    private static bool TryGenerateReferencePriorityResultCore(FlowAutoGenerationRequest request, DateTime start, DateTime end,
+        double opening, Random random, int seed, bool forceBudgetPriority, out FlowAutoGenerationResult? result)
     {
         result = null;
         if (request.Config.SelectIndex != 0 || !request.References.Any(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0)) return false;
@@ -64,7 +68,9 @@ public sealed partial class FlowAutoGenerator
         }
         // Retain the monthly date-attempt convention. Forbidden or out-of-period
         // days are skipped, rather than retried until the configured count is met.
-        foreach (var rule in request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0))
+        if (forceBudgetPriority)
+            GenerateBudgetFallbackRequiredReferences(request, start, end, seed, random, draft, state);
+        else foreach (var rule in request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0))
         foreach (var month in EnumerateMonths(start, end))
         for (var attempt = 0; attempt < GetRequiredMonthlyCount(rule); attempt++)
         {
@@ -77,11 +83,12 @@ public sealed partial class FlowAutoGenerator
         // Preserve the established sampling path for already funded, healthy
         // configurations. This branch handles actual reference/budget conflicts.
         var incomeMinimum = draft.Where(row => row.TradeMoney > 0).Sum(row => GetRecordAmountBounds(row).Min);
-        if (opening > .009d && opening >= expenses - .009d
+        var nativeMinimumConflict = NativeReferenceMinimumExceedsExpenseTarget(request, start, end, state, draft);
+        if (!forceBudgetPriority && !nativeMinimumConflict && opening > .009d && opening >= expenses - .009d
             && (ReferenceNaturalGenerationPolicy.AppliesTo(request.Bank, request.Config) || incomeMinimum <= request.Config.AllInMoney + .009d)) return false;
         var variableMonthly = draft.Any(row => IsGeneratedReferenceRecord(row)
             && GetRecordAmountBounds(row).Max > GetRecordAmountBounds(row).Min + .000001);
-        if (!variableMonthly || expenses <= opening + request.Config.AllInMoney - Math.Max(0, request.Config.LastMoney) + .009d
+        if (!variableMonthly || !forceBudgetPriority && !nativeMinimumConflict && expenses <= opening + request.Config.AllInMoney - Math.Max(0, request.Config.LastMoney) + .009d
             && incomeMinimum <= request.Config.AllInMoney + .009d) return false;
 
         var variableIncome = draft.Where(row => row.TradeMoney > 0 && IsGeneratedReferenceRecord(row)
@@ -163,6 +170,28 @@ public sealed partial class FlowAutoGenerator
         result = EnsureAutomaticOpeningBalance(request, CreateAutomaticBalanceResult(rows, funded), recalculateInterest: true);
         TraceReferenceNaturalGeneration(request, "reference-priority-complete", result.Records, seed, result.OpeningBalance);
         return true;
+    }
+
+    private static bool NativeReferenceMinimumExceedsExpenseTarget(FlowAutoGenerationRequest request,
+        DateTime start, DateTime end, NativeScheduleState state, IReadOnlyList<FlowRecord> draft)
+    {
+        if (ReferenceNaturalGenerationPolicy.AppliesTo(request.Bank, request.Config) || IsWechatBank(request.Bank)
+            || BankOfChinaGenerationBudget.AppliesTo(request.Bank) || ConstructionBankGenerationPolicy.AppliesTo(request.Bank)) return false;
+
+        // The native path budgets expenses from income minus the requested
+        // reserve, without opening. Funding can therefore be sufficient while
+        // that budget is below the mandatory occurrence minima. Returning there
+        // pins all variable amounts at their lower bounds (often .11), leaving
+        // no exact-budget room for the final adjacency repair. Keep these real
+        // reference/budget conflicts on the reference-priority path instead.
+        var minimum = draft.Where(row => row.TradeMoney < 0 && row.ExtraFields.GetValueOrDefault(SourceKindField) == ConstSourceKind)
+            .Sum(row => GetRecordAmountBounds(row).Min);
+        var months = EnumerateMonths(start, end).ToArray();
+        foreach (var rule in request.References.Where(rule => rule.IsCheck && !IsIncomeRuleSafe(rule) && GetRequiredMonthlyCount(rule) > 0))
+            minimum += GetRuleAmountBounds(rule).Min * GetRequiredMonthlyCount(rule)
+                * months.Count(month => state.GetCandidateDates(month.Start, month.End, rule).Count > 0);
+        var target = RoundMoney(Math.Max(0, Math.Min(request.Config.AllInMoney, request.Config.AllInMoney - request.Config.LastMoney)));
+        return minimum > target + .009d;
     }
 
     private static Dictionary<DateTime, double> CreatePriorityIncomeLimits(DateTime start, DateTime end, double target,

@@ -83,9 +83,13 @@ static void Validate(FlowAutoGenerationRequest request,FlowAutoGenerationResult 
             Check(amount>=min-.000001&&amount<=max+.000001,"来源金额范围不可突破");Near(Math.Round(amount/unit),amount/unit,.000001);
             if(unit<1||unit>=10)Check((long)Math.Round(amount/unit)%10!=0,"有效金额位不能为零");
         }
-        Check(Tail(row) is not (>=1 and <=9),"不能出现禁止的.01至.09");
     }
     Near(balance,result.FinalBalance);
+    var p2 = result.Records.Where(row=>!row.IsDocumentImported&&!FlowGeneratedRowKinds.IsSystemInterest(row)
+        &&row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision")=="2"
+        &&row.ExtraFields.GetValueOrDefault("__GeneratedAmountMin")!=row.ExtraFields.GetValueOrDefault("__GeneratedAmountMax")).ToArray();
+    Check(p2.Zip(p2.Skip(1)).All(pair=>Tail(pair.First)>9||Tail(pair.Second)>9),"低尾数不能连续出现");
+    Check(p2.Count(row=>Tail(row) is >=1 and <=9)<=Math.Max(1,(int)Math.Floor(p2.Length*.02)),"有调整空间时应降低低尾数频率");
     if(BankInterestPolicy.ShouldCalculate(request.Bank,request.BankUser))
     {
         var verified=result.Records.Select(row=>row.Clone()).ToList();

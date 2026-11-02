@@ -71,7 +71,6 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         Check(amount >= min - .000001 && amount <= max + .000001, "突破原参照金额范围");
         var unit = Meta(row, "__GeneratedAmountUnit");
         Check(Math.Abs(amount / unit - Math.Round(amount / unit)) < .000001, "改变原精度");
-        if (Variable(row)) Check((long)Math.Round(amount * 100) % 100 is not (>= 1 and <= 9), "出现禁止小数尾数");
         if (row.ExtraFields.TryGetValue("__GeneratedBudgetWindowStart", out var from))
             Check(row.AccountTime >= DateTime.Parse(from, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), "离开已分配月份起点");
         if (row.ExtraFields.TryGetValue("__GeneratedBudgetWindowEnd", out var to))
@@ -85,6 +84,11 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         }
     }
     Near(balance, result.FinalBalance);
+    var tails = result.Records.Where(row => Variable(row) && Meta(row, "__GeneratedAmountPrecision") == 2)
+        .Select(row => (int)Math.Round(Math.Abs(row.TradeMoney ?? 0) * 100) % 100).ToArray();
+    Check(tails.Zip(tails.Skip(1)).All(pair => pair.First > 9 || pair.Second > 9), "低尾数不能连续出现");
+    Check(tails.Count(tail => tail is >= 1 and <= 9) <= Math.Max(1, (int)Math.Floor(tails.Length * .02)),
+        $"有调整空间时应降低低尾数频率: bank={request.Bank.Name}, low={tails.Count(tail=>tail is >=1 and <=9)}, total={tails.Length}");
 }
 static void Reported(Fixture fixture, int seeds, List<object> summaries)
 {

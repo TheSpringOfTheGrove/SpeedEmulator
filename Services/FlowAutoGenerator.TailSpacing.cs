@@ -315,7 +315,13 @@ public sealed partial class FlowAutoGenerator
         public bool IsRepeat(int tail) => Used[tail] || IsRecent(tail);
         public void Register(int tail)
         {
-            if (!Used[tail]) { Used[tail] = true; usedCount++; }
+            if (!Used[tail])
+            {
+                Used[tail] = true;
+                // An occasional low tail is outside the preferred regular
+                // cycle; it must not end that cycle one regular value early.
+                if (Array.BinarySearch(Available, tail) >= 0) usedCount++;
+            }
             Usage[tail]++;
             LastPosition[tail] = position++;
             if (usedCount < Available.Length) return;

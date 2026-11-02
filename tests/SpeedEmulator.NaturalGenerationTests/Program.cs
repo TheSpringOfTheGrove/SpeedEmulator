@@ -12,7 +12,7 @@ var tests = new List<(string Name, Action Run)>
     ("预算尾差由可变参照收入吸收，固定金额不变", TestIncomeCapacity),
     ("原有字段和显式流水号经生成与三种修正后保留", TestFields),
     ("新增银行自然结果均可通过界面校验", () => TestAcceptance(fixtures)),
-    ("两位小数仍禁止低尾数，结息导入原值保留", TestImported),
+    ("两位小数保持非零末位，结息导入原值保留", TestImported),
     ("周末节假日筛选不会重抽补满，固定日期按原规则", TestDates),
     ("支付宝自动流水号保持最终交易日期且收入不被搬到首日", TestAlipayDates)
 };
@@ -56,7 +56,6 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         balance = Math.Round(balance + (row.TradeMoney ?? 0), 2, MidpointRounding.AwayFromZero); Near(balance, row.Balance!.Value);
         if (!Ordinary(row) || row.IsDocumentImported) continue;
         var amount = Math.Abs(row.TradeMoney ?? 0);
-        Check((int)Math.Round(amount * 100, MidpointRounding.AwayFromZero) % 100 is not (>= 1 and <= 9), "出现.01至.09");
         if (Kind(row) is not ("Reference" or "Const")) continue;
         double Field(string key) => double.Parse(row.ExtraFields[key], CultureInfo.InvariantCulture);
         var min = Field("__GeneratedAmountMin"); var max = Field("__GeneratedAmountMax"); var unit = Field("__GeneratedAmountUnit");
@@ -71,6 +70,16 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         }
     }
     Near(balance, result.FinalBalance);
+    var tails = result.Records.Where(row => Ordinary(row) && !row.IsDocumentImported
+        && row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2"
+        && row.ExtraFields.GetValueOrDefault("__GeneratedAmountMin") != row.ExtraFields.GetValueOrDefault("__GeneratedAmountMax"))
+        .Select(row => (int)Math.Round(Math.Abs(row.TradeMoney ?? 0) * 100) % 100).ToArray();
+    Check(tails.Zip(tails.Skip(1)).All(pair => pair.First > 9 || pair.Second > 9), "低尾数不能连续出现");
+    // A single required income in a month may have no equal-total cent partner.
+    // Check rarity in the entire ordinary ledger, keeping hard monthly amounts.
+    var ordinaryCount = result.Records.Count(row => Ordinary(row) && !row.IsDocumentImported);
+    Check(tails.Count(tail => tail is >= 1 and <= 9) <= Math.Max(1, (int)Math.Ceiling(ordinaryCount * .02)),
+        $"低尾数不应在普通流水中大量出现: bank={request.Bank.Name}, low={tails.Count(tail=>tail is >=1 and <=9)}, total={ordinaryCount}");
 }
 static void TestFixture(Fixture fixture, List<object> summaries)
 {

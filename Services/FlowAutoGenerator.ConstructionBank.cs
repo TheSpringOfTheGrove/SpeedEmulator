@@ -35,7 +35,6 @@ public sealed partial class FlowAutoGenerator
         private readonly long first;
         private readonly long last;
         private readonly bool nonzeroDigit;
-        private readonly bool excludeLowCentTail;
         private readonly long offset;
         public long Count { get; }
         public double Mean => (Value(0) + Value(Count - 1)) / 2d;
@@ -49,7 +48,6 @@ public sealed partial class FlowAutoGenerator
             first = checked((long)Math.Round(bounds.Min / bounds.Unit));
             last = checked((long)Math.Round(bounds.Max / bounds.Unit));
             nonzeroDigit = RequiresNonZeroPrecisionDigit(bounds);
-            excludeLowCentTail = bounds.Precision == 2;
             offset = Through(first - 1);
             Count = Through(last) - offset;
             if (Count <= 0) throw new InvalidOperationException("建行金额区间内没有符合小数位规则的金额。");
@@ -57,18 +55,14 @@ public sealed partial class FlowAutoGenerator
 
         private long Through(long step)
         {
-            if (!excludeLowCentTail) return nonzeroDigit ? step - step / 10 : step;
-            var tail = step % 100;
-            return step / 100 * 81 + (tail < 11 ? 0 : (tail / 10 - 1) * 9 + tail % 10);
+            return nonzeroDigit ? step - step / 10 : step;
         }
         public double Value(long rank)
         {
             rank = Math.Clamp(rank, 0, Count - 1);
             var position = offset + rank + 1;
             var index = position - 1;
-            var step = excludeLowCentTail
-                ? index / 81 * 100 + (index % 81 / 9 + 1) * 10 + index % 9 + 1
-                : nonzeroDigit ? index / 9 * 10 + index % 9 + 1 : first + rank;
+            var step = nonzeroDigit ? index / 9 * 10 + index % 9 + 1 : first + rank;
             return RoundMoney(step * Bounds.Unit);
         }
 
@@ -272,7 +266,7 @@ public sealed partial class FlowAutoGenerator
     {
         var mandatoryMin = plans.Where(plan => !plan.Optional).Sum(plan => plan.Count * plan.Range.Bounds.Min);
         if (mandatoryMin > target + 0.011d)
-            throw new InvalidOperationException($"建行{(income ? "收入" : "支出")}固定日期/每月必现项目最低需要{mandatoryMin:N2}元，超过本期预算{target:N2}元。");
+            throw new ReferenceBudgetConflictException($"建行{(income ? "收入" : "支出")}固定日期/每月必现项目最低需要{mandatoryMin:N2}元，超过本期预算{target:N2}元。");
         var optional = plans.Where(plan => plan.Optional
             && GetCcbDates(plan.Rule, period.Start, period.End).Count > 0).ToList();
         if (target > mandatoryMin + 0.009d)
@@ -282,7 +276,7 @@ public sealed partial class FlowAutoGenerator
             var families = optional.GroupBy(plan => (plan.Rule.MinMoney, plan.Rule.MaxMoney)).ToList();
             var coverageMin = optional.Sum(plan => plan.Range.Bounds.Min);
             if (mandatoryMin + coverageMin > target + 0.011d)
-                throw new InvalidOperationException("建行预算不足以覆盖全部勾选参照，请减少勾选项或提高预算。");
+                throw new ReferenceBudgetConflictException("建行预算不足以覆盖全部勾选参照，请减少勾选项或提高预算。");
             foreach (var plan in optional) plan.Count = 1;
             var remaining = Math.Max(0, target - plans.Sum(plan => plan.Count * plan.Range.Mean));
             // Vary the optional budget mix, rather than biasing amount samples or
@@ -355,12 +349,12 @@ public sealed partial class FlowAutoGenerator
             // those bands; close a small flexible tail inside the original ranges.
             if ((candidates.Count == 0 || attempt == 63) && BalanceCcbFlexibleTail(samples, target, random)) break;
             if (candidates.Count == 0)
-                throw new InvalidOperationException($"建行{period.Start:yyyy-MM}{(income ? "收入" : "支出")}预算与完整区间均匀取值及固定次数无法同时满足（目标{target:F2}，当前{samples.Sum(sample => sample.Amount):F2}，原始容量{samples.Sum(sample => sample.Plan.Range.Value(0)):F2}～{samples.Sum(sample => sample.Plan.Range.Value(sample.Plan.Range.Count - 1)):F2}）。");
+                throw new ReferenceBudgetConflictException($"建行{period.Start:yyyy-MM}{(income ? "收入" : "支出")}预算与完整区间均匀取值及固定次数无法同时满足（目标{target:F2}，当前{samples.Sum(sample => sample.Amount):F2}，原始容量{samples.Sum(sample => sample.Plan.Range.Value(0)):F2}～{samples.Sum(sample => sample.Plan.Range.Value(sample.Plan.Range.Count - 1)):F2}）。");
             var expected = plans.Sum(plan => plan.Count * plan.Range.Mean);
             var selected = candidates.OrderBy(plan => Math.Abs(target - (expected + (increase ? 1 : -1) * plan.Range.Mean)))
                 .ThenBy(_ => random.Next()).First();
             selected.Count += increase ? 1 : -1;
-            if (attempt == 63) throw new InvalidOperationException("建行无法在保留完整金额分布的条件下满足预算，请调整金额范围或次数。");
+            if (attempt == 63) throw new ReferenceBudgetConflictException("建行无法在保留完整金额分布的条件下满足预算，请调整金额范围或次数。");
         }
         foreach (var plan in plans)
         {
@@ -399,9 +393,8 @@ public sealed partial class FlowAutoGenerator
         var remaining = (int)(plan.Count % plan.Range.Count);
         if (plan.Range.Count > ReferenceAmountDistributionStepLimit && remaining > 0)
         {
-            // Keep monetary bands uniform even when precision removes a whole
-            // cent interval. Pure rank bands can drift across the original
-            // equal-width boundaries after excluding .01 through .09.
+            // Keep monetary bands uniform despite excluded zero-ending digits;
+            // pure rank bands can drift across equal-width money boundaries.
             var bands = Math.Min(10, remaining);
             var monetary = new (long Lower, long Upper)[bands];
             var useMonetary = plan.Range.Bounds.Precision == 2;
@@ -511,8 +504,8 @@ public sealed partial class FlowAutoGenerator
             {
                 if (rank < primary.Lower || rank > primary.Upper) continue;
                 var change = RoundMoney(primary.Plan.Range.Value(rank) - primary.Amount);
-                // Some totals require a three-row move. Look beyond the old
-                // two-rank neighbourhood to cross the new forbidden interval.
+                // Some totals require a three-row move rather than the nearest
+                // two-rank neighbourhood to preserve precision and all bands.
                 if (!CloseCcbSamplePair(others, RoundMoney(delta - change))) continue;
                 primary.Selected = rank;
                 return true;
@@ -723,7 +716,7 @@ public sealed partial class FlowAutoGenerator
                     samples.Add(sample);
                 }
                 if (!BalanceCcbSamples(samples, target, random) && !BalanceCcbFlexibleTail(samples, target, random))
-                    throw new InvalidOperationException("建行利息/余额修正与完整区间分布及金额精度冲突，请调整预算或增加可用参照。");
+                    throw new ReferenceBudgetConflictException("建行利息/余额修正与完整区间分布及金额精度冲突，请调整预算或增加可用参照。");
                 foreach (var sample in samples)
                 {
                     ApplySignedAmount(sample.Row!, income ? 1 : -1, sample.Amount);
@@ -737,7 +730,7 @@ public sealed partial class FlowAutoGenerator
             RecalculateInterestRecords(records, request, openingBalance, start, end, random);
             ApplyBalances(records, openingBalance);
             if (CcbBudgetsSettled(records, periods, request)) break;
-            if (pass == 15) throw new InvalidOperationException("建行利息与总收支未能收敛到配置金额，请调整配置。");
+            if (pass == 15) throw new ReferenceBudgetConflictException("建行利息与总收支未能收敛到配置金额，请调整配置。");
         }
         ValidateCcbRows(request, records, start, end);
         return CreateWechatNaturalBalanceResult(records, openingBalance, request.Config.LastMoney);

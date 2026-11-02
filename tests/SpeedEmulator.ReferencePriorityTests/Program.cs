@@ -24,7 +24,19 @@ var tests = new (string Name, Action Run)[]
     ("普通两位尾数与相邻金额严格检查，结息按调整后重算", CentPatterns),
     ("导入低尾数金额与结息原值保留", Imported),
     ("显式月度预算模式继续使用原路径", () => MonthlyModes(fixture)),
-    ("已有充足资金的自然生成配置沿用原路径", Healthy)
+    ("已有充足资金的自然生成配置沿用原路径", Healthy),
+    ("华夏对公已补期初的原配置连续100次成功且保持合法尾数", ReportedFundedHuaxia),
+    ("华夏对公资金充足不再将必现参照压到下限且结息准确", FundedHuaxiaWithInterest),
+    ("旧通用银行必现最低额超过支出预算时不因期初充足回退", NativeMinimumConflicts),
+    ("预算可容纳的旧路径及自然专属分支不因新判定改路", NativeMinimumScope),
+    ("微信建行中行的同类预算冲突各100次自动生成，收入与合法尾数保持", DedicatedReportedBudgets),
+    ("专属预算回退保留微信建行必现次数及中行完整月份次数", DedicatedRequiredCounts),
+    ("专属回退仍遵守各银行日期开关和固定日期固定金额", DedicatedDatesAndFixedProjects),
+    ("专属回退资金充足不补初且结息与重算一致", DedicatedInterest),
+    ("正常可行的三类专属配置仍走原路径", DedicatedHealthy),
+    ("三类银行显式按月模式的冲突仍按原约束处理", DedicatedMonthlyModes),
+    ("日期无解不能被识别成预算冲突后捏造日期", DedicatedUnavailableDates),
+    ("专属预算回退保持原有单次生成条数上限", DedicatedCapacity)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -73,11 +85,11 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
             Check(amount >= Meta(row, "__GeneratedAmountMin") - .000001 && amount <= Meta(row, "__GeneratedAmountMax") + .000001, "金额突破原区间");
             var unit = Meta(row, "__GeneratedAmountUnit"); Check(Math.Abs(amount / unit - Math.Round(amount / unit)) < .000001, "改变精度");
             var cents = (long)Math.Round(amount * 100, MidpointRounding.AwayFromZero); var tail = (int)(cents % 100);
-            Check(tail is not (>= 1 and <= 9), "普通金额出现禁用尾数");
             Check(!previousVariable || Math.Abs(previous - amount) > .009, "相邻绝对金额重复");
             if (Meta(row, "__GeneratedAmountPrecision") == 2 && unit < .1)
             {
-                Check(tail != previousTail, "普通两位小数子序列尾数重复"); previousTail = tail;
+                Check(tail != previousTail, "普通两位小数子序列尾数重复");
+                Check(tail > 9 || previousTail is null or > 9, "低尾数不能连续出现"); previousTail = tail;
             }
         }
         if (row.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") == "Reference" && !row.IsDocumentImported)
@@ -257,6 +269,201 @@ static void Healthy()
     var request = Build(new Bank { Id = 3, Name = "个人农商", Type = BankTypes.Personal }, new FlowGenerationConfig { StartTime = new(2026, 1, 1), EndTime = new(2026, 3, 31), OpeningBalance = 1000000 }, [Rule(1, false, 5, 300, 20)]);
     var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(1000000, result.OpeningBalance);
     Check(!FlowAutoGenerator.UsesReferencePriority(request.Config, result.Records) && result.Records.Count == 60, "改变已有健康路径");
+}
+static FlowGenerationSnapshot HuaxiaFixture() => JsonSerializer.Deserialize<FlowGenerationSnapshot>(
+    File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "huaxia-funded-numeric.json")))!;
+static void ReportedFundedHuaxia()
+{
+    var snapshot = HuaxiaFixture();
+    var request = Build(new Bank { Id = 111, Name = "华夏对公", Type = BankTypes.Corporate }, snapshot.Config, snapshot.References);
+    var before = JsonSerializer.Serialize(request); var values = new List<double>();
+    for (var seed = 1; seed <= 100; seed++)
+    {
+        using var scope = new SeedScope(seed);
+        var generator = new FlowAutoGenerator(); var result = generator.Generate(request);
+        Validate(request, result);
+        Check(FlowAutoGenerator.UsesReferencePriority(request.Config, result.Records), "必现最低额与预算冲突却退回旧路径");
+        values.AddRange(result.Records.Where(row => row.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex") == "3").Select(row => -row.TradeMoney!.Value));
+        var corrected = generator.ApplyFinalBalanceCorrection(request, result); Validate(request, corrected);
+        Check(Snapshot(result) == Snapshot(corrected), "界面期末收尾再次将金额压底或改日期");
+    }
+    Check(values.Min() < 4000 && values.Max() > 8000 && values.Distinct().Count() > 100, "可变金额未覆盖原区间，仍被压到底部");
+    Check(before == JsonSerializer.Serialize(request), "生成修改了用户配置");
+}
+static void FundedHuaxiaWithInterest()
+{
+    var snapshot = HuaxiaFixture(); snapshot.Config.OpeningBalance = 500000;
+    var request = Build(new Bank { Id = 111, Name = "华夏对公", Type = BankTypes.Corporate }, snapshot.Config, snapshot.References, interest: true);
+    for (var seed = 1; seed <= 20; seed++)
+    {
+        using var scope = new SeedScope(seed); var result = new FlowAutoGenerator().Generate(request);
+        Validate(request, result); Near(500000, result.OpeningBalance);
+        Check(result.Records.Any(FlowGeneratedRowKinds.IsSystemInterest), "结息没有按实际流水重算");
+    }
+}
+static void NativeMinimumConflicts()
+{
+    var banks = new[] { "LegacyPersonalBankIds", "LegacyCorporateBankIds" }.SelectMany(field =>
+        ((IReadOnlyDictionary<string, long>)typeof(SpeedEmulator.ViewModels.MainViewModel).GetField(field, BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!)
+        .Select(pair => new Bank { Id = pair.Value, Name = pair.Key, Type = field.Contains("Corporate") ? BankTypes.Corporate : BankTypes.Personal }));
+    var count = 0;
+    foreach (var bank in banks)
+    {
+        var config = new FlowGenerationConfig { StartTime = new(2026, 1, 1), EndTime = new(2026, 3, 31), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 1000 };
+        if (ReferenceNaturalGenerationPolicy.AppliesTo(bank, config) || ConstructionBankGenerationPolicy.AppliesTo(bank) || bank.Id is 2 or 18) continue;
+        using var seed = new SeedScope(1);
+        var request = Build(bank, config, [Rule(1, false, 2000, 10000, 1, 2), Rule(2, true, 1000, 5000)]);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(500000, result.OpeningBalance);
+        Check(FlowAutoGenerator.UsesReferencePriority(config, result.Records), "旧通用路径错误继续压底：" + bank.Name);
+        count++;
+    }
+    Check(count == 14, "应覆盖14类旧通用银行");
+}
+static void NativeMinimumScope()
+{
+    foreach (var (id, name) in new[] { (111L, "华夏对公"), (3L, "个人农商"), (8L, "建行"), (18L, "中行"), (2L, "微信") })
+    foreach (var mode in new[] { 0, 1, 2 })
+    {
+        var config = new FlowGenerationConfig { SelectIndex = mode, StartTime = new(2026, 1, 1), EndTime = new(2026, 3, 31), OpeningBalance = 500000, AllInMoney = id == 111 ? 30000 : 3000, LastMoney = 1000 };
+        var request = Build(new Bank { Id = id, Name = name, Type = id < 100 ? BankTypes.Personal : BankTypes.Corporate }, config,
+            [Rule(1, false, 2000, 10000, 1, 2), Rule(2, true, 1000, 5000)]);
+        var before = JsonSerializer.Serialize(request);
+        object?[] args = [request, config.StartTime, config.EndTime, 500000d, new Random(1), 1, null];
+        Check(!(bool)typeof(FlowAutoGenerator).GetMethod("TryGenerateReferencePriorityResult", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, args)!, "影响了原有预算可行或专属分支");
+        Check(before == JsonSerializer.Serialize(request), "判定修改用户配置");
+    }
+}
+static IEnumerable<Bank> DedicatedBanks() => new[]
+{
+    new Bank { Id = 2, Name = "微信", Type = BankTypes.Personal },
+    new Bank { Id = 8, Name = "建行", Type = BankTypes.Personal },
+    new Bank { Id = 18, Name = "中行", Type = BankTypes.Personal }
+};
+static void DedicatedReportedBudgets()
+{
+    var fixture = HuaxiaFixture();
+    foreach (var bank in DedicatedBanks())
+    {
+        var request = Build(bank, fixture.Config, fixture.References); var before = JsonSerializer.Serialize(request);
+        for (var seed = 1; seed <= 100; seed++)
+        {
+            using var scope = new SeedScope(seed); var generator = new FlowAutoGenerator(); var result = generator.Generate(request);
+            Validate(request, result);
+            Check(FlowAutoGenerator.UsesReferencePriority(request.Config, result.Records), bank.Name + "没有自动处理预算冲突");
+            Near(30000, ReferenceIncome(result));
+            var corrected = generator.ApplyFinalBalanceCorrection(request, result); Validate(request, corrected);
+            Check(Snapshot(result) == Snapshot(corrected), "专属界面收尾再次改变金额或日期");
+        }
+        Check(before == JsonSerializer.Serialize(request), "改写用户配置");
+    }
+}
+static double ReferenceIncome(FlowAutoGenerationResult result) => result.Records.Where(row => !FlowGeneratedRowKinds.IsSystemInterest(row) && row.TradeMoney > 0).Sum(row => row.TradeMoney!.Value);
+static void DedicatedRequiredCounts()
+{
+    var fixture = HuaxiaFixture(); fixture.Config.OpeningBalance = 500000;
+    foreach (var bank in DedicatedBanks())
+    for (var seed = 1; seed <= 10; seed++)
+    {
+        using var scope = new SeedScope(seed); var request = Build(bank, fixture.Config, fixture.References);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(500000, result.OpeningBalance);
+        foreach (var rule in request.References.Where(rule => rule.PercentMonth > 0))
+        {
+            var rows = result.Records.Where(row => row.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") == "Reference"
+                && row.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex") == rule.Index.ToString()).ToArray();
+            for (var month = new DateTime(2025, 6, 1); month <= new DateTime(2026, 6, 1); month = month.AddMonths(1))
+            {
+                var actual = rows.Count(row => row.AccountTime!.Value.Year == month.Year && row.AccountTime.Value.Month == month.Month);
+                var partial = month == new DateTime(2025, 6, 1) || month == new DateTime(2026, 6, 1);
+                Check(bank.Id == 18 && partial ? actual <= rule.PercentMonth : actual == rule.PercentMonth,
+                    $"{bank.Name}第{rule.Index}行在{month:yyyy-MM}次数从{rule.PercentMonth}变为{actual}");
+            }
+        }
+        Check(result.Records.All(row => row.AccountTime!.Value.Date <= request.Config.EndTime.Date), "超出用户结束日期");
+    }
+}
+static void DedicatedDatesAndFixedProjects()
+{
+    foreach (var bank in DedicatedBanks())
+    foreach (var (weekend, holiday) in new[] { (false, false), (true, false), (false, true), (true, true) })
+    {
+        var expense = Rule(1, false, 10000, 20000, 2, 2); expense.TradeWeekend = weekend; expense.TradeHoliday = holiday;
+        var fixedRule = new GenerateConstRule { Index = 99, IsCheck = true, IncomeAttribute = "支出", MinMoney = 100,
+            MaxMoney = 100, FloutLength = 2, FixDay = "15", StartDay = 9, EndDay = 16, TradeWeekend = false, TradeHoliday = false };
+        var config = new FlowGenerationConfig { StartTime = new(2026, 1, 1), EndTime = new(2026, 2, 28, 23, 59, 59), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 1000 };
+        using var scope = new SeedScope(1);
+        var request = Build(bank, config, [expense, Rule(2, true, 1000, 5000)], [fixedRule]);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(500000, result.OpeningBalance);
+        var fixedRows = result.Records.Where(row => row.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") == "Const").ToArray();
+        Check(fixedRows.Length == 2 && fixedRows.All(row => row.TradeMoney == -100 && row.AccountTime!.Value.Day == 15), "固定日期或金额被预算回退改写");
+        var variable = result.Records.Where(row => row.ExtraFields.GetValueOrDefault("__GeneratedSourceIndex") == "1").ToArray();
+        Check(variable.Length == 4, "专属回退丢失必现次数");
+    }
+}
+static void DedicatedInterest()
+{
+    var fixture = HuaxiaFixture(); fixture.Config.OpeningBalance = 500000;
+    foreach (var bank in DedicatedBanks())
+    for (var seed = 1; seed <= 10; seed++)
+    {
+        using var scope = new SeedScope(seed); var request = Build(bank, fixture.Config, fixture.References, interest: true);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(500000, result.OpeningBalance);
+    }
+}
+static void DedicatedHealthy()
+{
+    foreach (var bank in DedicatedBanks())
+    for (var seed = 1; seed <= 5; seed++)
+    {
+        using var scope = new SeedScope(seed);
+        var config = new FlowGenerationConfig { StartTime = new(2026, 1, 1), EndTime = new(2026, 1, 31), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 3000 };
+        var request = Build(bank, config, [Rule(1, true, 1000, 5000, 1)]);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result); Near(500000, result.OpeningBalance);
+        Check(!FlowAutoGenerator.UsesReferencePriority(config, result.Records), bank.Name + "正常可行配置被不必要地改路");
+    }
+}
+static void DedicatedMonthlyModes()
+{
+    var fixture = HuaxiaFixture(); fixture.Config.OpeningBalance = 500000;
+    foreach (var bank in DedicatedBanks())
+    foreach (var mode in new[] { 1, 2 })
+    {
+        var request = Build(bank, fixture.Config, fixture.References); request.Config.SelectIndex = mode;
+        var before = JsonSerializer.Serialize(request); var rejected = false;
+        try { new FlowAutoGenerator().Generate(request); }
+        catch (InvalidOperationException) { rejected = true; }
+        Check(rejected, "显式月份预算被预算回退悄悄覆盖");
+        Check(before == JsonSerializer.Serialize(request), "显式月度配置被改写");
+    }
+}
+static void DedicatedUnavailableDates()
+{
+    var expense = Rule(1, false, 10000, 20000, 1, 2); expense.TradeWeekend = true; expense.TradeHoliday = false;
+    var config = new FlowGenerationConfig { StartTime = new(2026, 1, 5), EndTime = new(2026, 1, 6), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 1000 };
+    var request = Build(new Bank { Id = 8, Name = "建行", Type = BankTypes.Personal }, config, [expense, Rule(2, true, 1000, 5000)]);
+    try { new FlowAutoGenerator().Generate(request); }
+    catch (InvalidOperationException error) { Check(error.Message.Contains("日期"), "应保留真实日期冲突"); return; }
+    throw new Exception("不能把没有合法周末的明细移到普通工作日");
+}
+static void DedicatedCapacity()
+{
+    var fixture = HuaxiaFixture();
+    foreach (var bank in DedicatedBanks())
+    {
+        var request = Build(bank, fixture.Config, fixture.References);
+        var rows = Enumerable.Repeat(new FlowRecord(), 200000).ToList();
+        var state = Activator.CreateInstance(typeof(FlowAutoGenerator).GetNestedType("NativeScheduleState", BindingFlags.NonPublic)!, new object[] { 0 })!;
+        try
+        {
+            typeof(FlowAutoGenerator).GetMethod("GenerateBudgetFallbackRequiredReferences", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [request, request.Config.StartTime.Date, request.Config.EndTime.Date.AddDays(1).AddTicks(-1), 1, new Random(1), rows, state]);
+        }
+        catch (TargetInvocationException error)
+        {
+            Check(error.GetBaseException() is InvalidOperationException && error.GetBaseException().Message.Contains("上限"), "不能吞掉容量限制");
+            Check(rows.Count == 200000, "超过容量后仍追加流水"); continue;
+        }
+        throw new Exception("预算回退不能绕过单次生成条数上限");
+    }
 }
 sealed class ObservedRow { public DateTime Time { get; set; } public double Money { get; set; } public string Kind { get; set; } = ""; public int? SourceRule { get; set; } }
 sealed class SeedScope : IDisposable
