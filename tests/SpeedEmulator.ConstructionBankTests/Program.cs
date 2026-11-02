@@ -26,9 +26,9 @@ var tests = new (string Name, Action Run)[]
     ("按月收支范围执行用户设置且修正后每月金额不漂移", TestMonthlyRanges),
     ("负余额修正只改合法时间并保留金额条数", TestNegativeCorrection),
     ("大额总进账的负余额修正不把收入堆到首日", TestIncomeDateConcentration),
-    ("日期密度已满时同参照时间对调修正且不改金额", TestRepairExchange),
+    ("日期密度已满时自动补期初且不改金额日期", TestRepairExchange),
     ("利息重算后收支和末余额仍满足预算", TestInterest),
-    ("固定次数与均匀金额预算不兼容时明确报错", TestImpossibleBudget),
+    ("总额不足时参照优先，明确月度预算模式仍保留硬约束", TestImpossibleBudget),
     ("相同种子可复现、不同种子有变化且不改配置", TestReproducibility),
     ("同配置可选明细条数动态，固定项目和必现次数不变", TestDynamicOptionalCounts),
     ("仅一个可选金额区间时也选择不同可行条数", TestSingleFamilyDynamicCounts),
@@ -91,9 +91,12 @@ static void Throws(Action action, string text)
 static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult result,
     double incomeTolerance = 0.01, double expenseTolerance = 0.01)
 {
-    Near(request.Config.AllInMoney, result.IncomeTotal, incomeTolerance);
-    Near(request.Config.AllInMoney - request.Config.LastMoney, result.ExpenseTotal, expenseTolerance);
-    Near(result.OpeningBalance + request.Config.LastMoney, result.FinalBalance);
+    if (!FlowAutoGenerator.UsesReferencePriority(request.Config, result.Records))
+    {
+        Near(request.Config.AllInMoney, result.IncomeTotal, incomeTolerance);
+        Near(request.Config.AllInMoney - request.Config.LastMoney, result.ExpenseTotal, expenseTolerance);
+        Near(result.OpeningBalance + request.Config.LastMoney, result.FinalBalance);
+    }
     foreach (var row in result.Records.Where(row => !FlowGeneratedRowKinds.IsSystemInterest(row)))
     {
         var rule = Kind(row) == "Const" ? (FlowRuleBase)request.ConstItems.Single(rule => rule.Index == Index(row))
@@ -463,10 +466,11 @@ static void TestRepairExchange()
     };
     var before = rows.Select(row => (row.AccountTime, row.TradeMoney)).ToArray();
     var result = new FlowAutoGenerator().ApplyNegativeBalanceCorrection(request, source); Validate(request, result);
-    Check(result.MinimumBalance >= -0.009, "对调应消除固定支出造成的负余额");
+    Check(result.MinimumBalance >= -0.009, "自动补初应消除固定支出造成的负余额");
     Check(result.Records.Count == 5 && result.Records.Select(row => row.TradeMoney).Order()
         .SequenceEqual(rows.Select(row => row.TradeMoney).Order()), "不能靠改金额和条数代替对调");
-    Check(Source(result, 1).Count(row => row.AccountTime!.Value.Day == 18) == 3, "不能把第四笔收入挤到已满日期");
+    Check(result.Records.Where(row => row.ExtraFields.GetValueOrDefault("__GeneratedSourceKind") == "Reference").All(row=>row.AccountTime!.Value.Date>=config.StartTime.Date&&row.AccountTime.Value.Date<=config.EndTime.Date), "只能在原交易窗口内提前收入");
+    Check(Math.Abs(result.OpeningBalance)<.009,"有可提前的普通收入时不能补期初");
     Check(Source(result, 1, "Const").Single().AccountTime == new DateTime(2025, 10, 18, 15, 0, 0), "固定支出时间不动");
     Check(result.Records.Select(row => row.AccountTime).Distinct().Count() == 5, "对调不能制造重叠时间");
     Check(before.SequenceEqual(rows.Select(row => (row.AccountTime, row.TradeMoney))), "不修改源流水");
@@ -505,7 +509,12 @@ static void TestInterest()
 static void TestImpossibleBudget()
 {
     var request = Reported(); request.Config.AllInMoney = 1000;
-    Throws(() => Generate(request), "最低需要");
+    var result = Generate(request); Validate(request, result);
+    Check(FlowAutoGenerator.UsesReferencePriority(request.Config, result.Records), "总额冲突未启用参照优先");
+    Check(Source(result, 1, "Const").Count == 24 && Source(result, 1, "Const").All(row => row.AccountTime!.Value.Day == 15), "固定工资日期和次数不能丢失");
+    request.Config.SelectIndex = 1;
+    request.Config.MinInMoneyMonth1 = request.Config.MaxInMoneyMonth1 = 40;
+    Throws(() => Generate(request), "范围");
 }
 
 static void TestReproducibility()

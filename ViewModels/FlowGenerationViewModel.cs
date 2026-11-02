@@ -821,35 +821,17 @@ public sealed class FlowGenerationViewModel : ObservableObject
             await Task.Yield();
 
             SetGenerationProgress(40, "正在生成流水");
+            var requestedOpeningBalance = Config.OpeningBalance;
             var result = await GenerateValidResultOnceAsync(BankUser, interestSetting);
+            var openingBalanceWasAutomaticallyIncreased = result.OpeningBalance > requestedOpeningBalance + .009d;
             await Task.Yield();
 
             if (result.MinimumBalance < -0.009d)
             {
-                var correctionResult = MessageBox.Show(
-                    $"生成过程中出现负余额，最低余额 {result.MinimumBalance:N2}。\n\n是否执行负余额修正？\n系统会优先调整流水时间和可选支出，不修改期初余额。\n\n选择“否”才会保留负余额并继续保存。",
-                    "提示",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-
-                if (correctionResult == MessageBoxResult.Yes)
-                {
-                    result = CorrectGeneratedResult(BankUser, interestSetting, result);
-                    if (!IsGenerationResultAccepted(result, BankUser, interestSetting, out var correctionReason))
-                    {
-                        throw new InvalidOperationException($"负余额修正后仍未通过校验：{correctionReason}");
-                    }
-
-                    StatusMessage = "已完成负余额修正。";
-                }
-                else
-                {
-                    StatusMessage = "用户选择保留负余额，已按原生成结果保存。";
-                }
-            }
-            else if (result.RequiresOpeningBalanceCorrection)
-            {
-                StatusMessage = "生成结果已自动放行保存，请在流水明细中查看余额。";
+                result = CorrectGeneratedResult(BankUser, interestSetting, result);
+                openingBalanceWasAutomaticallyIncreased = result.OpeningBalance > requestedOpeningBalance + .009d;
+                if (!IsGenerationResultAccepted(result, BankUser, interestSetting, out var correctionReason))
+                    throw new InvalidOperationException($"自动补足期初余额后仍未通过校验：{correctionReason}");
             }
 
             if (!BankOfChinaGenerationBudget.TryValidate(Bank, Config, result, out var budgetReason))
@@ -874,17 +856,20 @@ public sealed class FlowGenerationViewModel : ObservableObject
                     Config.EndTime);
                 Config.StartTime = completeRange.Start;
                 Config.EndTime = completeRange.End;
-                Config.OpeningBalance = completeOpeningBalance;
-                RecalculateCompleteStatement(
+                var fundedOpeningBalance = RecalculateCompleteStatement(
                     recordsToSave,
                     interestSetting,
                     completeOpeningBalance,
                     completeRange.Start,
                     completeRange.End);
+                openingBalanceWasAutomaticallyIncreased = fundedOpeningBalance > completeOpeningBalance + .009d;
+                Config.OpeningBalance = fundedOpeningBalance;
+                BankUser.OpeningBalance = Convert.ToDecimal(fundedOpeningBalance);
             }
 
             var saveResult = await flowRecordSaveService.SaveAllAsync(Bank, BankUser.Id, recordsToSave);
-            await SaveBankUserValuesAsync();
+            if (openingBalanceWasAutomaticallyIncreased) await SaveCurrentSnapshotAsync();
+            else await SaveBankUserValuesAsync();
             await Task.Yield();
 
             SetGenerationProgress(92, "正在准备流水明细页面");
@@ -909,6 +894,11 @@ public sealed class FlowGenerationViewModel : ObservableObject
             var successMessage = appendToExistingRecords
                 ? $"生成成功\n\n新增流水条数：{result.Records.Count}\n当前流水总数：{recordsToSave.Count}"
                 : $"生成成功\n\n流水条数：{result.Records.Count}";
+            if (openingBalanceWasAutomaticallyIncreased)
+            {
+                StatusMessage += $"；期初余额已自动补足为 {Config.OpeningBalance:N2}";
+                successMessage += $"\n期初余额已自动补足为：{Config.OpeningBalance:N2}";
+            }
             var formulaWarningText = CreateFormulaWarningText(saveResult.FormulaSummary);
             MessageBox.Show(
                 string.IsNullOrWhiteSpace(formulaWarningText)
@@ -971,42 +961,20 @@ public sealed class FlowGenerationViewModel : ObservableObject
         return "公式警告：\n" + string.Join("\n", warnings) + suffix;
     }
 
-    private void RecalculateCompleteStatement(
+    private double RecalculateCompleteStatement(
         List<FlowRecord> records,
         BankInterestSetting? interestSetting,
         double openingBalance,
         DateTime start,
         DateTime end)
     {
-        FlowRecordChronologicalOrder.SortInPlace(records);
-        if (BankUser is not null && BankInterestPolicy.ShouldCalculate(Bank, BankUser))
-        {
-            BankInterestCalculationService.Recalculate(
-                Bank,
-                BankUser,
-                interestSetting,
-                records,
-                openingBalance,
-                start,
-                end);
-            FlowRecordChronologicalOrder.SortInPlace(records);
-        }
-
-        var balance = RoundMoney(openingBalance);
-        for (var index = 0; index < records.Count; index++)
-        {
-            var record = records[index];
-            var amount = RoundMoney(record.TradeMoney ?? 0);
-            balance = RoundMoney(balance + amount);
-            record.Index = index + 1;
-            record.TradeMoney = amount;
-            record.Balance = balance;
-            record.BalanceAmount = balance;
-            record.IncomeAttribute = amount >= 0 ? "收入" : "支出";
-            record.CreditAmount = amount > 0 ? amount : null;
-            record.DebitAmount = amount < 0 ? Math.Abs(amount) : null;
-            record.IncomeFlag = amount >= 0 ? "C" : "D";
-        }
+        var request = CreateGenerationRequest(BankUser!, interestSetting, openingBalance);
+        request.Config.StartTime = start;
+        request.Config.EndTime = end;
+        var funded = flowAutoGenerator.ApplyAutomaticOpeningBalance(request, records, openingBalance);
+        records.Clear();
+        records.AddRange(funded.Records);
+        return funded.OpeningBalance;
     }
 
     private static (DateTime Start, DateTime End) ResolveCompleteStatementRange(
@@ -1063,7 +1031,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
 
         var result = attempt.Result;
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
-        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
+        if (!FlowAutoGenerator.UsesReferencePriority(Config, result.Records) && !ReferenceNaturalGenerationPolicy.AppliesTo(Bank, Config)
+            && Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
         {
             StatusMessage = "期末余额超出允许范围，正在自动调整并重新计算利息";
             result = await Task.Run(() => flowAutoGenerator.ApplyFinalBalanceCorrection(request, result));
@@ -1080,7 +1049,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
         }
 
         finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
-        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
+        if (!FlowAutoGenerator.UsesReferencePriority(Config, result.Records) && !ReferenceNaturalGenerationPolicy.AppliesTo(Bank, Config)
+            && Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
         {
             StatusMessage = $"期末余额已自动调整，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
             return result;
@@ -1104,7 +1074,8 @@ public sealed class FlowGenerationViewModel : ObservableObject
         if (!BankOfChinaGenerationBudget.TryValidate(Bank, Config, result, out reason))
             return false;
         var finalBalanceTarget = result.OpeningBalance + Config.LastMoney;
-        if (Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
+        if (!FlowAutoGenerator.UsesReferencePriority(Config, result.Records) && !ReferenceNaturalGenerationPolicy.AppliesTo(Bank, Config)
+            && Math.Abs(RoundMoney(result.FinalBalance - finalBalanceTarget)) > FinalBalanceTolerance)
         {
             reason = $"最后余额未进入允许范围，目标 {finalBalanceTarget:N2}，实际 {result.FinalBalance:N2}";
             return false;

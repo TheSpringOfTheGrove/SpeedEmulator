@@ -85,6 +85,18 @@ public static class BankInterestCalculationService
         DateTime end,
         Func<DateTime, string, FlowRecord>? recordFactory = null,
         Random? random = null)
+        => RecalculateCore(bank, bankUser, setting, records, openingBalance, start, end, recordFactory, random, preserveImportedRows: false);
+
+    public static BankInterestCalculationResult RecalculatePreservingImported(
+        Bank bank, BankUser bankUser, BankInterestSetting? setting, List<FlowRecord> records,
+        double openingBalance, DateTime start, DateTime end,
+        Func<DateTime, string, FlowRecord>? recordFactory = null, Random? random = null)
+        => RecalculateCore(bank, bankUser, setting, records, openingBalance, start, end, recordFactory, random, preserveImportedRows: true);
+
+    private static BankInterestCalculationResult RecalculateCore(
+        Bank bank, BankUser bankUser, BankInterestSetting? setting, List<FlowRecord> records,
+        double openingBalance, DateTime start, DateTime end,
+        Func<DateTime, string, FlowRecord>? recordFactory, Random? random, bool preserveImportedRows)
     {
         ArgumentNullException.ThrowIfNull(bank);
         ArgumentNullException.ThrowIfNull(bankUser);
@@ -102,14 +114,25 @@ public static class BankInterestCalculationService
 
         NormalizeRange(ref start, ref end);
         var settlementDates = EnumerateSettlementDates(start, end, configuration).ToList();
+        if (preserveImportedRows)
+        {
+            // Imported statements may book on the 20th while the default says
+            // the 21st. Use the actual existing settlement for that month.
+            settlementDates = settlementDates.Select(date => records
+                .Where(row => row.IsDocumentImported && row.AccountTime is { } time
+                    && time.Date >= start.Date && time.Date <= end.Date && time.Year == date.Year && time.Month == date.Month
+                    && (FlowGeneratedRowKinds.IsInterest(row) || RecognizeLegacyRowKind(row) == FlowGeneratedRowKinds.Interest))
+                .OrderBy(row => row.AccountTime).Select(row => row.AccountTime!.Value.Date).DefaultIfEmpty(date).First())
+                .Distinct().OrderBy(date => date).ToList();
+        }
         if (settlementDates.Count == 0)
         {
             return default;
         }
 
         var settlementDateSet = settlementDates.ToHashSet();
-        var changed = MigrateRecognizableRows(records, settlementDateSet);
-        changed |= RemoveObsoleteMarkedRows(records, start, end, settlementDateSet);
+        var changed = MigrateRecognizableRows(records, settlementDateSet, preserveImportedRows);
+        changed |= RemoveObsoleteMarkedRows(records, start, end, settlementDateSet, preserveImportedRows);
 
         var interestRows = new Dictionary<DateTime, FlowRecord>();
         var taxRows = new Dictionary<DateTime, FlowRecord>();
@@ -138,6 +161,7 @@ public static class BankInterestCalculationService
                 recordFactory,
                 timeRandom,
                 pairedAccountTime,
+                preserveImportedRows,
                 ref changed);
             interestRows[settlementDate] = interestRow;
 
@@ -154,15 +178,17 @@ public static class BankInterestCalculationService
                     recordFactory,
                     timeRandom,
                     pairedAccountTime,
+                    preserveImportedRows,
                     ref changed);
                 taxRows[settlementDate] = taxRow;
             }
         }
 
-        changed |= RemoveDuplicateScheduledRows(records, settlementDates, interestRows, taxRows);
+        changed |= RemoveDuplicateScheduledRows(records, settlementDates, interestRows, taxRows, preserveImportedRows);
 
         var originalSystemAmounts = interestRows.Values
             .Concat(taxRows.Values)
+            .Where(row => !preserveImportedRows || !row.IsDocumentImported)
             .Distinct()
             .ToDictionary(row => row, CaptureSystemAmountState);
         foreach (var row in originalSystemAmounts.Keys)
@@ -170,8 +196,11 @@ public static class BankInterestCalculationService
             SetSystemAmount(row, 0);
         }
 
+        var scheduledRows = interestRows.Values.Concat(taxRows.Values).ToHashSet();
         var normalDailyAmounts = records
-            .Where(record => !FlowGeneratedRowKinds.IsSystemInterest(record) && record.AccountTime.HasValue)
+            .Where(record => !scheduledRows.Contains(record)
+                && (!FlowGeneratedRowKinds.IsSystemInterest(record) || preserveImportedRows && record.IsDocumentImported)
+                && record.AccountTime.HasValue)
             .Where(record => record.AccountTime!.Value.Date >= start.Date
                 && record.AccountTime.Value.Date <= settlementDates[^1])
             .GroupBy(record => record.AccountTime!.Value.Date)
@@ -187,16 +216,21 @@ public static class BankInterestCalculationService
         {
             if (settlementDateSet.Contains(date))
             {
-                var interest = RoundMoney(dailyProduct * configuration.RatePercent / 36500d);
-                SetSystemAmount(interestRows[date], interest);
+                var interestRow = interestRows[date];
+                var frozenInterest = preserveImportedRows && interestRow.IsDocumentImported;
+                var interest = frozenInterest ? RoundMoney(interestRow.TradeMoney ?? 0)
+                    : RoundMoney(dailyProduct * configuration.RatePercent / 36500d);
+                if (!frozenInterest) SetSystemAmount(interestRow, interest);
+                var importedTax = 0d;
                 if (taxRows.TryGetValue(date, out var taxRow))
                 {
-                    SetSystemAmount(taxRow, 0);
+                    if (preserveImportedRows && taxRow.IsDocumentImported) importedTax = RoundMoney(taxRow.TradeMoney ?? 0);
+                    else SetSystemAmount(taxRow, 0);
                 }
 
                 interestTotal = RoundMoney(interestTotal + interest);
                 dailyProduct = 0;
-                balance = RoundMoney(balance + interest);
+                balance = RoundMoney(balance + interest + importedTax);
             }
 
             if (normalDailyAmounts.TryGetValue(date, out var normalAmount))
@@ -230,13 +264,16 @@ public static class BankInterestCalculationService
         Func<DateTime, string, FlowRecord>? recordFactory,
         Random? random,
         DateTime? pairedAccountTime,
+        bool preserveImportedRows,
         ref bool changed)
     {
         var existing = records.FirstOrDefault(record =>
             record.AccountTime?.Date == settlementDate
-            && HasExpectedKind(record, rowKind));
+            && (HasExpectedKind(record, rowKind)
+                || preserveImportedRows && record.IsDocumentImported && RecognizeLegacyRowKind(record) == rowKind));
         if (existing is not null)
         {
+            if (preserveImportedRows && existing.IsDocumentImported) return existing;
             if (!string.Equals(existing.GeneratedRowKind, rowKind, StringComparison.Ordinal))
             {
                 changed = true;
@@ -313,10 +350,11 @@ public static class BankInterestCalculationService
             random);
     }
 
-    private static bool MigrateRecognizableRows(List<FlowRecord> records, IReadOnlySet<DateTime> settlementDates)
+    private static bool MigrateRecognizableRows(List<FlowRecord> records, IReadOnlySet<DateTime> settlementDates, bool preserveImportedRows)
     {
         var changed = false;
         foreach (var record in records.Where(record => record.AccountTime.HasValue
+                     && (!preserveImportedRows || !record.IsDocumentImported)
                      && settlementDates.Contains(record.AccountTime.Value.Date)))
         {
             if (FlowGeneratedRowKinds.IsSystemInterest(record))
@@ -349,10 +387,10 @@ public static class BankInterestCalculationService
         List<FlowRecord> records,
         DateTime start,
         DateTime end,
-        IReadOnlySet<DateTime> settlementDates)
+        IReadOnlySet<DateTime> settlementDates, bool preserveImportedRows)
     {
         return records.RemoveAll(record =>
-            FlowGeneratedRowKinds.IsSystemInterest(record)
+            (!preserveImportedRows || !record.IsDocumentImported) && FlowGeneratedRowKinds.IsSystemInterest(record)
             && record.AccountTime.HasValue
             && record.AccountTime.Value >= start
             && record.AccountTime.Value <= end
@@ -363,12 +401,12 @@ public static class BankInterestCalculationService
         List<FlowRecord> records,
         IReadOnlyList<DateTime> settlementDates,
         IReadOnlyDictionary<DateTime, FlowRecord> interestRows,
-        IReadOnlyDictionary<DateTime, FlowRecord> taxRows)
+        IReadOnlyDictionary<DateTime, FlowRecord> taxRows, bool preserveImportedRows)
     {
         var retained = interestRows.Values.Concat(taxRows.Values).ToHashSet();
         var dates = settlementDates.ToHashSet();
         return records.RemoveAll(record =>
-            !retained.Contains(record)
+            (!preserveImportedRows || !record.IsDocumentImported) && !retained.Contains(record)
             && record.AccountTime.HasValue
             && dates.Contains(record.AccountTime.Value.Date)
             && FlowGeneratedRowKinds.IsSystemInterest(record)) > 0;

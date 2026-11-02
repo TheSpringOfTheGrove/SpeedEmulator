@@ -229,7 +229,13 @@ public sealed partial class FlowAutoGenerator
     public FlowAutoGenerationResult Generate(FlowAutoGenerationRequest request)
     {
         ValidateGeneratedCentTailRules(request);
-        return WithBankOfChinaDiagnostics(request, "generate", () => CompleteGeneratedResult(request, GenerateCore(request)));
+        return WithBankOfChinaDiagnostics(request, "generate", () =>
+        {
+            var result = EnsureAutomaticOpeningBalance(request, GenerateCore(request));
+            result = CompleteGeneratedAdjacentAmounts(request,
+                EnsureAutomaticOpeningBalance(request, CompleteGeneratedResult(request, result)));
+            return CompleteGeneratedDatePhase(request, CompleteReferencePriorityFunding(request, result), generated: true);
+        });
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -252,6 +258,10 @@ public sealed partial class FlowAutoGenerator
         var runSeed = CreateRunSeed(request, start, end);
         BankOfChinaGenerationDiagnostics.Seed(runSeed);
         var random = new Random(runSeed);
+        if (TryGenerateReferencePriorityResult(request, start, end, openingBalance, new Random(runSeed), runSeed, out var priorityResult))
+            return priorityResult!;
+        if (ReferenceNaturalGenerationPolicy.AppliesTo(request.Bank, request.Config))
+            return GenerateReferenceNaturalResult(request, start, end, openingBalance, random, runSeed);
         if (IsWechatBank(request.Bank))
         {
             return GenerateWechatNaturalResult(request, start, end, openingBalance, random);
@@ -811,121 +821,28 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
         => WithBankOfChinaDiagnostics(request, "negative-balance-correction",
-            () => CompleteCorrectedGeneratedResult(request, source, ApplyNegativeBalanceCorrectionCore(request, source)));
-
-    private FlowAutoGenerationResult ApplyNegativeBalanceCorrectionCore(
-        FlowAutoGenerationRequest request,
-        FlowAutoGenerationResult source)
-    {
-        if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
-            return CorrectCcbResult(request, source, repairNegative: true);
-        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
-            return CorrectBankOfChinaResult(request, source, repairNegative: true);
-        request = ExcludeUngeneratableReferenceRules(request);
-        var start = request.Config.StartTime.Date;
-        var end = NormalizeEndDate(request.Config.EndTime);
-        if (end < start)
-        {
-            (start, end) = (request.Config.EndTime.Date, NormalizeEndDate(request.Config.StartTime));
-        }
-
-        var openingBalance = RoundMoney(source.OpeningBalance);
-        var random = new Random(CreateRunSeed(request, start, end, source.Records.Count ^ 0x42B1A7C3));
-        var records = source.Records
-            .Select(item =>
-            {
-                var copy = item.Clone();
-                copy.Id = 0;
-                return copy;
-            })
-            .ToList();
-
-        // The dense WeChat path can usually be repaired by changing times only.
-        // Keep the existing confirmation and use the legacy amount repair as fallback.
-        if (IsWechatBank(request.Bank)
-            && TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random)
-            && !IsFinalBalanceOutsideTolerance(records.LastOrDefault()?.Balance ?? openingBalance, openingBalance, request.Config.LastMoney))
-        {
-            return CreateWechatNaturalBalanceResult(records, openingBalance, request.Config.LastMoney);
-        }
-
-        for (var attempt = 0; attempt < 6; attempt++)
-        {
-            ReconcileNativeGeneratedRecords(records, request, openingBalance, start, end, random);
-            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            AddSafeExpenseRecordsForPositiveFinalBalance(records, request, start, end, openingBalance, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            PruneZeroAmountRecords(records);
-            ApplyBalances(records, openingBalance);
-            if (GetMinimumBalance(records, openingBalance) >= -0.009d)
-            {
-                break;
-            }
-        }
-
-        PruneZeroAmountRecords(records);
-        EnsureDistinctSignedAmounts(records, random);
-        RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
-        for (var attempt = 0; attempt < 6 && GetMinimumBalance(records, openingBalance) < -0.009d; attempt++)
-        {
-            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            AddSafeExpenseRecordsForPositiveFinalBalance(records, request, start, end, openingBalance, random);
-            ReducePositiveFinalBalanceSafely(records, request, openingBalance);
-            PruneZeroAmountRecords(records);
-            RestoreFinalBalancePreservingNonNegative(records, request, openingBalance);
-            ApplyBalances(records, openingBalance);
-        }
-
-        if (GetMinimumBalance(records, openingBalance) < -0.009d)
-        {
-            ForceNativeNonNegativeBalances(records, request, openingBalance, start, end, random);
-            PruneZeroAmountRecords(records);
-        }
-
-        EnforceMinimumExactAmountRepeatGap(records, request, random);
-        FinalizeHardFinalBalance(records, request, openingBalance, start, end, random);
-        ApplyBalances(records, openingBalance);
-
-        if (IsWechatBank(request.Bank) && GetMinimumBalance(records, openingBalance) < -0.009d)
-        {
-            TryRepairWechatNegativeBalanceTimes(request, records, openingBalance, start, end, random);
-        }
-
-        var incomeTotal = SumIncome(records);
-        var expenseTotal = SumExpense(records);
-        var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
-        var minimumBalance = GetMinimumBalance(records, openingBalance);
-
-        return new FlowAutoGenerationResult
-        {
-            Records = records,
-            OpeningBalance = openingBalance,
-            IncomeTotal = incomeTotal,
-            ExpenseTotal = expenseTotal,
-            FinalBalance = RoundMoney(finalBalance),
-            MinimumBalance = RoundMoney(minimumBalance),
-            RequiresOpeningBalanceCorrection = minimumBalance < -0.009d
-                || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney),
-            RequiredOpeningBalance = source.RequiredOpeningBalance
-        };
-    }
+            () => CompleteGeneratedDateCorrection(request, EnsureGeneratedCentTailResult(request, EnsureAutomaticOpeningBalance(request, source,
+                cloneRecords: true, recalculateInterest: true))));
 
     public FlowAutoGenerationResult ApplyFinalBalanceCorrection(
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
         => WithBankOfChinaDiagnostics(request, "final-balance-correction",
-            () => CompleteCorrectedGeneratedResult(request, source, ApplyFinalBalanceCorrectionCore(request, source)));
+            () => CompleteGeneratedDateCorrection(request, EnsureAutomaticOpeningBalance(request,
+                CompleteCorrectedGeneratedResult(request, source, ApplyFinalBalanceCorrectionCore(request, source)))));
 
     private FlowAutoGenerationResult ApplyFinalBalanceCorrectionCore(
         FlowAutoGenerationRequest request,
         FlowAutoGenerationResult source)
     {
+        if (UsesReferencePriority(request.Config, source.Records))
+            return EnsureAutomaticOpeningBalance(request, source, cloneRecords: true, recalculateInterest: true);
         if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
             return CorrectCcbResult(request, source, repairNegative: true);
         if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
             return CorrectBankOfChinaResult(request, source, repairNegative: false);
+        if (ReferenceNaturalGenerationPolicy.AppliesTo(request.Bank, request.Config))
+            return EnsureAutomaticOpeningBalance(request, source, cloneRecords: true, recalculateInterest: true);
         request = ExcludeUngeneratableReferenceRules(request);
         var start = request.Config.StartTime.Date;
         var end = NormalizeEndDate(request.Config.EndTime);
@@ -999,73 +916,8 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationResult source,
         double correctedOpeningBalance)
         => WithBankOfChinaDiagnostics(request, "opening-balance-correction",
-            () => CompleteCorrectedGeneratedResult(request, source, ApplyOpeningBalanceCorrectionCore(request, source, correctedOpeningBalance)));
-
-    private FlowAutoGenerationResult ApplyOpeningBalanceCorrectionCore(
-        FlowAutoGenerationRequest request,
-        FlowAutoGenerationResult source,
-        double correctedOpeningBalance)
-    {
-        request = ExcludeUngeneratableReferenceRules(request);
-        var openingBalance = RoundMoney(correctedOpeningBalance);
-        var records = source.Records
-            .Select(item =>
-            {
-                var copy = item.Clone();
-                copy.Id = 0;
-                return copy;
-            })
-            .ToList();
-
-        if (records.Count == 0)
-        {
-            return CreateEmptyResult(openingBalance, request.Config.LastMoney);
-        }
-
-        if (BankOfChinaGenerationBudget.AppliesTo(request.Bank))
-        {
-            var start = request.Config.StartTime.Date;
-            var end = NormalizeEndDate(request.Config.EndTime);
-            if (end < start) (start, end) = (request.Config.EndTime.Date, NormalizeEndDate(request.Config.StartTime));
-            var runSeed = CreateRunSeed(request, start, end, records.Count ^ 0x61B0C);
-            BankOfChinaGenerationDiagnostics.Seed(runSeed);
-            return FinalizeBankOfChinaResult(request, records, start, end, openingBalance, new Random(runSeed), repairNegative: false);
-        }
-
-        PruneZeroAmountRecords(records);
-        EnsureDistinctSignedAmounts(records);
-        ApplyBalances(records, openingBalance);
-        EnforceConfiguredTotals(records, request);
-        BringFinalBalanceWithinTolerance(records, request, openingBalance);
-        EnforceConfiguredTotals(records, request);
-
-        PruneZeroAmountRecords(records);
-        RestoreFinalBalanceAfterDistinctAmounts(records, request, openingBalance);
-        EnforceMinimumExactAmountRepeatGap(records, request, Random.Shared);
-        ApplyBalances(records, openingBalance);
-
-        var incomeTotal = SumIncome(records);
-        var expenseTotal = SumExpense(records);
-        var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
-        var minimumBalance = records.Select(item => item.Balance ?? openingBalance).Append(openingBalance).Min();
-        var requiresCorrection = minimumBalance < -0.009d
-            || IsFinalBalanceOutsideTolerance(finalBalance, openingBalance, request.Config.LastMoney);
-        var requiredOpeningBalance = requiresCorrection
-            ? RoundMoney(Math.Max(openingBalance, openingBalance - minimumBalance))
-            : openingBalance;
-
-        return new FlowAutoGenerationResult
-        {
-            Records = records,
-            OpeningBalance = openingBalance,
-            IncomeTotal = incomeTotal,
-            ExpenseTotal = expenseTotal,
-            FinalBalance = RoundMoney(finalBalance),
-            MinimumBalance = RoundMoney(minimumBalance),
-            RequiresOpeningBalanceCorrection = requiresCorrection,
-            RequiredOpeningBalance = RoundMoney(Math.Max(0, requiredOpeningBalance))
-        };
-    }
+            () => CompleteGeneratedDateCorrection(request, EnsureGeneratedCentTailResult(request, EnsureAutomaticOpeningBalance(request, source,
+                correctedOpeningBalance, cloneRecords: true, recalculateInterest: true))));
 
     internal static FlowRecord CreateRecordFromExternalPlan(
         FlowAutoGenerationRequest request,

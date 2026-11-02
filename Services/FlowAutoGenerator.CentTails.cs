@@ -63,7 +63,9 @@ public sealed partial class FlowAutoGenerator
             if (count == 1) amounts.Remove(key); else amounts[key] = count - 1;
         }
         return amounts.Count == 0
-            ? EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, CompleteAlipayResult(request, corrected), preserveAmounts: true))
+            ? HasVerifiedAmountPatterns(corrected)
+                ? EnsureGeneratedCentTailResult(request, CompleteAlipayResult(request, corrected))
+                : EnsureGeneratedCentTailResult(request, CompleteGeneratedTailSpacing(request, CompleteAlipayResult(request, corrected), preserveAmounts: true))
             : CompleteGeneratedResult(request, corrected);
     }
 

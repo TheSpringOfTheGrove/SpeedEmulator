@@ -1,0 +1,114 @@
+[
+  {
+    "Time": "2025-02-19T16:32:34",
+    "Money": 5523.0,
+    "Balance": 308556.99,
+    "Kind": "ReferenceIncome",
+    "SourceRule": 5
+  },
+  {
+    "Time": "2025-03-13T13:59:34",
+    "Money": 30108.01,
+    "Balance": 338665.0,
+    "Kind": "ReferenceIncome",
+    "SourceRule": 3
+  },
+  {
+    "Time": "2025-03-21T18:40:57",
+    "Money": 117.12,
+    "Balance": 338782.12,
+    "Kind": "Interest",
+    "SourceRule": null
+  },
+  {
+    "Time": "2025-04-30T09:57:37",
+    "Money": -49627.0,
+    "Balance": 289155.12,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-05-15T10:29:53",
+    "Money": -44014.0,
+    "Balance": 245141.12,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-06-21T07:32:59",
+    "Money": 60.14,
+    "Balance": 245201.26,
+    "Kind": "Interest",
+    "SourceRule": null
+  },
+  {
+    "Time": "2025-06-26T16:14:39",
+    "Money": -58453.0,
+    "Balance": 186748.26,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-07-11T09:59:34",
+    "Money": -53036.0,
+    "Balance": 133712.26,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-08-07T11:09:13",
+    "Money": -43765.0,
+    "Balance": 89947.26,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-09-09T15:43:35",
+    "Money": -6193.0,
+    "Balance": 83754.26,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-09-21T19:21:08",
+    "Money": 51.28,
+    "Balance": 83805.54,
+    "Kind": "Interest",
+    "SourceRule": null
+  },
+  {
+    "Time": "2025-10-16T10:18:54",
+    "Money": -21804.0,
+    "Balance": 62001.54,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-11-13T11:03:28",
+    "Money": -8261.0,
+    "Balance": 53740.54,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-12-03T16:54:00",
+    "Money": -18363.0,
+    "Balance": 35377.54,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  },
+  {
+    "Time": "2025-12-21T19:18:05",
+    "Money": 18.82,
+    "Balance": 35396.36,
+    "Kind": "Interest",
+    "SourceRule": null
+  },
+  {
+    "Time": "2026-01-22T16:17:03",
+    "Money": -35148.0,
+    "Balance": 248.36,
+    "Kind": "ReferenceExpense",
+    "SourceRule": 6
+  }
+]

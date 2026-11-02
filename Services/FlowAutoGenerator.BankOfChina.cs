@@ -48,32 +48,31 @@ public sealed partial class FlowAutoGenerator
         var schedule = NativeScheduleState.From(records);
         var usage = AmountUsageTracker.From(records);
 
-        var requiredIncomeMinimum = RoundMoney(request.References.Where(rule => rule.IsCheck && IsIncomeRuleSafe(rule))
-            .Sum(rule => GetRuleAmountBounds(rule).Min * GetRequiredMonthlyCount(rule) * plan.Months.Count));
-        var requiredExpenseMinimum = RoundMoney(request.References.Where(rule => rule.IsCheck && !IsIncomeRuleSafe(rule))
-            .Sum(rule => GetRuleAmountBounds(rule).Min * GetRequiredMonthlyCount(rule) * plan.Months.Count));
+        var occurrences = CreateBankOfChinaReferenceOccurrences(request, plan, schedule, random);
+        var requiredIncomeMinimum = RoundMoney(occurrences.Where(item => IsIncomeRuleSafe(item.Rule))
+            .Sum(item => GetRuleAmountBounds(item.Rule).Min));
+        var requiredExpenseMinimum = RoundMoney(occurrences.Where(item => !IsIncomeRuleSafe(item.Rule))
+            .Sum(item => GetRuleAmountBounds(item.Rule).Min));
         if (requiredIncomeMinimum > incomeCap + 0.009d)
             throw new InvalidOperationException("中行每月必现收入项目的最低金额已超过总预算允许的10%浮动范围");
         GenerateNativeConstRecords(request, start, end, RoundMoney(incomeCap - requiredIncomeMinimum), random, records, schedule, usage);
         var constExpenseCap = RoundMoney(BankOfChinaGenerationBudget.Bounds(expenseTarget).Max - requiredExpenseMinimum);
         if (SumExpense(records) > constExpenseCap + 0.009d)
             AdjustBankOfChinaSignedTotal(records, isIncome: false, Math.Max(0, constExpenseCap));
-        GenerateBankOfChinaRequiredReferences(request, plan, incomeCap, random, records, schedule, usage);
+        GenerateBankOfChinaRequiredReferences(request, occurrences, incomeCap, random, records, schedule, usage);
         BankOfChinaGenerationDiagnostics.Stage("after-required-references", records);
         EnsureNativeOptionalReferenceRuleCoverage(request, plan, incomeCap, random, records, schedule, usage);
         GenerateNativeOptionalReferenceRecords(request, plan, incomeCap, random, records, schedule, usage);
         EnsureNativeOptionalReferenceRuleCoverage(request, plan, incomeCap, random, records, schedule, usage);
         CompleteNativeConfiguredTotals(request, plan, start, end, incomeTarget, random, records, schedule, usage);
         BankOfChinaGenerationDiagnostics.Stage("before-closing", records);
-        foreach (var rule in request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0))
-        foreach (var month in plan.Months)
+        foreach (var group in occurrences.GroupBy(item => (item.Rule.Index, item.Start, item.End)))
         {
             var actual = records.Count(row => IsGeneratedReferenceRecord(row)
-                && row.ExtraFields.GetValueOrDefault(SourceIndexField) == rule.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                && IsRecordInRange(row, month.Start, month.End));
-            if (actual != GetRequiredMonthlyCount(rule))
-                throw new InvalidOperationException($"中行参照明细第{rule.Index}行在{month.Start:yyyy年MM月}无法满足每月出现次数，" +
-                    "请检查总预算、金额范围和可交易日期");
+                && row.ExtraFields.GetValueOrDefault(SourceIndexField) == group.Key.Index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                && IsRecordInRange(row, group.Key.Start, group.Key.End));
+            if (actual != group.Count())
+                throw new InvalidOperationException($"中行参照明细第{group.Key.Index}行在{group.Key.Start:yyyy年MM月}未保留计划次数");
         }
 
         // Do not run the legacy amount-shaping/closing passes: they can delete income
@@ -81,52 +80,73 @@ public sealed partial class FlowAutoGenerator
         return FinalizeBankOfChinaResult(request, records, start, end, openingBalance, random, repairNegative: false);
     }
 
-    private static void GenerateBankOfChinaRequiredReferences(
-        FlowAutoGenerationRequest request, MonthlyAmountPlan plan, double incomeCap, Random random,
-        List<FlowRecord> records, NativeScheduleState schedule, AmountUsageTracker usage)
+    private sealed record BankOfChinaReferenceOccurrence(GenerateReferenceRule Rule, DateTime Start, DateTime End, DateTime? Date);
+
+    private static List<BankOfChinaReferenceOccurrence> CreateBankOfChinaReferenceOccurrences(
+        FlowAutoGenerationRequest request, MonthlyAmountPlan plan, NativeScheduleState schedule, Random random)
     {
-        var required = request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0).ToList();
-        var count = required.Sum(rule => (long)GetRequiredMonthlyCount(rule) * plan.Months.Count);
-        if (count + records.Count > MaximumFixedRuleRecordCount)
+        var result = new List<BankOfChinaReferenceOccurrence>();
+        var required = request.References.Where(rule => rule.IsCheck && GetRequiredMonthlyCount(rule) > 0).ToArray();
+        foreach (var month in plan.Months)
+        foreach (var rule in required)
+        {
+            var dates = schedule.GetCandidateDates(month.Start, month.End, rule);
+            if (dates.Count == 0)
+                throw new InvalidOperationException($"中行参照明细第{rule.Index}行在{month.Start:yyyy年MM月}没有可交易日期");
+            var days = DateTime.DaysInMonth(month.Start.Year, month.Start.Month);
+            var partial = request.Config.SelectIndex == 0 && (month.Start.Day != 1 || month.End.Day != days);
+            var allowed = partial ? dates.Select(date => date.Date).ToHashSet() : null;
+            for (var attempt = 0; attempt < GetRequiredMonthlyCount(rule); attempt++)
+            {
+                DateTime? date = null;
+                if (partial)
+                {
+                    date = new DateTime(month.Start.Year, month.Start.Month, 1).AddDays(random.Next(days));
+                    if (!allowed!.Contains(date.Value)) continue;
+                }
+                result.Add(new BankOfChinaReferenceOccurrence(rule, month.Start, month.End, date));
+                if (result.Count > MaximumFixedRuleRecordCount)
+                    throw new InvalidOperationException($"中行每月参照项目超过单次上限{MaximumFixedRuleRecordCount:N0}笔");
+            }
+        }
+        return result;
+    }
+
+    private static void GenerateBankOfChinaRequiredReferences(
+        FlowAutoGenerationRequest request, IReadOnlyList<BankOfChinaReferenceOccurrence> occurrences,
+        double incomeCap, Random random, List<FlowRecord> records, NativeScheduleState schedule, AmountUsageTracker usage)
+    {
+        if (occurrences.Count + records.Count > MaximumFixedRuleRecordCount)
             throw new InvalidOperationException($"中行固定及每月必现项目超过单次上限{MaximumFixedRuleRecordCount:N0}笔");
-        var incomeMinimum = RoundMoney(required.Where(IsIncomeRuleSafe)
-            .Sum(rule => GetRuleAmountBounds(rule).Min * GetRequiredMonthlyCount(rule) * plan.Months.Count));
-        var expenseMinimum = RoundMoney(required.Where(rule => !IsIncomeRuleSafe(rule))
-            .Sum(rule => GetRuleAmountBounds(rule).Min * GetRequiredMonthlyCount(rule) * plan.Months.Count));
+        var incomeMinimum = RoundMoney(occurrences.Where(item => IsIncomeRuleSafe(item.Rule))
+            .Sum(item => GetRuleAmountBounds(item.Rule).Min));
+        var expenseMinimum = RoundMoney(occurrences.Where(item => !IsIncomeRuleSafe(item.Rule))
+            .Sum(item => GetRuleAmountBounds(item.Rule).Min));
         var expenseCap = BankOfChinaGenerationBudget.Bounds(BankOfChinaGenerationBudget.ExpenseTarget(request.Config)).Max;
         if (incomeMinimum + SumIncome(records) > incomeCap + 0.009d
             || expenseMinimum + SumExpense(records) > expenseCap + 0.009d)
             throw new InvalidOperationException("中行固定及每月必现项目的最低金额已超过总预算允许的10%浮动范围");
 
-        for (var monthIndex = 0; monthIndex < plan.Months.Count; monthIndex++)
+        foreach (var occurrence in occurrences)
         {
-            var month = plan.Months[monthIndex];
-            foreach (var rule in required)
-            {
-                if (schedule.GetCandidateDates(month.Start, month.End, rule).Count == 0)
-                    throw new InvalidOperationException($"中行参照明细第{rule.Index}行在{month.Start:yyyy年MM月}没有可交易日期");
-                var income = IsIncomeRuleSafe(rule);
-                var bounds = GetRuleAmountBounds(rule);
-                for (var occurrence = 0; occurrence < GetRequiredMonthlyCount(rule); occurrence++)
-                {
-                    var futureMinimum = RoundMoney((income ? incomeMinimum : expenseMinimum) - bounds.Min);
-                    var current = income ? SumIncome(records) : SumExpense(records);
-                    var available = RoundMoney((income ? incomeCap : expenseCap) - current - futureMinimum);
-                    if (available < bounds.Min - 0.009d)
-                        throw new InvalidOperationException("中行每月必现项目无法在总预算±10%内满足配置次数");
-                    // Required occurrences already reserve their future minima in
-                    // the actual BOC direction budget. A soft monthly allocation
-                    // (possibly zero for a one-day final month) must not narrow
-                    // their configured range and force a batch of .11 minima.
-                    var cap = Math.Min(available, bounds.Max);
-                    if (!TryCreateNativeUniqueAmount(rule, cap, random, preferLower: true, records, income, usage, out var amount))
-                        amount = bounds.Min;
-                    var time = PickNativeDistributedTime(month.Start, month.End, rule, income, random, schedule);
-                    var row = CreateRecordFromRule(request, rule, request.Bank.ReferenceColumns, time, income ? amount : -amount);
-                    records.Add(row); schedule.Register(row); usage.Register(row);
-                    if (income) incomeMinimum = futureMinimum; else expenseMinimum = futureMinimum;
-                }
-            }
+            var rule = occurrence.Rule;
+            var income = IsIncomeRuleSafe(rule);
+            var bounds = GetRuleAmountBounds(rule);
+            var futureMinimum = RoundMoney((income ? incomeMinimum : expenseMinimum) - bounds.Min);
+            var current = income ? SumIncome(records) : SumExpense(records);
+            var available = RoundMoney((income ? incomeCap : expenseCap) - current - futureMinimum);
+            if (available < bounds.Min - 0.009d)
+                throw new InvalidOperationException("中行每月必现项目无法在总预算±10%内满足配置次数");
+            // Soft month allocations must not collapse an otherwise feasible range.
+            var cap = Math.Min(available, bounds.Max);
+            if (!TryCreateNativeUniqueAmount(rule, cap, random, preferLower: true, records, income, usage, out var amount))
+                amount = bounds.Min;
+            var time = occurrence.Date is { } day
+                ? PickNativeTimeOnDate(day, rule, random, schedule, schedule.NextSequence())
+                : PickNativeDistributedTime(occurrence.Start, occurrence.End, rule, income, random, schedule);
+            var row = CreateRecordFromRule(request, rule, request.Bank.ReferenceColumns, time, income ? amount : -amount);
+            records.Add(row); schedule.Register(row); usage.Register(row);
+            if (income) incomeMinimum = futureMinimum; else expenseMinimum = futureMinimum;
         }
     }
 
@@ -189,8 +209,8 @@ public sealed partial class FlowAutoGenerator
             throw new InvalidOperationException(
                 $"中行无法在保留流水、金额范围和总收支±10%的条件下满足期末余额：" +
                 $"目标 {CalculateFinalBalanceTarget(openingBalance, request.Config.LastMoney):N2}，实际 {result.FinalBalance:N2}");
-        // A still-negative result is deliberately returned for the existing Yes/No
-        // confirmation/repair validator. The caller must not silently waive this check.
+        // The shared cashflow planner handles a remaining deficit without an
+        // interactive confirmation and funds only unavoidable hard constraints.
         return result;
     }
 

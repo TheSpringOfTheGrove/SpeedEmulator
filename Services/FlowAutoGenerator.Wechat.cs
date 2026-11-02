@@ -50,8 +50,8 @@ public sealed partial class FlowAutoGenerator
         var finalBalance = records.LastOrDefault()?.Balance ?? openingBalance;
         var minimumBalance = records.Select(record => record.Balance ?? openingBalance)
             .Append(openingBalance).Min();
-        // Keep the existing UI's negative-balance confirmation/correction contract.
-        // Do not trim rows or silently replace the configured opening balance here.
+        // Return the candidate ledger to the shared cashflow planner. It resolves
+        // ordinary timing shortages before considering hard-project opening funds.
         return new FlowAutoGenerationResult
         {
             Records = records,

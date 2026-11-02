@@ -25,7 +25,7 @@ public static class BankOfChinaGenerationBudget
         Bank bank, FlowGenerationConfig config, FlowAutoGenerationResult result, out string reason)
     {
         reason = string.Empty;
-        if (!AppliesTo(bank)) return true;
+        if (!AppliesTo(bank) || FlowAutoGenerator.UsesReferencePriority(config, result.Records)) return true;
         return ValidateAmount("收入", config.AllInMoney, result.IncomeTotal, out reason)
             && ValidateAmount("支出", ExpenseTarget(config), result.ExpenseTotal, out reason);
     }

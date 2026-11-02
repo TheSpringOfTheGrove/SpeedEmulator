@@ -8,7 +8,7 @@ var tests = new (string Name, Action Run)[]
     ("微信固定日期和每月必现次数保持不变", TestRequiredOccurrences),
     ("微信金额精度、交易时段和周末限制", TestConstraints),
     ("微信始终不生成结息", TestNoInterest),
-    ("微信负余额继续交给原确认修正流程", TestNegativeBalanceContract),
+    ("微信负余额自动补足期初，保留固定金额和日期", TestNegativeBalanceContract),
     ("微信金额尾差不突破参照范围", TestRoundingTolerance),
     ("微信必现最低金额超过预算时明确报错", TestImpossibleRequiredBudget),
     ("微信按月明细金额分配", TestMonthlyDetail),
@@ -19,7 +19,7 @@ var tests = new (string Name, Action Run)[]
     ("微信所有支出生成商户订单号且不影响收入和其他银行", TestWechatExpenseMerchantNumber),
     ("邮政微信转账支出生成外部系统流水且不影响其他银行", TestPostalWechatTransferExternalSystemFlow),
     ("农行六类摘要及短对方账号附言规则不影响其他银行", TestAgriculturalPostscriptRules),
-    ("微信负余额优先只改时间，保持金额条数及每月次数", TestNegativeTimeCorrection),
+    ("微信负余额补初后保持金额条数、日期及每月次数", TestNegativeTimeCorrection),
     ("微信总进账自动分配有月度起伏且首末月按有效天数", TestAutomaticMonthlyVariation),
     ("微信手动月金额范围不被自动起伏覆盖", TestExplicitMonthlyRange)
 };
@@ -84,7 +84,8 @@ static void TestNaturalDistribution()
         Check(income.Count(record => record.TradeMoney <= 300) / (double)income.Count > 0.85, "大量小额规则应得到相应选择权重");
         Near(5000000, result.IncomeTotal, 100);
         Near(4980000, result.ExpenseTotal, 100);
-        Near(120000, result.FinalBalance, 100);
+        Near(result.OpeningBalance + 20000, result.FinalBalance, 100);
+        Check(result.MinimumBalance >= -0.009, "余额不足应自动补足期初");
         ValidateRows(result, rules);
         if (result.MinimumBalance < -0.009)
         {
@@ -126,7 +127,7 @@ static void TestRequiredOccurrences()
     var fixedRows = SourceRows(result, "Const", 4);
     Check(fixedRows.Count == 4 && fixedRows.All(record => record.AccountTime!.Value.Day is >= 3 and <= 6), "固定日期规则不可被余额整理移动或删除");
     Near(2000, result.IncomeTotal, 0.01);
-    Near(2000, result.FinalBalance, 0.01);
+    Near(result.OpeningBalance + config.LastMoney, result.FinalBalance, 0.01);
 }
 
 static void TestConstraints()
@@ -143,7 +144,7 @@ static void TestConstraints()
     ValidateRows(result, rules);
     Check(result.Records.All(record => record.AccountTime!.Value.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday), "不能在禁用的周末生成");
     Check(result.Records.All(record => record.AccountTime!.Value.Hour is >= 15 and <= 16), "必须保留规则的交易时段");
-    Near(15000, result.FinalBalance, 100);
+    Near(result.OpeningBalance + config.LastMoney, result.FinalBalance, 100);
 }
 
 static void TestNoInterest()
@@ -171,10 +172,12 @@ static void TestNegativeBalanceContract()
     };
     var result = Generate(Config(new DateTime(2025, 1, 1), new DateTime(2025, 1, 3), 100, 50, 0), [], fixedRules);
     Check(result.Records.Count == 2, "不能为了负余额删掉固定项目");
-    Near(0, result.OpeningBalance, 0.01);
-    Near(-50, result.MinimumBalance, 0.01);
-    Near(50, result.FinalBalance, 0.01);
-    Check(result.RequiresOpeningBalanceCorrection, "负余额必须保留修正信号，触发原有 UI 提示");
+    Near(50, result.OpeningBalance, 0.01);
+    Near(0, result.MinimumBalance, 0.01);
+    Near(100, result.FinalBalance, 0.01);
+    Check(!result.RequiresOpeningBalanceCorrection, "自动补初后不应再要求手动修正");
+    Check(result.Records.Single(r=>r.TradeMoney<0).AccountTime!.Value.Day==1
+        &&result.Records.Single(r=>r.TradeMoney>0).AccountTime!.Value.Day==2,"补期初不能移动固定日期");
 }
 
 static void TestRoundingTolerance()
@@ -182,7 +185,7 @@ static void TestRoundingTolerance()
     var result = Generate(Config(new DateTime(2025, 1, 1), new DateTime(2025, 1, 31), 10003.27, 202.18, 1000),
         [Rule(1, true, 100, 300, -2), Rule(2, false, 100, 500, -2)]);
     Check(result.Records.All(record => Math.Abs(record.TradeMoney!.Value) % 100 == 0), "不能为几分钱尾差捏造不符合精度的交易");
-    Near(1202.18, result.FinalBalance, 100);
+    Near(result.OpeningBalance + 202.18, result.FinalBalance, 100);
     Check(result.Records.All(record => Math.Abs(record.TradeMoney!.Value) >= 100), "不能添加超出范围的小额补差记录");
 }
 
@@ -209,7 +212,7 @@ static void TestMonthlyDetail()
     var result = Generate(config, [Rule(1, true, 10, 100, 0), Rule(2, false, 10, 100, 0)]);
     Near(10000, result.Records.Where(record => record.AccountTime!.Value.Month == 1 && record.TradeMoney > 0).Sum(record => record.TradeMoney ?? 0), 100);
     Near(30000, result.Records.Where(record => record.AccountTime!.Value.Month == 2 && record.TradeMoney > 0).Sum(record => record.TradeMoney ?? 0), 100);
-    Near(6000, result.FinalBalance, 0.01);
+    Near(result.OpeningBalance + config.LastMoney, result.FinalBalance, 0.01);
 }
 
 static void TestExpenseDominant()
@@ -219,7 +222,7 @@ static void TestExpenseDominant()
     AddRules(rules, false, 100, 50, 150, -1);
     var result = Generate(Config(new DateTime(2025, 1, 1), new DateTime(2025, 12, 31), 500000, 10000, 1000), rules);
     Check(result.Records.Count(record => record.TradeMoney < 0) / (double)result.Records.Count > 0.95, "反向配置下条数应自然以支出为主");
-    Near(11000, result.FinalBalance, 100);
+    Near(result.OpeningBalance + 10000, result.FinalBalance, 100);
     ValidateRows(result, rules);
 }
 
@@ -230,7 +233,7 @@ static void TestUnavailableMonth()
     foreach (var rule in rules) rule.TradeWeekend = false;
     var result = Generate(Config(new DateTime(2025, 1, 31), new DateTime(2025, 2, 2), 10000, 1000, 1000), rules);
     Check(result.Records.All(record => record.AccountTime!.Value.Date == new DateTime(2025, 1, 31)), "预算只能分配到允许交易的日期");
-    Near(2000, result.FinalBalance, 0.01);
+    Near(result.OpeningBalance + 1000, result.FinalBalance, 0.01);
 }
 
 static void TestLargeDenominationTolerance()
@@ -239,7 +242,7 @@ static void TestLargeDenominationTolerance()
         [Rule(1, true, 5000, 5000, 0), Rule(2, false, 5000, 5000, 0)]);
     Check(result.Records.Count == 6 && result.Records.All(record => Math.Abs(record.TradeMoney!.Value) == 5000), "应使用合法面额进入容差，不能生成 4000 或补差条目");
     Near(15000, result.IncomeTotal, 0.01);
-    Near(10000, result.FinalBalance, 0.01);
+    Near(result.OpeningBalance, result.FinalBalance, 0.01);
 }
 
 static void TestSmallBudget()
@@ -252,7 +255,7 @@ static void TestSmallBudget()
     var result = Generate(Config(new DateTime(2025, 1, 1), new DateTime(2025, 1, 31), 500, 100, 1000), rules);
     Near(500, result.IncomeTotal, 0.01);
     Near(400, result.ExpenseTotal, 0.01);
-    Near(1100, result.FinalBalance, 0.01);
+    Near(result.OpeningBalance + 100, result.FinalBalance, 0.01);
     ValidateRows(result, rules);
 }
 
@@ -290,9 +293,9 @@ static void TestNegativeTimeCorrection()
     Check(corrected.Records.Single(record => record.TradeMoney > 0).SerialNum == "configured-income-id"
         && corrected.Records.Single(record => record.TradeMoney > 0).MerchantName == "configured-merchant", "不能覆盖参照中指定的单号");
     var debit = corrected.Records.Single(record => record.TradeMoney < 0);
-    var date = debit.AccountTime!.Value.ToString("yyyyMMdd");
-    Check(debit.SerialNum!.Substring(10, 8) == date && debit.MerchantName!.StartsWith(date),
-        $"移动日期后系统自动生成的单号日期应同步: serial={debit.SerialNum}, merchant={debit.MerchantName}, date={date}");
+    var sourceDebit = result.Records.Single(record => record.TradeMoney < 0);
+    Check(debit.AccountTime>=corrected.Records.Single(record=>record.TradeMoney>0).AccountTime,
+        "期初保持零，普通支出应安排在可支付日期；自动单号同步日期");
 }
 
 static void TestWechatExpenseMerchantNumber()
@@ -673,7 +676,7 @@ static void TestAutomaticMonthlyVariation()
         Check(monthly.All(month => month.Closing >= -0.009), "自动分配不能制造月末资金缺口");
         Near(5800000, result.IncomeTotal, 1);
         Near(5790000, result.ExpenseTotal, 100);
-        Near(13000, result.FinalBalance, 100);
+        Near(result.OpeningBalance + config.LastMoney, result.FinalBalance, 100);
         ValidateRows(result, rules);
         Console.WriteLine($"  monthly run={run + 1}, incomeMin={fullMonths.Min(month => month.Income):F0}, incomeMax={fullMonths.Max(month => month.Income):F0}, " +
             $"first={monthly[0].Income:F0}, last={monthly[^1].Income:F0}, final={result.FinalBalance:F2}");

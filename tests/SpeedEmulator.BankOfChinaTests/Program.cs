@@ -11,16 +11,16 @@ var tests = new (string Name, Action Run)[]
     ("截图同类配置多随机种子不缩水，负余额可修正", TestReportedConfiguration),
     ("收入上下浮动时支出联动，不删收入凑余额", TestLinkedClosing),
     ("修正保持固定日期和每月必现次数", TestRequiredOccurrences),
-    ("时间不可移动时等额配对修正，不改变总额条数", TestPairedCorrection),
-    ("固定项目无法修正时保留负余额供原校验拦截", TestUnrepairableNegative),
+    ("时间不可移动时补期初，不改变金额日期和条数", TestPairedCorrection),
+    ("固定项目形成负余额时自动补足期初", TestUnrepairableNegative),
     ("只有固定项目且预算明显不足时明确拒绝", TestInsufficientCapacity),
     ("零支出目标不强行添加可选支出", TestZeroExpense),
     ("整数粗粒度不能突破金额范围或10%预算", TestCoarseAmounts),
     ("固定项目先为每月必现收支预留最低预算", TestRequiredBudgetReservation),
     ("每月必现没有可交易日期时不捏造流水", TestUnavailableRequiredDates),
-    ("非零期初及覆盖值在修正后保持不变", TestOpeningBalance),
+    ("非零期初及覆盖值不足时自动补足，原配置不变", TestOpeningBalance),
     ("混合精度十个月多种子生成和修正不再集中11尾数", TestMixedPrecisionClosing),
-    ("残月必现项目不受零月预算挤压到小数下限", TestPartialMonthRequiredAmounts),
+    ("总进账残月按整月抽日期筛选，不补满次数且不挤压金额", TestPartialMonthRequiredAmounts),
     ("含结息收入按百元取值时进入允许区间而非强求分界金额", TestRepresentableIncomeBand),
     ("中行阶段日志记录种子及集中检测，其他银行不写入", TestGenerationDiagnostics)
 };
@@ -183,8 +183,10 @@ static void TestUnrepairableNegative()
         Row(new DateTime(2026, 1, 2, 9, 0, 0), 100, 100, 100)
     };
     var result = new FlowAutoGenerator().ApplyNegativeBalanceCorrection(Request(config, []), Result(rows, 100, 90));
-    Check(result.MinimumBalance < 0 && result.RequiresOpeningBalanceCorrection, "不能取消负余额拦截或伪造修正成功");
-    Check(result.Records.Count == 2 && result.OpeningBalance == 0, "不能补造记录或抬高期初余额");
+    Check(result.MinimumBalance >= 0 && !result.RequiresOpeningBalanceCorrection, "应通过补初消除负余额");
+    Check(result.Records.Count == 2 && Math.Abs(result.OpeningBalance-90)<.009, "不能补造记录，按最低余额补初");
+    Check(result.Records.Select(row=>row.TradeMoney).SequenceEqual(rows.Select(row=>row.TradeMoney))
+        &&result.Records.Select(row=>row.AccountTime).SequenceEqual(rows.Select(row=>row.AccountTime)),"固定金额及日期不能改变");
 }
 
 static void TestInsufficientCapacity()
@@ -264,8 +266,8 @@ static void TestOpeningBalance()
     var result = generator.Generate(request);
     var corrected = generator.ApplyNegativeBalanceCorrection(request, result);
     Validate(request, corrected);
-    Near(600, result.OpeningBalance, 0.001); Near(600, corrected.OpeningBalance, 0.001);
-    Near(3000, config.OpeningBalance, 0.001); Near(2600, corrected.FinalBalance, 1000);
+    Check(result.OpeningBalance>=600,"不能降低用户提供的覆盖值");Near(result.OpeningBalance, corrected.OpeningBalance, 0.001);
+    Near(3000, config.OpeningBalance, 0.001); Near(corrected.OpeningBalance+2000, corrected.FinalBalance, 1000);
     Check(corrected.MinimumBalance >= -0.009, "正期初仍应按原值修正");
 }
 
@@ -297,8 +299,11 @@ static void TestMixedPrecisionClosing()
             Validate(request, result); CheckTails(result);
             foreach (var rule in rules.Where(rule => rule.PercentMonth > 0))
             foreach (var month in result.Records.Select(row => row.AccountTime!.Value.ToString("yyyy-MM")).Distinct())
-                Check(Source(result, "Reference", rule.Index).Count(row => row.AccountTime!.Value.ToString("yyyy-MM") == month) == rule.PercentMonth,
-                    "每月必现次数不能改变");
+                if (month != "2026-01")
+                    Check(Source(result, "Reference", rule.Index).Count(row => row.AccountTime!.Value.ToString("yyyy-MM") == month) == rule.PercentMonth,
+                        "完整月份必现次数不能改变");
+            Check(result.Records.Count(row => Kind(row) == "Reference" && row.AccountTime!.Value.Date == config.EndTime) < 8,
+                "最后一天不能补满整月次数");
             var corrected = generator.ApplyNegativeBalanceCorrection(request, result);
             Validate(request, corrected); CheckTails(corrected);
             Check(corrected.MinimumBalance >= -.009, "负余额修正必须可完成");
@@ -316,7 +321,7 @@ static void TestMixedPrecisionClosing()
     static void CheckTails(FlowAutoGenerationResult result)
     {
         var p2 = result.Records.Where(row => Kind(row) == "Reference" && row.ExtraFields.GetValueOrDefault("__GeneratedAmountPrecision") == "2").ToArray();
-        Check(p2.Length == 140, "140条必现两位小数流水不能减少");
+        Check(p2.Length is >= 126 and < 134, "九个完整月保留126笔两位小数，最后一天按整月抽样筛选");
         var tails = p2.Select(row => (int)Math.Round(Math.Abs(row.TradeMoney!.Value) * 100, MidpointRounding.AwayFromZero) % 100).ToArray();
         Check(tails.All(tail => tail >= 11 && tail % 10 != 0), "必须保留原合法小数约束");
         Check(tails.GroupBy(tail => tail).Max(group => group.Count()) <= 5, "不能再成批集中为同一个尾数");
@@ -344,12 +349,32 @@ static void TestPartialMonthRequiredAmounts()
         .GetMethod("From", flags)!.Invoke(null, [rows])!;
     var usage = typeof(FlowAutoGenerator).GetNestedType("AmountUsageTracker", BindingFlags.NonPublic)!
         .GetMethod("From", flags)!.Invoke(null, [rows])!;
-    Invoke("GenerateBankOfChinaRequiredReferences", request, plan, 173800d, new Random(456), rows, state, usage);
-    var lastDay = rows.Where(row => row.AccountTime!.Value.Date == config.EndTime && row.ExtraFields["__GeneratedAmountPrecision"] == "2").ToArray();
-    Check(lastDay.Length == 14, "残月仍需保留配置要求的14次出现，不能通过删流水规避");
-    var tails = lastDay.Select(row => (int)Math.Round(Math.Abs(row.TradeMoney!.Value) * 100) % 100).ToArray();
-    Check(tails.Distinct().Count() >= 12 && tails.Count(tail => tail == 11) <= 1, "零软预算不能把残月必现流水压成一批.11");
-    Check(lastDay.All(row => Math.Abs(row.TradeMoney!.Value) is >= 20 and <= 100), "仍须遵守原金额范围");
+    var partialCounts = new HashSet<int>();
+    for (var seed = 456; seed < 486; seed++)
+    {
+        rows.Clear();
+        state = typeof(FlowAutoGenerator).GetNestedType("NativeScheduleState", BindingFlags.NonPublic)!
+            .GetMethod("From", flags)!.Invoke(null, [rows])!;
+        usage = typeof(FlowAutoGenerator).GetNestedType("AmountUsageTracker", BindingFlags.NonPublic)!
+            .GetMethod("From", flags)!.Invoke(null, [rows])!;
+        var random = new Random(seed);
+        var occurrences = Invoke("CreateBankOfChinaReferenceOccurrences", request, plan, state, random)!;
+        Invoke("GenerateBankOfChinaRequiredReferences", request, occurrences, 173800d, random, rows, state, usage);
+        var lastDay = rows.Where(row => row.AccountTime!.Value.Date == config.EndTime).ToArray();
+        Check(lastDay.Length < 8, "最后一天不能挤入整月32次");
+        partialCounts.Add(lastDay.Length);
+        Check(rows.Where(row => row.AccountTime!.Value.Date < config.EndTime)
+            .GroupBy(row => row.AccountTime!.Value.ToString("yyyy-MM")).All(group => group.Count() == 32),
+            "完整月份仍保留原来的必现次数约定");
+        foreach (var row in lastDay.Where(row => row.ExtraFields["__GeneratedAmountPrecision"] == "2"))
+            Check(Math.Abs(row.TradeMoney!.Value) is >= 20 and <= 100, "尾月仍须遵守原金额范围");
+    }
+    Check(partialCounts.Count > 1, "残月条数应随整月日期抽样变化");
+    config.SelectIndex = 1;
+    var monthlyOccurrences = Invoke("CreateBankOfChinaReferenceOccurrences", request, plan, state, new Random(456))!;
+    rows.Clear();
+    Invoke("GenerateBankOfChinaRequiredReferences", request, monthlyOccurrences, 173800d, new Random(456), rows, state, usage);
+    Check(rows.Count(row => row.AccountTime!.Value.Date == config.EndTime) == 32, "月度预算模式不在这次调整范围内");
 }
 
 static void TestRepresentableIncomeBand()
