@@ -1,5 +1,6 @@
 using SpeedEmulator.Models;
 using SpeedEmulator.Services;
+using System.IO;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
@@ -17,7 +18,10 @@ var tests = new (string Name, Action Run)[]
     ("零支出目标不强行添加可选支出", TestZeroExpense),
     ("整数粗粒度不能突破金额范围或10%预算", TestCoarseAmounts),
     ("固定项目先为每月必现收支预留最低预算", TestRequiredBudgetReservation),
-    ("每月必现没有可交易日期时不捏造流水", TestUnavailableRequiredDates),
+    ("三种分配模式的参照当月无可用日期时跳过，其他参照继续", TestUnavailableRequiredDates),
+    ("截图尾月仅五一：跳过第35行本月，其余月份保留次数且记录原因", TestUnavailableEndingMonth),
+    ("起始月份仅覆盖周末：只跳过该行首月", TestUnavailableStartingMonth),
+    ("参照优先回退同样跳过无日期月份，不计入必现预算", TestUnavailableBudgetFallback),
     ("非零期初及覆盖值不足时自动补足，原配置不变", TestOpeningBalance),
     ("混合精度十个月多种子生成和修正不再集中11尾数", TestMixedPrecisionClosing),
     ("总进账残月按整月抽日期筛选，不补满次数且不挤压金额", TestPartialMonthRequiredAmounts),
@@ -97,7 +101,9 @@ static void TestReportedConfiguration()
         Check(result.Records.Count(row => FlowGeneratedRowKinds.IsInterest(row)) == 4, "全年4条结息");
         Check(result.Records.Any(row => row.TradeMoney > 0 && Kind(row) == "Reference"), "普通收入必须保留");
         Check(Source(result, "Const", 1).Count == 130 && Source(result, "Const", 2).Count == 50
-            && Source(result, "Const", 3).Count == 65 && Source(result, "Const", 4).Count == 262, "四种固定项目次数不能缩水");
+            && Source(result, "Const", 3).Count == 65
+            && Source(result, "Const", 4).Count == (config.EndTime.Date - config.StartTime.Date).Days + 1,
+            "固定项目次数不能缩水，每天模式须覆盖所有自然日");
         if (result.MinimumBalance < -0.009)
         {
             var fixedBefore = FixedTimes(result);
@@ -236,17 +242,78 @@ static void TestRequiredBudgetReservation()
 
 static void TestUnavailableRequiredDates()
 {
-    var config = Config(1000, 100);
-    config.StartTime = new DateTime(2026, 1, 3);
-    config.EndTime = new DateTime(2026, 1, 4);
-    var required = Rule(1, true, 10, 100, 0, 2);
-    required.TradeWeekend = false;
-    try { new FlowAutoGenerator().Generate(Request(config, [required, Rule(2, false, 10, 100)])); }
-    catch (InvalidOperationException exception)
+    foreach (var mode in new[] { 0, 1, 2 })
     {
-        Check(exception.Message.Contains("没有可交易日期"), "明确提示日期约束冲突"); return;
+        var config = Config(1000, 100); config.SelectIndex = mode;
+        config.StartTime = new DateTime(2026, 1, 3); config.EndTime = new DateTime(2026, 1, 4);
+        config.MinInMoneyMonth1 = config.MaxInMoneyMonth1 = config.MinInMoneyMonth2 = config.MaxInMoneyMonth2 = 1000;
+        config.MinOutMoneyMonth1 = config.MaxOutMoneyMonth1 = config.MinOutMoneyMonth2 = config.MaxOutMoneyMonth2 = 900;
+        config.MonthGenData.Add(new MonthGenerateRule { StartTime = config.StartTime, EndTime = config.EndTime, InMoney = 1000, OutMoney = 900 });
+        var required = Rule(1, true, 10, 100, 0, 2); required.TradeWeekend = false;
+        var request = Request(config, [required, Rule(2, false, 10, 100), Rule(3, true, 100, 300)]);
+        var before = JsonSerializer.Serialize(request);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result);
+        Check(Source(result, "Reference", 1).Count == 0, "无日期的必现参照不能补入被禁止日期");
+        Check(Source(result, "Reference", 2).Count > 0 && Source(result, "Reference", 3).Count > 0, "跳过一行不能阻止其他参照正常生成");
+        Check(JsonSerializer.Serialize(request) == before, "不能为跳过月份而修改原始次数或勾选配置");
     }
-    throw new Exception("不能跳过必现次数或捏造周末交易");
+}
+
+static void TestUnavailableEndingMonth()
+{
+    var config = Config(158000, 1000); config.StartTime = new(2025, 4, 1); config.EndTime = new(2026, 5, 1);
+    var blocked = Rule(35, false, 100, 300, -1, 2); blocked.TradeHoliday = blocked.TradeWeekend = false;
+    var request = Request(config, [blocked, Rule(1, true, 500, 5000), Rule(2, false, 10, 300)]);
+    var directory = Path.Combine(Path.GetTempPath(), "SpeedEmulator-BocSkippedMonths-" + Guid.NewGuid().ToString("N"));
+    var previous = Environment.GetEnvironmentVariable("SPEEDEMULATOR_BOC_LOG_DIR");
+    try
+    {
+        Environment.SetEnvironmentVariable("SPEEDEMULATOR_BOC_LOG_DIR", directory);
+        Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED", "44101");
+        var before = JsonSerializer.Serialize(request);
+        var result = new FlowAutoGenerator().Generate(request); Validate(request, result);
+        var rows = Source(result, "Reference", 35);
+        Check(rows.Count == 26 && rows.GroupBy(row => row.AccountTime!.Value.ToString("yyyy-MM")).Count() == 13
+            && rows.GroupBy(row => row.AccountTime!.Value.ToString("yyyy-MM")).All(group => group.Count() == 2), "其他13个完整月份必须保留每月两次");
+        Check(rows.All(row => row.AccountTime!.Value < new DateTime(2026, 5, 1)), "被禁止的五一不能补入第35行");
+        Check(JsonSerializer.Serialize(request) == before, "不得改写原始起止日期、金额或开关");
+        var log = File.ReadAllText(Path.Combine(directory, "generation-boc.log"));
+        Check(log.Contains("reference-month-skipped") && log.Contains("no-eligible-date"), "静默跳过仍需在本地日志保留排查原因");
+    }
+    finally { Environment.SetEnvironmentVariable("SPEEDEMULATOR_BOC_LOG_DIR", previous); }
+}
+
+static void TestUnavailableStartingMonth()
+{
+    var config = Config(10000, 1000); config.StartTime = new(2026, 1, 31); config.EndTime = new(2026, 2, 28);
+    var blocked = Rule(35, false, 100, 300, -1, 2); blocked.TradeHoliday = blocked.TradeWeekend = false;
+    var request = Request(config, [blocked, Rule(1, true, 500, 2000), Rule(2, false, 10, 300)]);
+    Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED", "44102");
+    var result = new FlowAutoGenerator().Generate(request); Validate(request, result);
+    var rows = Source(result, "Reference", 35);
+    Check(rows.Count == 2 && rows.All(row => row.AccountTime!.Value.Month == 2), "只能跳过无日期的首月，后续月份仍保留次数");
+}
+
+static void TestUnavailableBudgetFallback()
+{
+    var config = Config(1000, 100); config.StartTime = new(2026, 4, 1); config.EndTime = new(2026, 5, 1);
+    config.OpeningBalance = 500000;
+    var blocked = Rule(35, false, 100, 300, -1, 2); blocked.TradeHoliday = blocked.TradeWeekend = false;
+    var request = Request(config, [blocked, Rule(1, false, 5000, 10000, 0, 2), Rule(2, true, 100, 1000)]);
+    Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED", "44103");
+    var result = new FlowAutoGenerator().Generate(request);
+    Check(FlowAutoGenerator.UsesReferencePriority(config, result.Records), "应覆盖预算冲突后的参照优先回退");
+    Near(500000, result.OpeningBalance, .01);
+    Check(result.MinimumBalance >= -.009, "跳过日期不能造成负余额");
+    Near(result.OpeningBalance + result.IncomeTotal - result.ExpenseTotal, result.FinalBalance, .01);
+    foreach (var row in result.Records.Where(row => Kind(row) == "Reference"))
+    {
+        var rule = request.References.Single(rule => rule.Index.ToString() == row.ExtraFields["__GeneratedSourceIndex"]);
+        Check(FlowGenerationCalendar.IsDateAllowed(row.AccountTime!.Value, rule), "回退不能使用被排除日期");
+        Check(Math.Abs(row.TradeMoney!.Value) >= rule.MinMoney - .009 && Math.Abs(row.TradeMoney.Value) <= rule.MaxMoney + .009, "跳过日期不能突破金额范围");
+    }
+    var rows = Source(result, "Reference", 35);
+    Check(rows.Count == 2 && rows.All(row => row.AccountTime!.Value.Month == 4), "预算回退不能重新加入已经跳过的五月次数");
 }
 
 static void TestOpeningBalance()
@@ -518,7 +585,7 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
         if (rule.FloutLength != 0) Check((long)Math.Round(amount / unit) % 10 != 0, "指定金额位数不能变成0");
         Check(row.AccountTime >= request.Config.StartTime.Date && row.AccountTime < request.Config.EndTime.Date.AddDays(1), "不越日期范围");
         Check(row.AccountTime!.Value.Hour >= rule.StartDay && row.AccountTime.Value.Hour <= rule.EndDay, "不越交易时段");
-        if (rule.TradeWeekend == false) Check(row.AccountTime.Value.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday, "周末限制保留");
+        if (rule is GenerateReferenceRule) Check(FlowGenerationCalendar.IsDateAllowed(row.AccountTime.Value, rule), "参照周末和节假日限制保留");
     }
     Near(balance, result.FinalBalance, 0.01);
 }

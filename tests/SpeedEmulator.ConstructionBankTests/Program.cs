@@ -144,7 +144,7 @@ static void TestScopeAndCalendar()
     foreach (var flags in new[] { (false, false), (true, false), (false, true), (true, true) })
     {
         var rule = Rule(1, 5, 50, 1); rule.TradeWeekend = flags.Item1; rule.TradeHoliday = flags.Item2;
-        Check(ConstructionBankGenerationPolicy.IsReferenceDateAllowed(weekday, rule) == (!flags.Item1 && !flags.Item2), "普通工作日组合");
+        Check(ConstructionBankGenerationPolicy.IsReferenceDateAllowed(weekday, rule), "普通工作日不受勾选开关排除");
         Check(ConstructionBankGenerationPolicy.IsReferenceDateAllowed(holiday, rule) == flags.Item2, "节假日组合");
         Check(ConstructionBankGenerationPolicy.IsReferenceDateAllowed(weekend, rule) == flags.Item1, "周末组合");
     }
@@ -337,8 +337,8 @@ static void TestFixedDates()
 
 static void TestUnavailableDates()
 {
-    var config = Config(100, 0); config.StartTime = config.EndTime = new DateTime(2025, 10, 9);
-    var rule = Rule(1, 5, 50, 1); rule.PercentMonth = 1;
+    var config = Config(100, 0); config.StartTime = config.EndTime = new DateTime(2025, 10, 1);
+    var rule = Rule(1, 5, 50, 1); rule.PercentMonth = 1; rule.TradeHoliday = false;
     Throws(() => Generate(Request(config, [rule])), "没有符合");
 }
 
@@ -596,7 +596,7 @@ static void TestWideSalaryYear()
 static void TestExpenseDensityFallback()
 {
     var config = Config(1000, 0); config.OpeningBalance = 0;
-    config.StartTime = new DateTime(2025, 10, 1); config.EndTime = new DateTime(2025, 10, 19);
+    config.StartTime = new DateTime(2025, 10, 1); config.EndTime = new DateTime(2025, 10, 16);
     var expense = Rule(1, 100, 200, 0); expense.PercentMonth = 7; expense.TradeHoliday = false;
     var salary = new GenerateConstRule
     {
@@ -608,7 +608,8 @@ static void TestExpenseDensityFallback()
         var request = Request(config, [expense], [salary]); var result = Generate(request, seed); Validate(request, result);
         var rows = Source(result, 1);
         Check(result.MinimumBalance >= -0.009 && result.OpeningBalance == 0, "不能用负余额或增加期初余额绕过缺口");
-        Check(rows.Count == 7 && rows.All(row => row.AccountTime!.Value.Day is 18 or 19), "7笔必现支出须在工资后且保留周末限制");
+        Check(rows.Count == 7 && rows.All(row => row.AccountTime!.Value.Day is 15 or 16
+            && FlowGenerationCalendar.IsDateAllowed(row.AccountTime.Value, expense)), "7笔必现支出须在工资后且保留统一日期限制");
         Check(rows.GroupBy(row => row.AccountTime!.Value.Date).Max(group => group.Count()) >= 4,
             "不能把自动密度上限3笔当成用户硬限制");
         var pay = Source(result, 1, "Const").Single();

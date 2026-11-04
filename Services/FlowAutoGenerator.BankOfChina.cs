@@ -92,7 +92,12 @@ public sealed partial class FlowAutoGenerator
         {
             var dates = schedule.GetCandidateDates(month.Start, month.End, rule);
             if (dates.Count == 0)
-                throw new InvalidOperationException($"中行参照明细第{rule.Index}行在{month.Start:yyyy年MM月}没有可交易日期");
+            {
+                // No occurrence is planned, reserved or validated for a month
+                // that cannot legally host this reference. Keep other months.
+                BankOfChinaGenerationDiagnostics.SkippedReferenceMonth(rule.Index, month.Start, month.End);
+                continue;
+            }
             var days = DateTime.DaysInMonth(month.Start.Year, month.Start.Month);
             var partial = request.Config.SelectIndex == 0 && (month.Start.Day != 1 || month.End.Day != days);
             var allowed = partial ? dates.Select(date => date.Date).ToHashSet() : null;

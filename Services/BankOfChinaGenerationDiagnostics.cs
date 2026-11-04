@@ -34,6 +34,8 @@ internal static class BankOfChinaGenerationDiagnostics
     }
 
     internal static void Seed(int seed) => Write("seed", new { seed });
+    internal static void SkippedReferenceMonth(int index, DateTime start, DateTime end) =>
+        Write("reference-month-skipped", new { ReferenceIndex = index, Start = start, End = end, Reason = "no-eligible-date" });
     internal static void Stage(string stage, IEnumerable<FlowRecord> records)
     {
         if (Current.Value is not null) Write(stage, Analyze(records));

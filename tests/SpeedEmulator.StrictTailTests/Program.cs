@@ -185,7 +185,8 @@ static void TestReportedCcb()
             Check(result.MinimumBalance >= -.009, "不能制造负余额");
             var p2 = result.Records.Where(Eligible).ToArray(); Check(p2.Length == 182, "每月必现参照次数不变");
             max11 = Math.Max(max11, p2.Count(row => Tail(row) == 11)); maxUsage = Math.Max(maxUsage, p2.GroupBy(Tail).Max(group => group.Count()));
-            Check(p2.GroupBy(Tail).Max(group => group.Count()) <= 9, "实际配置仍有超过5%的单尾数集中");
+            Check(p2.GroupBy(Tail).Max(group => group.Count()) <= 9,
+                $"实际配置仍有超过5%的单尾数集中：seed={seed}, tail={p2.GroupBy(Tail).OrderByDescending(group => group.Count()).First().Key}, max={p2.GroupBy(Tail).Max(group => group.Count())}");
         }
     }
     finally { Environment.SetEnvironmentVariable("SPEEDEMULATOR_FLOW_TEST_SEED", previous); }

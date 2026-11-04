@@ -15,7 +15,7 @@ var tests = new (string Name, Action Run)[]
     ("固定日期固定金额确实无解时仅补最小缺口", TestHardException),
     ("固定日可变金额优先合法重抽，避免补期初", TestVariableConst),
     ("只允许在原月份及交易时段内调度", TestWindows),
-    ("建行专属周末日期限制保留", TestCcbDates),
+    ("建行余额调度使用统一周末和节假日许可", TestCcbDates),
     ("支付宝日期号码同步，显式字段及调用方原数据保留", TestIdentifiers),
     ("农行附言日期随合法调度同步，原附言不丢失", TestPostscript),
     ("导入金额日期保留，只为不可调整的硬缺口补初", TestImported),
@@ -136,7 +136,7 @@ static void TestCcbDates()
 {
     var income = Fixed(1, true, 200, 200, "5"); var expense = Ref(2, false); expense.TradeWeekend = true; expense.TradeHoliday = false;
     var request = Request([expense], [income], 8, "建行"); var result = Repair(request, Row(request, expense, 4, -100), Row(request, income, 5, 200));
-    Near(0, result.OpeningBalance); Check(result.Records.Single(r => r.TradeMoney < 0).AccountTime!.Value.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday, "建行仍只能落允许日期");
+    Near(0, result.OpeningBalance); Check(FlowGenerationCalendar.IsDateAllowed(result.Records.Single(r => r.TradeMoney < 0).AccountTime!.Value, expense), "建行调度只能落允许日期");
 }
 static void TestIdentifiers()
 {

@@ -30,7 +30,7 @@ public sealed partial class FlowAutoGenerator
         var windows = new List<(GenerateReferenceRule Rule, DateTime Start, DateTime End, DateTime? Date)>();
         if (ConstructionBankGenerationPolicy.AppliesTo(request.Bank))
         {
-            // Retain CCB's required counts and exclusive calendar. These plans
+            // Retain CCB's required counts and the shared calendar. These plans
             // contain no budget allocation and therefore cannot clamp amounts.
             foreach (var plan in CreateCcbRequiredPlans(request, start, end, new Random(seed)))
             if (plan.Rule is GenerateReferenceRule rule && !plan.Optional)

@@ -2673,8 +2673,7 @@ public sealed partial class FlowAutoGenerator
             return false;
         }
 
-        return rule.TradeWeekend != false
-            || date.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday;
+        return FlowGenerationCalendar.IsDateAllowed(date, rule);
     }
 
     private static bool IsBalanceFriendlyDailyCoverageMove(FlowRecord record, DateTime targetDate)
@@ -4231,8 +4230,7 @@ public sealed partial class FlowAutoGenerator
 
         for (var date = before.Date; date >= start.Date; date = date.AddDays(-1))
         {
-            if (rule.TradeWeekend == false
-                && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            if (!IsNativeDateAllowedForRule(date, rule))
             {
                 continue;
             }
@@ -4285,8 +4283,7 @@ public sealed partial class FlowAutoGenerator
 
         for (var date = end.Date; date >= after.Date; date = date.AddDays(-1))
         {
-            if (rule.TradeWeekend == false
-                && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            if (!IsNativeDateAllowedForRule(date, rule))
             {
                 continue;
             }
@@ -6016,7 +6013,7 @@ public sealed partial class FlowAutoGenerator
             var normalizedEnd = NormalizeEndDate(end);
             var key = string.Create(
                 CultureInfo.InvariantCulture,
-                $"{start.Date.Ticks}:{normalizedEnd.Date.Ticks}:{rule.StartDay}:{rule.EndDay}:{rule.TradeHoliday}:{rule.TradeWeekend}");
+                $"{start.Date.Ticks}:{normalizedEnd.Date.Ticks}:{rule.StartDay}:{rule.EndDay}:{rule.TradeHoliday}:{rule.TradeWeekend}:{rule is GenerateConstRule}");
             if (!candidateDatesByRange.TryGetValue(key, out var dates))
             {
                 dates = EnumerateNativeCandidateDates(start, normalizedEnd, rule).ToArray();
@@ -10348,9 +10345,6 @@ public sealed partial class FlowAutoGenerator
             return result;
         }
 
-        var weekendSlices = allSlices
-            .Where(rule => rule.TradeWeekend != false)
-            .ToArray();
         var existingCountsByDay = new Dictionary<DateTime, int>();
         foreach (var record in records)
         {
@@ -10376,9 +10370,8 @@ public sealed partial class FlowAutoGenerator
                 continue;
             }
 
-            IReadOnlyList<GenerateReferenceRule> slices = date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
-                ? weekendSlices
-                : allSlices;
+            IReadOnlyList<GenerateReferenceRule> slices = allSlices
+                .Where(rule => IsNativeDateAllowedForRule(date, rule)).ToArray();
             if (slices.Count == 0)
             {
                 continue;
@@ -14333,7 +14326,7 @@ public sealed partial class FlowAutoGenerator
     private static DateTime NormalizeNativeFixedDay(DateTime day, FlowRuleBase rule, DateTime end)
     {
         var result = day.Date;
-        while (result <= end.Date && rule.TradeWeekend == false && result.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+        while (result <= end.Date && !IsNativeDateAllowedForRule(result, rule))
         {
             result = result.AddDays(1);
         }
@@ -14485,7 +14478,7 @@ public sealed partial class FlowAutoGenerator
                 continue;
             }
 
-            if (rule.TradeWeekend == false && date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            if (!IsNativeDateAllowedForRule(date, rule))
             {
                 continue;
             }
@@ -18441,7 +18434,7 @@ public sealed partial class FlowAutoGenerator
             .ToDictionary(group => group.Key, group => group.Count());
 
         var dates = EnumerateDates(start.Date, NormalizeEndDate(end).Date)
-            .Where(date => rule.TradeWeekend != false || date.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday)
+            .Where(date => IsNativeDateAllowedForRule(date, rule))
             .ToList();
         if (dates.Count == 0)
         {
@@ -19621,7 +19614,7 @@ public sealed partial class FlowAutoGenerator
         for (var attempt = 0; attempt < 30; attempt++)
         {
             var date = start.Date.AddDays(random.Next(0, days + 1));
-            if (rule?.TradeWeekend == false && (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday))
+            if (!FlowGenerationCalendar.IsDateAllowed(date, rule))
             {
                 continue;
             }
@@ -19641,13 +19634,23 @@ public sealed partial class FlowAutoGenerator
                 time = end.AddSeconds(-random.Next(0, 120));
             }
 
-            return time;
+            if (time.Date == date && time >= start && time <= end
+                && time.Hour >= startHour && time.Hour <= endHour)
+                return time;
         }
 
-        return start.Date
-            .AddHours(startHour)
-            .AddMinutes(random.Next(0, 60))
-            .AddSeconds(random.Next(0, 60));
+        // Exhausting random attempts must not fall back to an excluded day.
+        foreach (var date in EnumerateDates(start.Date, end.Date))
+        {
+            if (!FlowGenerationCalendar.IsDateAllowed(date, rule)) continue;
+            var lower = MaxDateTime(start, date.AddHours(startHour));
+            var upper = MinDateTime(end, date.AddHours(endHour).AddMinutes(59).AddSeconds(59));
+            var firstSecond = (long)Math.Ceiling((double)lower.Ticks / TimeSpan.TicksPerSecond);
+            var lastSecond = upper.Ticks / TimeSpan.TicksPerSecond;
+            if (firstSecond <= lastSecond)
+                return new DateTime(random.NextInt64(firstSecond, lastSecond + 1) * TimeSpan.TicksPerSecond, start.Kind);
+        }
+        throw new InvalidOperationException($"第{rule?.Index}行没有符合周末、节假日及交易时段限制的日期。");
     }
 
     private readonly record struct RulePropertyMapping(PropertyInfo Source, PropertyInfo? Target);

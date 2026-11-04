@@ -12,8 +12,11 @@ public sealed partial class FlowAutoGenerator
         FlowAutoGenerationRequest request, FlowAutoGenerationResult source, bool allowTimePermutation = true)
     {
         if (source.Records.Count < 2) return source;
-        source = CompleteGeneratedResultCore(request, source, generatedOnly: true);
-        source = PrepareGeneratedTailDistribution(request, source);
+        if (!HasVerifiedAmountDistribution(source))
+        {
+            source = CompleteGeneratedResultCore(request, source, generatedOnly: true);
+            source = PrepareGeneratedTailDistribution(request, source);
+        }
         var rows = source.Records;
         var referencePriority = UsesReferencePriority(request.Config, rows);
         var entries = rows.Select((row, index) => CreateAdjacentAmountEntry(request, row, index)).ToArray();

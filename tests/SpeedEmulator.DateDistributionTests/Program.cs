@@ -11,7 +11,7 @@ var tests = new (string Name, Action Run)[]
     ("期末预留不足不能重新分配已经排好的可选收入", PreserveScheduledIncome),
     ("34类银行：同月收入分散，金额、来源及总笔数保留", AllBanksClump),
     ("34类银行：支出集中也按合法日期分散", AllBanksDebits),
-    ("混合周末与工作日参照按各自可用日期计算容量", MixedCalendars),
+    ("允许周末与仅工作日参照按各自可用日期计算容量", MixedCalendars),
     ("已分散结果不变，重复修正保持幂等", Healthy),
     ("固定日期、导入数据不参加日期散布", ProtectedRows),
     ("仅一天可交易及必要现金约束不会人为抬高期初", HardDates),
@@ -133,16 +133,18 @@ static void Healthy()
 static void MixedCalendars()
 {
     var baseRequest=Request(Banks().Single(bank=>bank.Id==8));
-    var weekends=Rule(1,true);var weekdays=Rule(2,true);weekdays.TradeWeekend=false;weekdays.TradeHoliday=false;
+    var permissive=Rule(1,true);var weekdays=Rule(2,true);weekdays.TradeWeekend=false;weekdays.TradeHoliday=false;
     var req=new FlowAutoGenerationRequest{Bank=baseRequest.Bank,BankUser=baseRequest.BankUser,Config=baseRequest.Config,
-        References=[weekends,weekdays],ConstItems=[],InterestSetting=baseRequest.InterestSetting};
+        References=[permissive,weekdays],ConstItems=[],InterestSetting=baseRequest.InterestSetting};
     req.Config.StartTime=new(2025,9,26);
-    var rows=Enumerable.Range(0,90).Select(i=>Row(req,weekends,new DateTime(2025,9,27,9,0,0).AddMinutes(i),6000+i*100))
+    var rows=Enumerable.Range(0,90).Select(i=>Row(req,permissive,new DateTime(2025,9,27,9,0,0).AddMinutes(i),6000+i*100))
         .Concat(Enumerable.Range(0,10).Select(i=>Row(req,weekdays,new DateTime(2025,9,26,9,0,0).AddMinutes(i),30000+i*100))).ToList();
     var result=Finish(req,Source(rows));Validate(req,result);Near(0,result.OpeningBalance);
-    var weekendRows=result.Records.Where(row=>row.ExtraFields["__GeneratedSourceIndex"]=="1").ToArray();
-    Check(weekendRows.GroupBy(row=>row.AccountTime!.Value.Date).All(group=>group.Count()==45),"可行的两日周末分配仍集中于一天");
-    Check(weekendRows.All(row=>row.AccountTime!.Value.Day is 27 or 28),"周末参照落到工作日");
+    var permissiveRows=result.Records.Where(row=>row.ExtraFields["__GeneratedSourceIndex"]=="1").ToArray();
+    Check(permissiveRows.Length==90 && result.Records.Count==100,"日期分配改变来源笔数");
+    Check(result.Records.GroupBy(row=>row.AccountTime!.Value.Date).Count()==5
+        && result.Records.GroupBy(row=>row.AccountTime!.Value.Date).All(group=>group.Count()==20),"可行的五日分配仍集中于少数日期");
+    Check(permissiveRows.Any(row=>row.AccountTime!.Value.Day is 26 or 29 or 30),"允许周末不应排除普通工作日");
 }
 static void ProtectedRows()
 {

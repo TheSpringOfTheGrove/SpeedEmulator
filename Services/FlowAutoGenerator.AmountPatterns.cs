@@ -6,6 +6,7 @@ namespace SpeedEmulator.Services;
 public sealed partial class FlowAutoGenerator
 {
     private const string AmountPatternSignature = "__GeneratedAmountPatternSignature";
+    private const string AmountDistributionSignature = "__GeneratedAmountDistributionSignature";
     private const string TailOriginIndex = "__GeneratedFinalTailOrigin";
 
     private static string CalculateAmountPatternSignature(IReadOnlyList<FlowRecord> records)
@@ -29,6 +30,29 @@ public sealed partial class FlowAutoGenerator
     {
         var signature = CalculateAmountPatternSignature(result.Records);
         return result.Records.Any(row => row.ExtraFields.GetValueOrDefault(AmountPatternSignature) == signature);
+    }
+
+    private static string CalculateAmountDistributionSignature(IReadOnlyList<FlowRecord> records)
+    {
+        // Calendar-only repairs may reorder rows. Preserve the already checked
+        // source amount multisets while still rechecking chronological neighbors.
+        var hash = new HashCode();
+        foreach (var row in records.Where(row => row.Id == 0 && !row.IsDocumentImported && !IsSystemInterestRecord(row))
+                     .OrderBy(row => row.ExtraFields.GetValueOrDefault(SourceKindField), StringComparer.Ordinal)
+                     .ThenBy(row => row.ExtraFields.GetValueOrDefault(SourceIndexField), StringComparer.Ordinal)
+                     .ThenBy(row => RoundMoney(row.TradeMoney ?? 0)))
+        {
+            hash.Add(row.ExtraFields.GetValueOrDefault(SourceKindField), StringComparer.Ordinal);
+            hash.Add(row.ExtraFields.GetValueOrDefault(SourceIndexField), StringComparer.Ordinal);
+            hash.Add(RoundMoney(row.TradeMoney ?? 0));
+        }
+        return hash.ToHashCode().ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static bool HasVerifiedAmountDistribution(FlowAutoGenerationResult result)
+    {
+        var signature = CalculateAmountDistributionSignature(result.Records);
+        return result.Records.Any(row => row.ExtraFields.GetValueOrDefault(AmountDistributionSignature) == signature);
     }
 
     private static FlowAutoGenerationResult PrepareGeneratedTailDistribution(
@@ -107,7 +131,10 @@ public sealed partial class FlowAutoGenerator
         var anchor = entries.OfType<AdjacentAmountEntry>().FirstOrDefault(entry => entry.HasCentTail)
             ?? entries.OfType<AdjacentAmountEntry>().FirstOrDefault();
         if (anchor is not null)
+        {
             result.Records[anchor.Index].ExtraFields[AmountPatternSignature] = CalculateAmountPatternSignature(result.Records);
+            result.Records[anchor.Index].ExtraFields[AmountDistributionSignature] = CalculateAmountDistributionSignature(result.Records);
+        }
         return result;
     }
 

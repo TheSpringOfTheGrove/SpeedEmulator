@@ -438,11 +438,11 @@ static void DedicatedMonthlyModes()
 static void DedicatedUnavailableDates()
 {
     var expense = Rule(1, false, 10000, 20000, 1, 2); expense.TradeWeekend = true; expense.TradeHoliday = false;
-    var config = new FlowGenerationConfig { StartTime = new(2026, 1, 5), EndTime = new(2026, 1, 6), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 1000 };
+    var config = new FlowGenerationConfig { StartTime = new(2026, 1, 1), EndTime = new(2026, 1, 2), OpeningBalance = 500000, AllInMoney = 3000, LastMoney = 1000 };
     var request = Build(new Bank { Id = 8, Name = "建行", Type = BankTypes.Personal }, config, [expense, Rule(2, true, 1000, 5000)]);
     try { new FlowAutoGenerator().Generate(request); }
     catch (InvalidOperationException error) { Check(error.Message.Contains("日期"), "应保留真实日期冲突"); return; }
-    throw new Exception("不能把没有合法周末的明细移到普通工作日");
+    throw new Exception("不能把禁止节假日的明细移到节假日");
 }
 static void DedicatedCapacity()
 {
