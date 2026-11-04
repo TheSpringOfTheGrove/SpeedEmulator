@@ -16,6 +16,9 @@ public sealed class PrintTemplate
 
     public bool IsPageRowsOverride { get; set; }
 
+    // Null identifies older row-count-only overrides that never saved a sort choice.
+    public bool? DescendingOverride { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     public string PageSize { get; set; } = "A4Landscape";
@@ -43,6 +46,7 @@ public sealed class PrintTemplate
             IsSystem = IsSystem,
             IsDeleted = IsDeleted,
             IsPageRowsOverride = IsPageRowsOverride,
+            DescendingOverride = DescendingOverride,
             Name = Name,
             PageSize = PageSize,
             PageRows = PageRows,

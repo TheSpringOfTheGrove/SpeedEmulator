@@ -264,6 +264,11 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
 
         workingTemplate.Config.Columns = Columns.Select(item => item.ToColumn()).ToList();
         workingTemplate.Config.RowCount = workingTemplate.PageRows;
+        if (template.IsSystem)
+        {
+            template.IsPageRowsOverride |= template.PageRows != workingTemplate.PageRows;
+            template.DescendingOverride = workingTemplate.Config.Descending;
+        }
         template.PageRows = workingTemplate.PageRows;
         template.PageSize = workingTemplate.PageSize;
         template.Config = workingTemplate.Config.Clone();

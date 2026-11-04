@@ -44,6 +44,14 @@ internal static partial class Program
             foreach (var template in templates) catalog.Add(new(bank, template));
             Console.WriteLine($"CATALOG {bank.Name}: {templates.Count} templates");
         }
+        if (args.Contains("--template-settings-baseline"))
+        {
+            File.WriteAllText(Path.Combine(Output, "template-settings-baseline.json"), JsonSerializer.Serialize(
+                catalog.Select(entry => new { entry.Bank.Id, entry.Bank.Type, entry.Bank.Name,
+                    TemplateName = entry.Template.Name, entry.Template.Config.Descending, entry.Template.PageRows }), Json));
+            return;
+        }
+        if (args.Contains("--template-settings")) { TestPrintTemplateSettings(catalog); return; }
         if (args.Contains("--boc-fields")) { TestBankOfChinaTradeNames(catalog); return; }
         if (args.Contains("--abc-fields")) { TestAgriculturalOutlets(catalog); return; }
         if (args.Contains("--restored-fields")) { TestRestoredBankBindings(catalog); return; }

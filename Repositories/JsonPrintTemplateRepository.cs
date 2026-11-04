@@ -51,14 +51,14 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                     }
                 }
 
-                ApplySystemTemplatePageRowsOverrides(templates, savedTemplates);
+                ApplySystemTemplateSettingsOverrides(templates, savedTemplates);
 
                 var deletedTemplates = savedTemplates
-                    .Where(item => item.IsDeleted && !item.IsPageRowsOverride)
+                    .Where(item => item.IsDeleted && !IsSystemTemplateSettingsOverride(item))
                     .Select(item => item.Clone())
                     .ToList();
                 templates.AddRange(savedTemplates
-                    .Where(item => !item.IsDeleted && !item.IsPageRowsOverride)
+                    .Where(item => !item.IsDeleted && !IsSystemTemplateSettingsOverride(item))
                     .Select(item => item.Clone()));
                 if (deletedTemplates.Count > 0)
                 {
@@ -97,29 +97,42 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             .ToHashSet(StringComparer.Ordinal);
 
         return savedTemplates
-            .Where(item => item.IsPageRowsOverride
+            .Where(item => IsSystemTemplateSettingsOverride(item)
                 || !IsStaleVendorTemplateOverride(item, systemNameKeys, systemNameOnlyKeys, systemVendorKeys))
             .ToList();
     }
 
-    private static void ApplySystemTemplatePageRowsOverrides(
+    private static bool IsSystemTemplateSettingsOverride(PrintTemplate template)
+    {
+        return template.IsPageRowsOverride || template.DescendingOverride.HasValue;
+    }
+
+    private static void ApplySystemTemplateSettingsOverrides(
         IEnumerable<PrintTemplate> systemTemplates,
         IEnumerable<PrintTemplate> savedTemplates)
     {
-        foreach (var pageRowsOverride in savedTemplates.Where(item =>
-                     item.IsPageRowsOverride
-                     && !item.IsDeleted
-                     && item.PageRows > 0))
+        foreach (var settingsOverride in savedTemplates.Where(item =>
+                     IsSystemTemplateSettingsOverride(item)
+                     && !item.IsDeleted))
         {
             var systemTemplate = systemTemplates.FirstOrDefault(item =>
                 item.IsSystem
-                && IsSameSystemTemplatePageRowsIdentity(item, pageRowsOverride));
+                && IsSameSystemTemplatePageRowsIdentity(item, settingsOverride));
             if (systemTemplate is not null)
             {
-                var pageRows = GetCalibratedSystemTemplatePageRows(systemTemplate, pageRowsOverride);
-                systemTemplate.PageRows = pageRows;
-                systemTemplate.Config.RowCount = pageRows;
-                systemTemplate.IsPageRowsOverride = true;
+                if (settingsOverride.IsPageRowsOverride && settingsOverride.PageRows > 0)
+                {
+                    var pageRows = GetCalibratedSystemTemplatePageRows(systemTemplate, settingsOverride);
+                    systemTemplate.PageRows = pageRows;
+                    systemTemplate.Config.RowCount = pageRows;
+                    systemTemplate.IsPageRowsOverride = true;
+                }
+
+                if (settingsOverride.DescendingOverride is { } descending)
+                {
+                    systemTemplate.Config.Descending = descending;
+                    systemTemplate.DescendingOverride = descending;
+                }
             }
         }
     }
@@ -166,7 +179,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
             if (template.IsSystem)
             {
-                SaveSystemTemplatePageRowsOverride(bank, template, templates);
+                SaveSystemTemplateSettingsOverride(bank, template, templates);
                 Persist();
                 return Task.CompletedTask;
             }
@@ -175,6 +188,9 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             copy.BankId = bank.Id;
             copy.IsSystem = false;
             copy.IsDeleted = false;
+            // A custom copy is a real template, not its source's settings marker.
+            copy.IsPageRowsOverride = false;
+            copy.DescendingOverride = null;
             templates.RemoveAll(item => item.IsDeleted && IsDeletedTemplateMatch(copy, item));
 
             var index = FindExistingTemplateIndex(templates, copy);
@@ -226,7 +242,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             if (template.IsSystem)
             {
                 templates.RemoveAll(item =>
-                    item.IsPageRowsOverride
+                    IsSystemTemplateSettingsOverride(item)
                     && IsSameSystemTemplatePageRowsIdentity(item, template));
             }
 
@@ -251,7 +267,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
     }
 
-    private static void SaveSystemTemplatePageRowsOverride(
+    private static void SaveSystemTemplateSettingsOverride(
         Bank bank,
         PrintTemplate template,
         List<PrintTemplate> templates)
@@ -261,17 +277,23 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         copy.BankId = bank.Id;
         copy.IsSystem = false;
         copy.IsDeleted = false;
-        copy.IsPageRowsOverride = true;
+        copy.IsPageRowsOverride = template.IsPageRowsOverride || !template.DescendingOverride.HasValue;
         copy.PdfData = string.Empty;
         copy.QuestPdfLayoutData = string.Empty;
         copy.Config = new PrintPdfConfig();
 
         var index = templates.FindIndex(item =>
             !item.IsDeleted
-            && item.IsPageRowsOverride
+            && IsSystemTemplateSettingsOverride(item)
             && IsSameSystemTemplatePageRowsIdentity(item, copy));
         if (index >= 0)
         {
+            copy.DescendingOverride ??= templates[index].DescendingOverride;
+            if (!copy.IsPageRowsOverride && templates[index].IsPageRowsOverride)
+            {
+                copy.IsPageRowsOverride = true;
+                copy.PageRows = templates[index].PageRows;
+            }
             copy.Id = templates[index].Id;
             templates[index] = copy;
             return;
@@ -646,8 +668,9 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         }
 
         if (bank.Type == BankTypes.Personal
-            && string.Equals(bank.Name, "光大", StringComparison.Ordinal)
-            && string.Equals(definition.Name, "光大个人电子版", StringComparison.Ordinal))
+            && (string.Equals(bank.Name, "农行", StringComparison.Ordinal)
+                || (string.Equals(bank.Name, "光大", StringComparison.Ordinal)
+                    && string.Equals(definition.Name, "光大个人电子版", StringComparison.Ordinal))))
         {
             config.Descending = true;
         }

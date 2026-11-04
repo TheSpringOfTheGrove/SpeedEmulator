@@ -553,9 +553,11 @@ public sealed class PrintPreviewViewModel : ObservableObject
         try
         {
             settings.ApplyTo(template);
-            PreviewPath = await printPdfService.GeneratePreviewAsync(CreateContext(template));
+            var path = await printPdfService.GeneratePreviewAsync(CreateContext(template));
+            await templateRepository.SaveAsync(Bank, template);
+            PreviewPath = path;
             OnPropertyChanged(nameof(PreviewPath));
-            StatusMessage = $"预览已生成：{PreviewPath}";
+            StatusMessage = $"模板设置已保存，预览已生成：{PreviewPath}";
             return true;
         }
         finally
