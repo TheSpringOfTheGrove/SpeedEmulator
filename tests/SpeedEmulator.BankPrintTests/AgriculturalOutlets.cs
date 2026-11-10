@@ -60,6 +60,24 @@ internal static partial class Program
             count++;
         }
 
+        foreach (var entry in catalog.Where(entry => entry.Bank.Name == "农行"
+            && entry.Bank.Type == BankTypes.Personal
+            && entry.Template.Name.Contains("电子版", StringComparison.Ordinal)))
+        foreach (var exporter in new[] { "VendorBridge", "DefaultQuestPdfExporter", "DefaultStimulsoftExporter" })
+        foreach (var imported in new[] { false, true })
+        foreach (var counterparty in new[] { "示例交易对方测试名称甲乙丙丁", "9000000000000000808", "" })
+        {
+            var row = AgriculturalOutletRow(1, "", imported);
+            row.OppositeUsername = counterparty;
+            row.OppositeAccount = "900000000000101";
+            var target = Convert(Context(entry, row), exporter)[0]!;
+            var label = $"{entry.Template.Name}/{exporter}/导入={imported}";
+            Equal(counterparty.Length == 0 ? "--" : counterparty, Value(target, "OppositeUsername"), label + "/对手信息");
+            Equal(counterparty.Length == 0 ? "" : row.OppositeAccount, Value(target, "OppositeAccount"), label + "/对方账号");
+            Equal(counterparty, row.OppositeUsername, label + "/原户名");
+            count++;
+        }
+
         foreach (var entry in catalog.Where(IsAgriculturalPaperEntry))
         {
             var row = AgriculturalOutletRow(1, "139999");
@@ -112,7 +130,7 @@ internal static partial class Program
             count++;
         }
 
-        Console.WriteLine($"PASS 农行交易网点: {count} field cases (all paper templates, 3 exporters, generated/imported, leading zeros/blanks/custom bindings; electronic/corporate unchanged)");
+        Console.WriteLine($"PASS 农行打印字段: {count} field cases (paper outlets, electronic counterparties, 3 exporters, generated/imported)");
     }
 
     private static void RenderAgriculturalOutlets(List<Entry> catalog)

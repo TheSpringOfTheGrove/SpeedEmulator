@@ -2003,9 +2003,10 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             PrintRenderContext context,
             ResolvedTemplate resolvedTemplate,
             object bankUser,
-            object records,
+            IList records,
             string path)
         {
+            PrepareAgriculturalElectronicVersion2Counterparties(context, resolvedTemplate.Name, records);
             Exception? lastLayoutException = null;
             foreach (var pageRows in GetVendorQuestPdfPageRowAttempts(context, resolvedTemplate))
             {
@@ -2768,6 +2769,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             var bankUser = CreateBankUser(context);
             var records = CreateFlowRecords(context);
             ApplyTemplateSpecificBankUserFieldsFromVendorRecords(context, bankUser, records);
+            PrepareAgriculturalElectronicVersion2Counterparties(context, resolvedTemplate.Name, records);
             TryWritePrintRenderProbe(context, path, records, "default-questpdf", bankUser);
             PrimeVendorDynamicImageCache(mainAssembly, vendorDir);
             var template = resolvedTemplate.Template ?? CreateTemplate(context, resolvedTemplate);
@@ -9003,27 +9005,16 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
         IReadOnlyDictionary<string, object?> values,
         object target)
     {
-        var rawCounterpartyName = ReadStringProperty(
+        var counterpartyName = NormalizeSingleLinePrintText(ReadStringProperty(
             target,
             nameof(FlowRecord.OppositeUsername),
-            string.Empty);
-        // A personal ABC statement can put a 15-19 digit counterparty account in
-        // the "counterparty information" column. Document imports must round-trip
-        // that source value; the legacy ten-character cap was silently turning
-        // 26143301660000699 into 2614330166 in print preview/export.
-        var counterpartyName = source.IsDocumentImported
-            ? NormalizeSingleLinePrintText(rawCounterpartyName)
-            : LimitSingleLinePrintText(rawCounterpartyName, 10);
+            string.Empty));
         var hasNoCounterparty = string.IsNullOrWhiteSpace(counterpartyName)
             || string.Equals(counterpartyName, "--", StringComparison.Ordinal);
         var channel = NormalizeAgriculturalElectronicTradeChannel(FirstNotBlank(
             source.TradeChannel,
             GetValue(values, nameof(FlowRecord.TradeChannel))));
-        // The vendor ABC personal electronic template renders its \"counterparty
-        // information\" column by combining OppositeAccount and OppositeUsername.
-        // An imported blank (or the PDF's \"--\" placeholder) must not therefore
-        // fall back to the account number. Keep this display-only adjustment scoped
-        // to this template bridge; it does not alter the persisted import record.
+        // Keep a missing counterparty as "--" even in templates that can fall back to the account.
         Set(target, nameof(FlowRecord.OppositeUsername), hasNoCounterparty ? "--" : counterpartyName);
         if (hasNoCounterparty)
         {
@@ -9041,6 +9032,30 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
             // by older import versions also retain a raw "000000" value; do not
             // mistake that placeholder for a time that should be printed.
             Set(target, nameof(FlowRecord.CashCheck), AgriculturalPersonalImportedBlankTimeMarker);
+        }
+    }
+
+    private static void PrepareAgriculturalElectronicVersion2Counterparties(
+        PrintRenderContext context,
+        string vendorTemplateName,
+        IList records)
+    {
+        if (vendorTemplateName != "农行个人电子版2"
+            || !IsAgriculturalBankPersonalElectronicTemplate(context))
+        {
+            return;
+        }
+
+        // This native template truncates the name to 16 characters. Its account fallback
+        // prints the whole value in the same cell. Use it only on the transient render rows.
+        foreach (var record in records)
+        {
+            var counterparty = ReadStringProperty(record, nameof(FlowRecord.OppositeUsername), string.Empty);
+            if (counterparty.Length > 16)
+            {
+                Set(record, nameof(FlowRecord.OppositeAccount), counterparty);
+                Set(record, nameof(FlowRecord.OppositeUsername), string.Empty);
+            }
         }
     }
 
