@@ -527,7 +527,7 @@ public sealed class ZhenchengPrintBridgeService : IPrintPdfService
 
     private static bool ShouldApplyLocalPdfConfig(PrintRenderContext context)
     {
-        return !context.Template.IsSystem || context.Template.IsPageRowsOverride;
+        return !context.Template.IsSystem || context.Template.IsPageRowsOverride || context.Template.IsConfigOverride;
     }
 
     private static void TryWritePrintFailureDiagnostic(

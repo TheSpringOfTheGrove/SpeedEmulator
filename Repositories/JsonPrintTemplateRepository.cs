@@ -104,7 +104,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
 
     private static bool IsSystemTemplateSettingsOverride(PrintTemplate template)
     {
-        return template.IsPageRowsOverride || template.DescendingOverride.HasValue;
+        return template.IsPageRowsOverride || template.IsConfigOverride || template.DescendingOverride.HasValue;
     }
 
     private static void ApplySystemTemplateSettingsOverrides(
@@ -120,6 +120,14 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
                 && IsSameSystemTemplatePageRowsIdentity(item, settingsOverride));
             if (systemTemplate is not null)
             {
+                if (settingsOverride.IsConfigOverride)
+                {
+                    systemTemplate.Config = settingsOverride.Config.Clone();
+                    systemTemplate.Config.RowCount = systemTemplate.PageRows;
+                    systemTemplate.PageSize = settingsOverride.PageSize;
+                    systemTemplate.IsConfigOverride = true;
+                }
+
                 if (settingsOverride.IsPageRowsOverride && settingsOverride.PageRows > 0)
                 {
                     var pageRows = GetCalibratedSystemTemplatePageRows(systemTemplate, settingsOverride);
@@ -190,6 +198,7 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             copy.IsDeleted = false;
             // A custom copy is a real template, not its source's settings marker.
             copy.IsPageRowsOverride = false;
+            copy.IsConfigOverride = false;
             copy.DescendingOverride = null;
             templates.RemoveAll(item => item.IsDeleted && IsDeletedTemplateMatch(copy, item));
 
@@ -277,10 +286,13 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
         copy.BankId = bank.Id;
         copy.IsSystem = false;
         copy.IsDeleted = false;
-        copy.IsPageRowsOverride = template.IsPageRowsOverride || !template.DescendingOverride.HasValue;
+        copy.IsPageRowsOverride = template.IsPageRowsOverride || (!template.IsConfigOverride && !template.DescendingOverride.HasValue);
         copy.PdfData = string.Empty;
         copy.QuestPdfLayoutData = string.Empty;
-        copy.Config = new PrintPdfConfig();
+        if (!copy.IsConfigOverride)
+        {
+            copy.Config = new PrintPdfConfig();
+        }
 
         var index = templates.FindIndex(item =>
             !item.IsDeleted
@@ -288,6 +300,12 @@ public sealed class JsonPrintTemplateRepository : IPrintTemplateRepository
             && IsSameSystemTemplatePageRowsIdentity(item, copy));
         if (index >= 0)
         {
+            if (!copy.IsConfigOverride && templates[index].IsConfigOverride)
+            {
+                copy.IsConfigOverride = true;
+                copy.Config = templates[index].Config.Clone();
+                copy.PageSize = templates[index].PageSize;
+            }
             copy.DescendingOverride ??= templates[index].DescendingOverride;
             if (!copy.IsPageRowsOverride && templates[index].IsPageRowsOverride)
             {

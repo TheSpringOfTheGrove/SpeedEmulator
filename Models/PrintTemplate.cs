@@ -16,6 +16,8 @@ public sealed class PrintTemplate
 
     public bool IsPageRowsOverride { get; set; }
 
+    public bool IsConfigOverride { get; set; }
+
     // Null identifies older row-count-only overrides that never saved a sort choice.
     public bool? DescendingOverride { get; set; }
 
@@ -46,6 +48,7 @@ public sealed class PrintTemplate
             IsSystem = IsSystem,
             IsDeleted = IsDeleted,
             IsPageRowsOverride = IsPageRowsOverride,
+            IsConfigOverride = IsConfigOverride,
             DescendingOverride = DescendingOverride,
             Name = Name,
             PageSize = PageSize,

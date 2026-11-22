@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
 using SpeedEmulator.Infrastructure;
@@ -11,6 +12,7 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
 {
     private readonly Bank bank;
     private readonly PrintTemplate workingTemplate;
+    private readonly PrintPdfConfig initialLayoutConfig;
     private readonly Func<PrintTemplateSettingsViewModel, Task>? updatePreviewAsync;
     private readonly Func<PrintTemplateSettingsViewModel, Task>? directOpenAsync;
     private readonly Func<PrintTemplateSettingsViewModel, Task>? saveAsync;
@@ -29,6 +31,8 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
         this.saveAsync = saveAsync;
         EnsureConfig();
         LoadColumns(workingTemplate.Config.Columns);
+        initialLayoutConfig = workingTemplate.Config.Clone();
+        initialLayoutConfig.Columns = Columns.Select(item => item.ToColumn()).ToList();
 
         RefreshCommand = new AsyncRelayCommand(UpdatePreviewAsync);
         DirectOpenCommand = new AsyncRelayCommand(DirectOpenAsync);
@@ -266,6 +270,11 @@ public sealed class PrintTemplateSettingsViewModel : ObservableObject
         workingTemplate.Config.RowCount = workingTemplate.PageRows;
         if (template.IsSystem)
         {
+            var layoutConfig = workingTemplate.Config.Clone();
+            // Sort and row-count changes have their own settings markers.
+            layoutConfig.Descending = initialLayoutConfig.Descending;
+            layoutConfig.RowCount = initialLayoutConfig.RowCount;
+            template.IsConfigOverride |= JsonSerializer.Serialize(layoutConfig) != JsonSerializer.Serialize(initialLayoutConfig);
             template.IsPageRowsOverride |= template.PageRows != workingTemplate.PageRows;
             template.DescendingOverride = workingTemplate.Config.Descending;
         }

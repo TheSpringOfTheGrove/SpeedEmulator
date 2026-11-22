@@ -36,7 +36,7 @@ internal static partial class Program
                     RequireSettings(new PrintTemplateSettingsViewModel(abc, template).Descending == descending, "设置窗口未回显保存的排序");
                     repository = SettingsRepository(path);
                 }
-                RequireSettings(!template.IsPageRowsOverride, "只修改排序不能启用每页行数覆盖");
+                RequireSettings(!template.IsPageRowsOverride && !template.IsConfigOverride, "只修改排序不能启用行数或版面覆盖");
             }),
             ("同一银行其他模板保持默认，不出现额外模板", () =>
             {
@@ -81,12 +81,81 @@ internal static partial class Program
                 ApplySettingsUpdate(preview, template, settings);
                 template = SettingsRepository(path).ListByBankAsync(abc).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
                 RequireSettings(template.PageRows == 23 && !template.Config.Descending && template.IsPageRowsOverride, "更新丢失行数或排序");
+                RequireSettings(!template.IsConfigOverride, "只改行数和排序不能启用版面覆盖");
                 template.PageRows = 24;
                 SettingsPreview(abc, SettingsRepository(path)).SavePageRowsAsync(template).GetAwaiter().GetResult();
                 var reopened = SettingsRepository(path).ListByBankAsync(abc).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
                 RequireSettings(reopened.PageRows == 24 && !reopened.Config.Descending, "修改行数覆盖了已保存排序");
                 using var json = JsonDocument.Parse(File.ReadAllText(path));
                 RequireSettings(json.RootElement.GetProperty(abc.Id.ToString()).GetArrayLength() == 1, "同一模板产生重复设置");
+            }),
+            ("建行纸质版7单改版面参数即用于预览，重启仓储后完整恢复", () =>
+            {
+                var path = Path.Combine(directory, "ccb-layout.json");
+                var entry = catalog.Single(item => item.Bank.Id == 8 && item.Template.Name == "建行个人纸质版7");
+                var template = entry.Template.Clone();
+                var service = new SettingsPdfService();
+                var settings = new PrintTemplateSettingsViewModel(entry.Bank, template)
+                {
+                    MarginLeft = 25, MarginTop = 74, MarginRight = 30, MarginBottom = 55,
+                    FontFamily = "宋体", ColumnMinHeight = 22, SealLeft = 33, SealTop = 48, SealWidth = 96
+                };
+                settings.Columns[0].Width = 29;
+                settings.Columns[0].FontSize = 7;
+                settings.Columns[0].LineHeight = 1.2;
+                ApplySettingsUpdate(SettingsPreview(entry.Bank, SettingsRepository(path), service), template, settings);
+                RequireSettings(service.Template is { IsConfigOverride: true, IsPageRowsOverride: false }
+                    && service.Template.Config.MarginTop == 74, "更新预览未收到版面参数覆盖");
+                var context = Context(entry with { Template = template }, Row(entry, "empty"));
+                RequireSettings((bool)Bridge.GetMethod("ShouldApplyLocalPdfConfig", Static)!.Invoke(null, [context])!, "打印流程忽略单独的版面修改");
+                var reopened = SettingsRepository(path).ListByBankAsync(entry.Bank).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
+                RequireSettings(reopened.IsConfigOverride && !reopened.IsPageRowsOverride && reopened.IsSystem, "重开丢失版面覆盖或模板身份");
+                RequireSettings(JsonSerializer.Serialize(reopened.Config) == JsonSerializer.Serialize(template.Config), "重开未保留边距、字体、印章或列配置");
+                var reopenedSettings = new PrintTemplateSettingsViewModel(entry.Bank, reopened);
+                RequireSettings(reopenedSettings.MarginTop == 74 && reopenedSettings.Columns[0].Width == 29, "设置窗口未回显版面参数");
+            }),
+            ("版面、行数、排序先后保存，保留已有设置及显式零边距", () =>
+            {
+                var path = Path.Combine(directory, "layout-rows-sort.json");
+                var entry = catalog.Single(item => item.Bank.Id == 8 && item.Template.Name == "建行个人纸质版7");
+                var template = entry.Template.Clone();
+                ApplySettingsUpdate(SettingsPreview(entry.Bank, SettingsRepository(path)), template,
+                    new PrintTemplateSettingsViewModel(entry.Bank, template) { MarginLeft = 0, MarginTop = 74 });
+                var staleRows = entry.Template.Clone();
+                staleRows.PageRows = 23;
+                SettingsPreview(entry.Bank, SettingsRepository(path)).SavePageRowsAsync(staleRows).GetAwaiter().GetResult();
+                template = SettingsRepository(path).ListByBankAsync(entry.Bank).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
+                UpdateSettings(SettingsRepository(path), entry.Bank, template, !entry.Template.Config.Descending);
+                var reopened = SettingsRepository(path).ListByBankAsync(entry.Bank).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
+                RequireSettings(reopened.IsConfigOverride && reopened.IsPageRowsOverride && reopened.PageRows == 23
+                    && reopened.Config.RowCount == 23 && reopened.Config.MarginLeft == 0 && reopened.Config.MarginTop == 74
+                    && reopened.Config.Descending != entry.Template.Config.Descending, "行数或排序保存覆盖了已存版面参数");
+                using var json = JsonDocument.Parse(File.ReadAllText(path));
+                RequireSettings(json.RootElement.GetProperty(entry.Bank.Id.ToString()).GetArrayLength() == 1, "同一模板产生重复覆盖记录");
+            }),
+            ("版面覆盖只作用于指定模板，删除后恢复系统参数", () =>
+            {
+                var path = Path.Combine(directory, "layout-scope.json");
+                var entry = catalog.Single(item => item.Bank.Id == 8 && item.Template.Name == "建行个人纸质版7");
+                var template = entry.Template.Clone();
+                var repository = SettingsRepository(path);
+                ApplySettingsUpdate(SettingsPreview(entry.Bank, repository), template,
+                    new PrintTemplateSettingsViewModel(entry.Bank, template) { MarginTop = 74 });
+                var reopenedRepository = SettingsRepository(path);
+                foreach (var bankGroup in catalog.GroupBy(item => item.Bank.Id))
+                {
+                    var reopened = reopenedRepository.ListByBankAsync(bankGroup.First().Bank).GetAwaiter().GetResult();
+                    RequireSettings(reopened.Count == bankGroup.Count(), "保存版面参数改变模板数量");
+                    foreach (var original in bankGroup)
+                    {
+                        if (original.Bank.Id == entry.Bank.Id && original.Template.Name == template.Name) continue;
+                        var actual = reopened.Single(item => item.Name == original.Template.Name);
+                        RequireSettings(JsonSerializer.Serialize(actual) == JsonSerializer.Serialize(original.Template), "修改指定模板影响了 " + original.Template.Name);
+                    }
+                }
+                repository.DeleteAsync(entry.Bank, template).GetAwaiter().GetResult();
+                var restored = SettingsRepository(path).ListByBankAsync(entry.Bank).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
+                RequireSettings(!restored.IsConfigOverride && JsonSerializer.Serialize(restored.Config) == JsonSerializer.Serialize(entry.Template.Config), "删除覆盖后未恢复系统版面");
             }),
             ("其他银行显式排序可保存，默认值及对公农行不被更改", () =>
             {
@@ -108,12 +177,13 @@ internal static partial class Program
                 template.Id = 0;
                 template.IsSystem = false;
                 template.IsPageRowsOverride = true;
+                template.IsConfigOverride = true;
                 template.DescendingOverride = true;
                 template.Name += "-复制-排序测试";
                 UpdateSettings(SettingsRepository(path), abc, template, false);
                 var reopened = SettingsRepository(path).ListByBankAsync(abc).GetAwaiter().GetResult().Single(item => item.Name == template.Name);
                 RequireSettings(!reopened.IsSystem && !reopened.Config.Descending && reopened.Config.Columns.Count > 0, "自定义模板隐藏或未保存");
-                RequireSettings(!reopened.IsPageRowsOverride && reopened.DescendingOverride is null, "自定义模板错误携带系统设置标记");
+                RequireSettings(!reopened.IsPageRowsOverride && !reopened.IsConfigOverride && reopened.DescendingOverride is null, "自定义模板错误携带系统设置标记");
             }),
             ("预览失败不落盘，不报告更新保存成功", () =>
             {
@@ -210,10 +280,12 @@ internal static partial class Program
     private sealed class SettingsPdfService : IPrintPdfService
     {
         public bool Fail { get; init; }
+        public PrintTemplate? Template { get; private set; }
         public int[] OrderedIndices { get; private set; } = [];
         public Task<string> GeneratePreviewAsync(PrintRenderContext context)
         {
             if (Fail) throw new InvalidOperationException("preview-test-failure");
+            Template = context.Template.Clone();
             OrderedIndices = context.ApplyTemplateRecordOrder().Records.Select(record => record.Index).ToArray();
             return Task.FromResult("preview-test-only.pdf");
         }
