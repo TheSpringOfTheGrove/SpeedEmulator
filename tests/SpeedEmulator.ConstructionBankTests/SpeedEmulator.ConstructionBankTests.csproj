@@ -8,4 +8,5 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../SpeedEmulator.csproj" /></ItemGroup>
+  <ItemGroup><None Update="Fixtures/large-transfer-budget.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

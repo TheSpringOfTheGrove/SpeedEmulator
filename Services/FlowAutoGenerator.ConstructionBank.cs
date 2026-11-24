@@ -283,12 +283,34 @@ public sealed partial class FlowAutoGenerator
             // changing required occurrences. Equal ranges remain in one family.
             var weights = families.Select(_ => 0.8d + random.NextDouble() * 0.4d).ToArray();
             var weightTotal = weights.Sum();
+            var means = families.Select(family => family.Average(plan => plan.Range.Mean)).ToArray();
+            var budgets = families.Select((family, i) =>
+                family.Sum(plan => plan.Range.Mean) + remaining * weights[i] / weightTotal).ToArray();
+            var largestMean = means.DefaultIfEmpty(0).Max();
+            var redirectedBudget = 0d;
+            for (var i = 0; i < families.Count; i++)
+            {
+                if (means[i] >= largestMean) continue;
+                // Optional small ranges should not absorb a large transfer budget through
+                // hundreds of thousands of occurrences. Use their eligible days as a soft
+                // density preference; mandatory counts and amount ranges remain separate.
+                var days = families[i].SelectMany(plan => GetCcbDates(plan.Rule, period.Start, period.End))
+                    .Distinct().Count();
+                var naturalCount = Math.Max(families[i].Count(), Math.Round(days * weights[i]));
+                var naturalBudget = naturalCount * means[i];
+                if (budgets[i] <= naturalBudget) continue;
+                redirectedBudget += budgets[i] - naturalBudget;
+                budgets[i] = naturalBudget;
+            }
+            var largestWeight = families.Select((_, i) => means[i] == largestMean ? weights[i] : 0).Sum();
             for (var familyIndex = 0; familyIndex < families.Count; familyIndex++)
             {
                 var family = families[familyIndex];
                 var members = family.OrderBy(_ => random.Next()).ToArray();
-                var budget = members.Sum(plan => plan.Range.Mean) + remaining * weights[familyIndex] / weightTotal;
-                var estimate = Math.Round(budget / members.Average(plan => plan.Range.Mean));
+                var budget = budgets[familyIndex];
+                if (means[familyIndex] == largestMean)
+                    budget += redirectedBudget * weights[familyIndex] / largestWeight;
+                var estimate = Math.Round(budget / means[familyIndex]);
                 if (estimate > MaximumFixedRuleRecordCount)
                     throw new InvalidOperationException("建行预计生成笔数超过单次上限，请调整金额范围或总额。");
                 var count = Math.Max(members.Length, (int)estimate);

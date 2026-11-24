@@ -8,6 +8,11 @@ if (args.Contains("--saved-config", StringComparer.Ordinal))
     TestSavedConfiguration(args.Contains("--vary-counts", StringComparer.Ordinal));
     return 0;
 }
+if (args.Contains("--large-budget", StringComparer.Ordinal))
+{
+    TestLargeTransferBudget();
+    return 0;
+}
 
 var tests = new (string Name, Action Run)[]
 {
@@ -34,7 +39,8 @@ var tests = new (string Name, Action Run)[]
     ("仅一个可选金额区间时也选择不同可行条数", TestSingleFamilyDynamicCounts),
     ("一分尾差可由三笔合法金额共同闭合", TestThreeRowCentClosure),
     ("一年期宽工资范围配置可完成负余额修正", TestWideSalaryYear),
-    ("工资前支出可顺延，支出软密度限制不能阻断合法生成", TestExpenseDensityFallback)
+    ("工资前支出可顺延，支出软密度限制不能阻断合法生成", TestExpenseDensityFallback),
+    ("三千万元转账预算不放大小额消费笔数，40万及400万期末均可生成", TestLargeTransferBudget)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -108,6 +114,7 @@ static void Validate(FlowAutoGenerationRequest request, FlowAutoGenerationResult
             Check(ConstructionBankGenerationPolicy.IsReferenceDateAllowed(time, rule), "参照落在未勾选日期");
         Check(Amount(row) >= rule.MinMoney - 0.009 && Amount(row) <= rule.MaxMoney + 0.009, "金额越界");
         var precision = rule.FloutLength ?? 0;
+        if (precision > 0 && rule.MinMoney == rule.MaxMoney && Amount(row) == Math.Round(Amount(row))) precision = 0;
         var unit = precision < 0 ? Math.Pow(10, -precision) : Math.Pow(10, -precision);
         Near(Math.Round(Amount(row) / unit), Amount(row) / unit, 0.00001);
         if (precision != 0) Check((long)Math.Round(Amount(row) / unit) % 10 != 0, "既有指定位非零要求改变");
@@ -206,6 +213,48 @@ static void TestReportedRules()
     }
     Check(below10 > 0, "5~300全局小于10元区间不能消失");
     Console.WriteLine($"  fixed salary: {runs} seeds succeeded");
+}
+
+static void TestLargeTransferBudget()
+{
+    var fixture = System.IO.File.ReadAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "Fixtures", "large-transfer-budget.json"));
+    var totals = new HashSet<int>();
+    foreach (var last in new[] { 400000d, 4000000d })
+    foreach (var interest in new[] { false, true })
+    foreach (var seed in new[] { 41026, 41027 })
+    {
+        var snapshot = JsonSerializer.Deserialize<FlowGenerationSnapshot>(fixture)!;
+        var config = Config(35375000, last);
+        config.StartTime = new DateTime(2025, 11, 24);
+        config.EndTime = new DateTime(2026, 11, 24);
+        config.OpeningBalance = 105801.03;
+        var request = Request(config, snapshot.References, interest: interest);
+        var before = JsonSerializer.Serialize(request);
+        var result = Generate(request, seed);
+        // Income references use ten-yuan steps. Interest rounding is compensated
+        // through cent-precision expenses while the requested net stays exact.
+        Validate(request, result, interest ? 5.01 : 0.01, interest ? 5.01 : 0.01);
+        Check(!FlowAutoGenerator.UsesReferencePriority(config, result.Records), "可行大额配置不能回退为参照优先而丢失预算");
+        Check(result.Records.Count < 10000, "小额消费不应膨胀成数十万笔");
+        Check(result.MinimumBalance >= -0.009, "大额配置不能留下负余额");
+        var transfers = result.Records.Where(row => row.TradeMoney < 0 && Amount(row) >= 30000).Sum(Amount);
+        Check(transfers >= result.ExpenseTotal * 0.95, "大额支出应由大额转账参照承担");
+        foreach (var rule in request.References)
+        {
+            var rows = Source(result, rule.Index);
+            Check(rows.Count > 0, "不能丢弃勾选参照: " + rule.Index);
+            if (rule.PercentMonth > 0)
+                Check(rows.Count == 13 * rule.PercentMonth, "每月必现次数改变: " + rule.Index);
+        }
+        var small = Source(result, 60);
+        Check(small.Count <= 732 && small.Select(Amount).Distinct().Count() == 17, "6～22元应保持合理笔数并覆盖完整整数区间");
+        var broad = Source(result, 44);
+        Check(broad.Any(row => Amount(row) < 35) && broad.Any(row => Amount(row) > 270), "5～300元参照仍需覆盖完整范围");
+        Check(JsonSerializer.Serialize(request) == before, "不能改写客户生成配置");
+        totals.Add(result.Records.Count);
+        Console.WriteLine($"  large budget: seed={seed} last={last:F0} interest={interest} rows={result.Records.Count} small6to22={small.Count} transferShare={transfers / result.ExpenseTotal:P1}");
+    }
+    Check(totals.Count > 1, "大额配置生成笔数仍应动态");
 }
 
 static void TestDiscreteUniformity()
