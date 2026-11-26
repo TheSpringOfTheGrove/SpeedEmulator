@@ -17,6 +17,7 @@ internal static class FlowRecordChronologicalOrder
         var ordered = records
             .Select((record, originalIndex) => new { record, originalIndex })
             .OrderBy(item => item.record.AccountTime)
+            .ThenBy(item => GetCcbCorporateDetailOrder(item.record))
             .ThenBy(item => item.record.SerialNum, StringComparer.Ordinal)
             .ThenBy(item => item.originalIndex)
             .Select(item => item.record)
@@ -44,6 +45,24 @@ internal static class FlowRecordChronologicalOrder
     private static int Compare(FlowRecord left, FlowRecord right)
     {
         var result = Nullable.Compare(left.AccountTime, right.AccountTime);
+        if (result != 0)
+        {
+            return result;
+        }
+
+        result = GetCcbCorporateDetailOrder(left).CompareTo(GetCcbCorporateDetailOrder(right));
         return result != 0 ? result : string.CompareOrdinal(left.SerialNum, right.SerialNum);
+    }
+
+    private static long GetCcbCorporateDetailOrder(FlowRecord record)
+    {
+        if (!record.ExtraFields.ContainsKey("账户明细编号-交易流水号")
+            || !record.ExtraFields.TryGetValue("账户明细编号", out var detailNumber)
+            || !long.TryParse(detailNumber, out var parsed))
+        {
+            return long.MaxValue;
+        }
+
+        return parsed;
     }
 }

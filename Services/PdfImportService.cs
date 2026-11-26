@@ -6,9 +6,14 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using SpeedEmulator.Models;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using TesseractOCR;
+using TesseractOCR.Enums;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
 using UglyToad.PdfPig.Exceptions;
+using UglyToad.PdfPig.Geometry;
 
 namespace SpeedEmulator.Services;
 
@@ -56,6 +61,7 @@ public sealed partial class PdfImportService : IPdfImportService
         new("中信对公", "中信银行对公账户交易明细 PDF", ["账户交易明细", "查询周期", "账户：", "柜员交易号"]),
         new("工行对公", "中国工商银行对公账户明细清单 PDF", ["中国工商银行账户明细清单", "本方账号户名", "对方账号", "借贷标志"]),
         new("光大对公", "中国光大银行对公账户对账单 PDF", ["中国光大银行对公账户对账单", "账户名称", "借/贷", "流水号"]),
+        new("建行对公", "中国建设银行对公活期存款明细账/账户明细信息 PDF", ["中国建设银行"]),
         new("交行对公", "交通银行对公明细对账单 PDF", ["交通银行", "明细对账单", "会计日期", "对方账号"]),
         new("民生对公", "中国民生银行对公单位账户对账单 PDF", ["单位账户对账单", "客户名称", "客户账号", "对方户名/账号"]),
         new("农行对公", "中国农业银行对公账户明细 PDF", ["账户明细", "户名", "收入金额", "对方开户行"])
@@ -258,27 +264,6 @@ public sealed partial class PdfImportService : IPdfImportService
         new("Balance", 750, 820)
     ];
 
-    private static readonly PdfPositionedColumnSpec[] CcbCorporateColumns =
-    [
-        new("Account", 0, 48),
-        new("DateTime", 48, 82),
-        new("Debit", 82, 116),
-        new("Credit", 116, 146),
-        new("Balance", 146, 182),
-        new("Currency", 182, 212),
-        new("OppositeName", 212, 247),
-        new("OppositeAccount", 247, 285),
-        new("OppositeBank", 285, 316),
-        new("PostingDate", 316, 352),
-        new("Summary", 352, 382),
-        new("Remark", 382, 415),
-        new("Serial", 415, 455),
-        new("EnterpriseSerial", 455, 485),
-        new("VoucherType", 485, 516),
-        new("VoucherNum", 516, 555),
-        new("Medium", 555, 590)
-    ];
-
     private static readonly PdfPositionedColumnSpec[] BocomCorporateColumns =
     [
         new("Index", 18, 42),
@@ -354,7 +339,7 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
+            var document = ExtractDocumentCore(path, RequiresPositionedWordParsing(bank.Name), RequiresTableCellParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, BankUser.CreateDraft(bank), document, PdfImportTarget.BankUsers);
@@ -371,7 +356,7 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
+            var document = ExtractDocumentCore(path, RequiresPositionedWordParsing(bank.Name), RequiresTableCellParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, bankUser.Clone(), document, PdfImportTarget.FlowRecords);
@@ -388,7 +373,7 @@ public sealed partial class PdfImportService : IPdfImportService
         {
             var template = GetTemplateOrThrow(bank);
             cancellationToken.ThrowIfCancellationRequested();
-            var document = ExtractDocument(path, RequiresPositionedWordParsing(bank.Name));
+            var document = ExtractDocumentCore(path, RequiresPositionedWordParsing(bank.Name), RequiresTableCellParsing(bank.Name));
             cancellationToken.ThrowIfCancellationRequested();
             ValidateTemplateOrThrow(bank, template, document);
             return ParseSpecializedBankPdf(path, bank, bankUser.Clone(), document, PdfImportTarget.BankUserAndFlowRecords);
@@ -427,6 +412,16 @@ public sealed partial class PdfImportService : IPdfImportService
         PdfExtractedDocument document)
     {
         var signatureText = BuildTemplateSignatureText(document);
+        if (string.Equals(bank.Name, "建行对公", StringComparison.OrdinalIgnoreCase))
+        {
+            if (GetCcbCorporateLayout(signatureText) != CcbCorporateLayout.Unsupported)
+            {
+                return;
+            }
+
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
         if (string.Equals(bank.Name, "工行对公", StringComparison.OrdinalIgnoreCase))
         {
             if (GetIcbcCorporateLayout(signatureText) != IcbcCorporateLayout.Unsupported)
@@ -495,11 +490,53 @@ public sealed partial class PdfImportService : IPdfImportService
         };
     }
 
+    private static bool RequiresTableCellParsing(string bankName)
+    {
+        return string.Equals(bankName, "建行对公", StringComparison.Ordinal);
+    }
+
     private static bool IsSupportedCibCorporateLayout(PdfExtractedDocument document)
     {
         return document.Lines.Any(line => Regex.IsMatch(
             CleanPdfValue(line.Text),
             @"^交易时间\s+摘要\s+凭证代号\s+支出\s+收入\s+收支方向\s+账户余额\s+对方账号\s+对方户名$"));
+    }
+
+    private static CcbCorporateLayout GetCcbCorporateLayout(string signatureText)
+    {
+        if (new[]
+            {
+                "中国建设银行股份有限公司活期存款明细账",
+                "币别",
+                "账户名称",
+                "凭证种类",
+                "凭证号码",
+                "交易流水号"
+            }.All(item => signatureText.Contains(item, StringComparison.OrdinalIgnoreCase)))
+        {
+            return CcbCorporateLayout.PaperLedger;
+        }
+
+        if (new[]
+            {
+                "中国建设银行账户明细信息",
+                "本方户名",
+                "查询时间段",
+                "账户明细编号",
+                "交易流水号",
+                "企业流水号",
+                "交易介质编号"
+            }.All(item => signatureText.Contains(item, StringComparison.OrdinalIgnoreCase)))
+        {
+            return CcbCorporateLayout.AccountDetail;
+        }
+
+        return CcbCorporateLayout.Unsupported;
+    }
+
+    private static string CreateUnsupportedCcbCorporateLayoutMessage()
+    {
+        return "当前建行对公 PDF 格式不支持。目前仅支持“中国建设银行股份有限公司活期存款明细账”和“中国建设银行账户明细信息”两种格式。";
     }
 
     private static IcbcCorporateLayout GetIcbcCorporateLayout(string signatureText)
@@ -525,7 +562,22 @@ public sealed partial class PdfImportService : IPdfImportService
         DebitCredit
     }
 
+    private enum CcbCorporateLayout
+    {
+        Unsupported,
+        PaperLedger,
+        AccountDetail
+    }
+
     private static PdfExtractedDocument ExtractDocument(string path, bool includePositionedWords)
+    {
+        return ExtractDocumentCore(path, includePositionedWords, includeTableCells: false);
+    }
+
+    private static PdfExtractedDocument ExtractDocumentCore(
+        string path,
+        bool includePositionedWords,
+        bool includeTableCells)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -597,6 +649,54 @@ public sealed partial class PdfImportService : IPdfImportService
                             bounds.Right,
                             page.Height - bounds.Top,
                             page.Height - bounds.Bottom));
+                    }
+
+                    if (!includeTableCells)
+                    {
+                        continue;
+                    }
+
+                    foreach (var pathItem in page.Paths)
+                    {
+                        var bounds = pathItem.GetBoundingRectangle();
+                        if (bounds is not { } rectangle
+                            || rectangle.Width < 3d
+                            || rectangle.Height < 3d)
+                        {
+                            continue;
+                        }
+
+                        extracted.TableCells.Add(new PdfTableCellBox(
+                            page.Number,
+                            rectangle.Left,
+                            rectangle.Right,
+                            page.Height - rectangle.Top,
+                            page.Height - rectangle.Bottom));
+                    }
+
+                    if (extracted.Images.Count == 0)
+                    {
+                        foreach (var image in page.GetImages()
+                            .Where(item => item.WidthInSamples >= 200 && item.HeightInSamples >= 200)
+                            .OrderByDescending(item => item.WidthInSamples * item.HeightInSamples))
+                        {
+                            if (!image.TryGetPng(out var pngData))
+                            {
+                                continue;
+                            }
+
+                            var bounds = image.BoundingBox;
+                            extracted.Images.Add(new PdfEmbeddedImage(
+                                page.Number,
+                                bounds.Left,
+                                bounds.Right,
+                                page.Height - bounds.Top,
+                                page.Height - bounds.Bottom,
+                                image.WidthInSamples,
+                                image.HeightInSamples,
+                                pngData));
+                            break;
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -705,6 +805,11 @@ public sealed partial class PdfImportService : IPdfImportService
         FillMissingPdfRecordTimes(result.FlowRecords, bank);
         EnsureSystemGeneratedSerialNumbers(result.FlowRecords, bank, bankUser);
         FlowRecordChronologicalOrder.SortInPlace(result.FlowRecords);
+        if (string.Equals(bank.Name, "建行对公", StringComparison.Ordinal)
+            && GetCcbCorporateLayout(BuildTemplateSignatureText(document)) == CcbCorporateLayout.AccountDetail)
+        {
+            ValidateCcbCorporateAccountDetailBalances(result.FlowRecords);
+        }
         ReindexFlowRecords(result.FlowRecords);
         if (bank.Name == "微信")
         {
@@ -3672,33 +3777,117 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private static bool ParseCcbCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
     {
+        var layout = GetCcbCorporateLayout(BuildTemplateSignatureText(document));
+        return layout switch
+        {
+            CcbCorporateLayout.PaperLedger => ParseCcbCorporatePaperLedgerPdf(bank, user, document, result),
+            CcbCorporateLayout.AccountDetail => ParseCcbCorporateAccountDetailPdf(bank, user, document, result),
+            _ => throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage())
+        };
+    }
+
+    private static bool ParseCcbCorporatePaperLedgerPdf(
+        Bank bank,
+        BankUser user,
+        PdfExtractedDocument document,
+        PdfImportResult result)
+    {
         var parsedUser = false;
         var lines = document.Lines.ToList();
         foreach (var line in lines.Take(80))
         {
             var text = CleanPdfValue(line.Text);
-            var headerMatch = Regex.Match(text, @"本方户名：(?<name>.+?)\s+查询时间段：(?<start>\d{8})\s*-\s*(?<end>\d{8})\s+打印日期：(?<print>.+)$");
+            var headerMatch = Regex.Match(
+                text,
+                @"币别[：:]\s*(?<currency>\S+)\s+账号[：:]\s*(?<account>[0-9A-Za-z]+)\s+账户名称[：:]\s*(?<name>.+?)\s+日期[：:]\s*(?<start>\d{8})\s*-\s*(?<end>\d{8})");
             if (headerMatch.Success)
             {
+                SetUserNamed(user, bank, "币别", NormalizeCurrencyText(headerMatch.Groups["currency"].Value));
+                SetUserNamed(user, bank, "账号", headerMatch.Groups["account"].Value);
                 SetUserNamed(user, bank, "账户名称", headerMatch.Groups["name"].Value);
                 SetUserNamed(user, bank, "开始日期", FormatCompactDate(headerMatch.Groups["start"].Value));
                 SetUserNamed(user, bank, "结束日期", FormatCompactDate(headerMatch.Groups["end"].Value));
-                SetUserNamed(user, bank, "打印日期", headerMatch.Groups["print"].Value);
                 parsedUser = true;
+            }
+
+            var printMatch = Regex.Match(
+                text,
+                @"打印时间[：:]\s*(?<print>.+?)\s+打印机构[：:]\s*(?<branch>.*?)\s+打印柜员[：:]\s*(?<teller>\S*)\s+打印卡号[：:]\s*(?<card>\S*)$");
+            if (printMatch.Success)
+            {
+                SetUserNamed(user, bank, "打印日期", NormalizePdfPrintTime(printMatch.Groups["print"].Value));
+                SetUserNamed(user, bank, "打印机构", printMatch.Groups["branch"].Value);
+                SetUserNamed(user, bank, "打印柜员", printMatch.Groups["teller"].Value);
+                SetUserNamed(user, bank, "打印卡号", printMatch.Groups["card"].Value);
             }
         }
 
-        foreach (var row in BuildPositionedRowsWithTopLead(
-            document.Words,
-            CcbCorporateColumns,
-            IsCcbCorporateHeaderWord,
-            IsCcbCorporateFooterWord,
-            @"^\d{8}$",
-            45,
-            98,
-            10))
+        if (!parsedUser)
         {
-            if (TryParseCcbCorporateRecord(row, bank, user, out var record))
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
+        var rows = BuildCcbCorporateCellRows(document, CcbCorporateLayout.PaperLedger);
+        if (rows.Count == 0)
+        {
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
+        foreach (var row in rows)
+        {
+            if (TryParseCcbCorporatePaperLedgerRecord(row, bank, user, out var record))
+            {
+                result.FlowRecords.Add(record);
+            }
+            else
+            {
+                throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+            }
+        }
+
+        ApplyCcbCorporateOpeningBalance(user, bank, result.FlowRecords);
+        return parsedUser;
+    }
+
+    private static bool ParseCcbCorporateAccountDetailPdf(
+        Bank bank,
+        BankUser user,
+        PdfExtractedDocument document,
+        PdfImportResult result)
+    {
+        var parsedUser = false;
+        foreach (var line in document.Lines.Take(80))
+        {
+            var text = CleanPdfValue(line.Text);
+            var headerMatch = Regex.Match(text, @"本方户名[：:]\s*(?<name>.+?)\s+查询时间段[：:]\s*(?<start>\d{8})\s*-\s*(?<end>\d{8})\s+打印日期[：:]\s*(?<print>.+)$");
+            if (!headerMatch.Success)
+            {
+                continue;
+            }
+
+            SetUserNamed(user, bank, "账户名称", headerMatch.Groups["name"].Value);
+            SetUserNamed(user, bank, "开始日期", FormatCompactDate(headerMatch.Groups["start"].Value));
+            SetUserNamed(user, bank, "结束日期", FormatCompactDate(headerMatch.Groups["end"].Value));
+            SetUserNamed(user, bank, "打印日期", headerMatch.Groups["print"].Value);
+            parsedUser = true;
+        }
+
+        if (!parsedUser)
+        {
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
+        TryImportCcbCorporateStamp(bank, user, document, result);
+
+        var rows = BuildCcbCorporateCellRows(document, CcbCorporateLayout.AccountDetail);
+        if (rows.Count == 0)
+        {
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
+        foreach (var row in rows)
+        {
+            if (TryParseCcbCorporateAccountDetailRecord(row, bank, user, out var record))
             {
                 if (string.IsNullOrWhiteSpace(user.AccountNo) && !string.IsNullOrWhiteSpace(record.Account))
                 {
@@ -3707,9 +3896,194 @@ public sealed partial class PdfImportService : IPdfImportService
 
                 result.FlowRecords.Add(record);
             }
+            else
+            {
+                throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+            }
         }
 
+        ApplyCcbCorporateOpeningBalance(user, bank, result.FlowRecords);
         return parsedUser;
+    }
+
+    private static void TryImportCcbCorporateStamp(
+        Bank bank,
+        BankUser user,
+        PdfExtractedDocument document,
+        PdfImportResult result)
+    {
+        var stampImage = document.Images
+            .Where(item => item.PixelWidth >= 250
+                && item.PixelHeight >= 250
+                && Math.Abs(item.PixelWidth - item.PixelHeight) <= Math.Max(item.PixelWidth, item.PixelHeight) * 0.2d)
+            .OrderByDescending(item => item.PixelWidth * item.PixelHeight)
+            .FirstOrDefault();
+        if (stampImage is null)
+        {
+            AddCcbCorporateStampWarning(result, "PDF 中未找到可识别的印章图片，章内支行和章内编码未导入。");
+            return;
+        }
+
+        var tessdataPath = Path.Combine(AppContext.BaseDirectory, "tessdata");
+        if (!File.Exists(Path.Combine(tessdataPath, "chi_sim.traineddata"))
+            || !File.Exists(Path.Combine(tessdataPath, "eng.traineddata")))
+        {
+            AddCcbCorporateStampWarning(result, "本地印章 OCR 模型缺失，章内支行和章内编码未导入。");
+            return;
+        }
+
+        try
+        {
+            using var stamp = TesseractOCR.Pix.Image.LoadFromMemory(stampImage.PngData);
+            using var branchEngine = new Engine(tessdataPath, Language.ChineseSimplified, EngineMode.LstmOnly);
+            var branch = string.Empty;
+            foreach (var region in new[]
+            {
+                CreateCcbStampRegion(stamp.Width, stamp.Height, 0.10d, 0.32d, 0.80d, 0.20d),
+                CreateCcbStampRegion(stamp.Width, stamp.Height, 0.162d, 0.309d, 0.676d, 0.235d),
+                CreateCcbStampRegion(stamp.Width, stamp.Height, 0.176d, 0.353d, 0.647d, 0.162d)
+            })
+            {
+                using var branchPage = branchEngine.Process(stamp, region, PageSegMode.SingleLine);
+                branch = ExtractCcbStampBranch(branchPage.Text);
+                if (!string.IsNullOrWhiteSpace(branch))
+                {
+                    break;
+                }
+            }
+
+            var flattenedPng = FlattenCcbStampImage(stampImage.PngData);
+            using var flattenedStamp = TesseractOCR.Pix.Image.LoadFromMemory(flattenedPng);
+            using var scaledStamp = flattenedStamp.Scale(3f, 3f);
+            using var codeEngine = new Engine(tessdataPath, Language.English, EngineMode.LstmOnly);
+            codeEngine.SetVariable("tessedit_char_whitelist", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            using var codePage = codeEngine.Process(
+                scaledStamp,
+                CreateCcbStampRegion(scaledStamp.Width, scaledStamp.Height, 0.176d, 0.676d, 0.647d, 0.088d),
+                PageSegMode.RawLine);
+            var code = NormalizeCcbStampCode(codePage.Text);
+
+            if (!string.IsNullOrWhiteSpace(branch))
+            {
+                SetUserNamed(user, bank, "章内支行", branch);
+            }
+
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                SetUserNamed(user, bank, "章内编码", code);
+            }
+
+            if (string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(code))
+            {
+                AddCcbCorporateStampWarning(
+                    result,
+                    $"印章图片未能完整识别，章内支行：{FirstNotBlank(branch, "未识别")}；章内编码：{FirstNotBlank(code, "未识别")}。请在导入预览中核对。",
+                    stampImage.PageNumber);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddCcbCorporateStampWarning(result, $"印章图片 OCR 失败，章内支行和章内编码未导入：{ex.Message}", stampImage.PageNumber);
+        }
+    }
+
+    private static TesseractOCR.Rect CreateCcbStampRegion(
+        int width,
+        int height,
+        double leftRatio,
+        double topRatio,
+        double widthRatio,
+        double heightRatio)
+    {
+        return new TesseractOCR.Rect(
+            Math.Max(0, (int)Math.Round(width * leftRatio)),
+            Math.Max(0, (int)Math.Round(height * topRatio)),
+            Math.Max(1, (int)Math.Round(width * widthRatio)),
+            Math.Max(1, (int)Math.Round(height * heightRatio)));
+    }
+
+    private static string ExtractCcbStampBranch(string value)
+    {
+        return Regex.Matches(value ?? string.Empty, @"[\u4e00-\u9fff]{2,}(?:支行|分行|营业部)")
+            .Select(match => match.Value)
+            .OrderByDescending(item => item.Length)
+            .FirstOrDefault() ?? string.Empty;
+    }
+
+    private static string NormalizeCcbStampCode(string value)
+    {
+        var compact = Regex.Replace((value ?? string.Empty).ToUpperInvariant(), @"[^A-Z0-9]", string.Empty);
+        var match = Regex.Match(compact, @"^(?<prefix>[A-Z]{6})(?<suffix>[A-Z0-9]{6})$");
+        if (!match.Success)
+        {
+            return string.Empty;
+        }
+
+        var suffix = string.Concat(match.Groups["suffix"].Value.Select(character => character switch
+        {
+            'O' or 'Q' or 'D' => '0',
+            'I' or 'L' => '1',
+            'Z' => '2',
+            'A' => '4',
+            'S' => '5',
+            'G' => '6',
+            'T' => '7',
+            'B' => '8',
+            _ => character
+        }));
+        return Regex.IsMatch(suffix, @"^\d{6}$")
+            ? match.Groups["prefix"].Value + suffix
+            : string.Empty;
+    }
+
+    private static byte[] FlattenCcbStampImage(byte[] pngData)
+    {
+        using var input = new MemoryStream(pngData);
+        var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+        var source = new FormatConvertedBitmap(decoder.Frames[0], PixelFormats.Bgra32, null, 0d);
+        var sourceStride = source.PixelWidth * 4;
+        var sourcePixels = new byte[sourceStride * source.PixelHeight];
+        source.CopyPixels(sourcePixels, sourceStride, 0);
+
+        var flattenedPixels = new byte[source.PixelWidth * source.PixelHeight];
+        for (var index = 0; index < flattenedPixels.Length; index++)
+        {
+            var sourceIndex = index * 4;
+            var blue = sourcePixels[sourceIndex];
+            var green = sourcePixels[sourceIndex + 1];
+            var red = sourcePixels[sourceIndex + 2];
+            var alpha = sourcePixels[sourceIndex + 3];
+            var isRedInk = alpha >= 24
+                && red >= 60
+                && red >= green + 20
+                && red >= blue + 20;
+            flattenedPixels[index] = isRedInk ? (byte)0 : (byte)255;
+        }
+
+        var flattened = BitmapSource.Create(
+            source.PixelWidth,
+            source.PixelHeight,
+            96d,
+            96d,
+            PixelFormats.Gray8,
+            null,
+            flattenedPixels,
+            source.PixelWidth);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(flattened));
+        using var output = new MemoryStream();
+        encoder.Save(output);
+        return output.ToArray();
+    }
+
+    private static void AddCcbCorporateStampWarning(PdfImportResult result, string message, int? pageNumber = null)
+    {
+        result.Issues.Add(new PdfImportIssue
+        {
+            Severity = PdfImportIssueSeverity.Warning,
+            PageNumber = pageNumber,
+            Message = message
+        });
     }
 
     private static bool ParseBocomCorporatePdf(Bank bank, BankUser user, PdfExtractedDocument document, PdfImportResult result)
@@ -4250,61 +4624,231 @@ public sealed partial class PdfImportService : IPdfImportService
         return true;
     }
 
-    private static bool TryParseCcbCorporateRecord(
-        PdfPositionedRow row,
+    private static IReadOnlyList<CcbCorporateCellRow> BuildCcbCorporateCellRows(
+        PdfExtractedDocument document,
+        CcbCorporateLayout layout)
+    {
+        var expectedColumnCount = layout == CcbCorporateLayout.PaperLedger ? 10 : 17;
+        var rows = new List<CcbCorporateCellRow>();
+        foreach (var pageGroup in document.TableCells
+            .GroupBy(item => item.PageNumber)
+            .OrderBy(group => group.Key))
+        {
+            var pageCells = pageGroup
+                .GroupBy(item => new
+                {
+                    Left = Math.Round(item.Left, 1),
+                    Right = Math.Round(item.Right, 1),
+                    Top = Math.Round(item.Top, 1),
+                    Bottom = Math.Round(item.Bottom, 1)
+                })
+                .Select(group => group.First())
+                .ToList();
+            var pageCharacters = document.Characters
+                .Where(item => item.PageNumber == pageGroup.Key)
+                .ToList();
+            var anchors = pageCells
+                .Where(item => item.Left < (layout == CcbCorporateLayout.PaperLedger ? 80d : 50d))
+                .Select(item => new
+                {
+                    Box = item,
+                    Text = ExtractCcbCorporateCellText(pageCharacters, item)
+                })
+                .Where(item => layout == CcbCorporateLayout.PaperLedger
+                    ? Regex.IsMatch(item.Text, @"^\d{8}$")
+                    : Regex.IsMatch(item.Text, @"^\d{16,}$"))
+                .OrderBy(item => item.Box.Top)
+                .ThenBy(item => item.Box.Left)
+                .ToList();
+
+            foreach (var anchor in anchors)
+            {
+                var rowBoxes = pageCells
+                    .Where(item => Math.Abs(item.Top - anchor.Box.Top) <= 0.75d
+                        && Math.Abs(item.Bottom - anchor.Box.Bottom) <= 0.75d)
+                    .OrderBy(item => item.Left)
+                    .ToList();
+                if (rowBoxes.Count != expectedColumnCount)
+                {
+                    throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+                }
+
+                rows.Add(new CcbCorporateCellRow(
+                    pageGroup.Key,
+                    anchor.Box.Top,
+                    rowBoxes
+                        .Select(item => ExtractCcbCorporateCellText(pageCharacters, item))
+                        .ToList()));
+            }
+        }
+
+        return rows;
+    }
+
+    private static string ExtractCcbCorporateCellText(
+        IReadOnlyList<PdfTextWord> pageCharacters,
+        PdfTableCellBox box)
+    {
+        var characters = pageCharacters
+            .Where(item => GetHorizontalCenter(item) >= box.Left - 0.2d
+                && GetHorizontalCenter(item) <= box.Right + 0.2d
+                && ((item.Top + item.Bottom) / 2d) >= box.Top - 0.2d
+                && ((item.Top + item.Bottom) / 2d) <= box.Bottom + 0.2d)
+            .OrderBy(item => item.Top)
+            .ThenBy(item => item.Left)
+            .ToList();
+        if (characters.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var lines = new List<List<PdfTextWord>>();
+        foreach (var character in characters)
+        {
+            if (lines.Count == 0
+                || Math.Abs(lines[^1].Average(item => item.Top) - character.Top) > 2.5d)
+            {
+                lines.Add([character]);
+            }
+            else
+            {
+                lines[^1].Add(character);
+            }
+        }
+
+        return CleanPdfValue(string.Concat(lines
+            .SelectMany(line => line.OrderBy(item => item.Left))
+            .Select(item => item.Text)));
+    }
+
+    private static bool TryParseCcbCorporatePaperLedgerRecord(
+        CcbCorporateCellRow row,
         Bank bank,
         BankUser user,
         out FlowRecord record)
     {
         record = new FlowRecord();
-        var account = GetPositionedCell(row, "Account");
-        var dateTime = NormalizeCompactDateTimeCell(GetPositionedCell(row, "DateTime"));
-        var debitText = GetPositionedCell(row, "Debit");
-        var creditText = GetPositionedCell(row, "Credit");
-        var balanceText = GetPositionedCell(row, "Balance");
-        if (string.IsNullOrWhiteSpace(account)
-            || !Regex.IsMatch(dateTime, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$")
-            || (string.IsNullOrWhiteSpace(debitText) && string.IsNullOrWhiteSpace(creditText)))
+        if (row.Cells.Count != 10)
         {
             return false;
         }
 
-        var summary = GetPositionedCell(row, "Summary");
-        var remark = GetPositionedCell(row, "Remark");
-        var serial = GetPositionedCell(row, "Serial");
-        var voucherType = GetPositionedCell(row, "VoucherType");
-        var voucherNum = GetPositionedCell(row, "VoucherNum");
+        var dateText = row.Cells[0];
+        var debitText = row.Cells[5];
+        var creditText = row.Cells[6];
+        var balanceText = row.Cells[8];
+        if (!Regex.IsMatch(dateText, @"^\d{8}$")
+            || ParseDateTimeOrNull(dateText) is not { } accountTime
+            || ParseDoubleOrNull(debitText) is null
+            || ParseDoubleOrNull(creditText) is null
+            || ParseDoubleOrNull(balanceText) is not { } balance)
+        {
+            return false;
+        }
+
+        var voucherType = row.Cells[1];
+        var voucherNum = row.Cells[2];
+        var summary = row.Cells[3];
+        var oppositeName = row.Cells[4];
+        var direction = row.Cells[7];
+        var serial = NormalizeCcbTransactionSerialValue(row.Cells[9]);
+        record.BankId = bank.Id;
+        record.BankUserId = user.Id;
+        record.Account = user.AccountNo;
+        record.AccountTime = accountTime;
+        record.ProductBrief = summary;
+        record.ProductName = summary;
+        record.ProductType = summary;
+        record.OppositeUsername = oppositeName;
+        record.VoucherType = voucherType;
+        record.VoucherNum = voucherNum;
+        record.SerialNum = serial;
+        record.LogNum = serial;
+        record.SequenceNum = serial;
+        record.Currency = NormalizeCurrencyText(FirstNotBlank(user.Currency, "人民币"));
+        record.CreditType = direction;
+        record.Balance = balance;
+        record.BalanceAmount = balance;
+        ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+
+        SetFlowRaw(record, "日期", dateText);
+        SetFlowRaw(record, "凭证种类", voucherType);
+        SetFlowRaw(record, "凭证号码", voucherNum);
+        SetFlowRaw(record, "凭证号", voucherNum);
+        SetFlowRaw(record, "摘要", summary);
+        SetFlowRaw(record, "对方户名", oppositeName);
+        SetFlowRaw(record, "借贷", direction);
+        SetFlowRaw(record, "交易", direction);
+        SetFlowRaw(record, "余额", balanceText);
+        SetFlowRaw(record, "交易流水号", serial);
+        return true;
+    }
+
+    private static bool TryParseCcbCorporateAccountDetailRecord(
+        CcbCorporateCellRow row,
+        Bank bank,
+        BankUser user,
+        out FlowRecord record)
+    {
+        record = new FlowRecord();
+        if (row.Cells.Count != 17)
+        {
+            return false;
+        }
+
+        var account = row.Cells[0];
+        var dateTime = NormalizeCompactDateTimeCell(row.Cells[1]);
+        var debitText = row.Cells[2];
+        var creditText = row.Cells[3];
+        var balanceText = row.Cells[4];
+        if (string.IsNullOrWhiteSpace(account)
+            || !Regex.IsMatch(dateTime, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$")
+            || ParseDateTimeOrNull(dateTime) is not { } accountTime
+            || ParseDoubleOrNull(debitText) is null
+            || ParseDoubleOrNull(creditText) is null
+            || ParseDoubleOrNull(balanceText) is not { } balance)
+        {
+            return false;
+        }
+
+        var summary = row.Cells[10];
+        var remark = row.Cells[11];
+        var compositeSerial = row.Cells[12];
+        var (detailNumber, transactionSerial) = SplitCcbCorporateSerial(compositeSerial);
+        var voucherType = row.Cells[14];
+        var voucherNum = row.Cells[15];
         record.BankId = bank.Id;
         record.BankUserId = user.Id;
         record.Account = account;
-        record.AccountTime = ParseDateTimeOrNull(dateTime);
+        record.AccountTime = accountTime;
         record.ProductBrief = summary;
         record.ProductName = summary;
         record.ProductType = summary;
         record.Remark = remark;
-        record.SerialNum = serial;
-        record.LogNum = serial;
-        record.SequenceNum = serial;
+        record.SerialNum = transactionSerial;
+        record.LogNum = transactionSerial;
+        record.SequenceNum = string.Empty;
         record.VoucherType = voucherType;
         record.VoucherNum = voucherNum;
-        record.Currency = NormalizeCurrencyText(FirstNotBlank(GetPositionedCell(row, "Currency"), user.Currency, "人民币"));
-        record.OppositeUsername = GetPositionedCell(row, "OppositeName");
-        record.OppositeAccount = GetPositionedCell(row, "OppositeAccount");
-        record.OppositeBank = GetPositionedCell(row, "OppositeBank");
-        record.TradeChannel = GetPositionedCell(row, "Medium");
-        record.Balance = ParseDoubleOrNull(balanceText);
-        record.BalanceAmount = record.Balance;
-        ApplyCorporateDebitCredit(record, debitText, creditText, "借方", "贷方");
+        record.Currency = NormalizeCurrencyText(FirstNotBlank(row.Cells[5], user.Currency, "人民币"));
+        record.OppositeUsername = row.Cells[6];
+        record.OppositeAccount = row.Cells[7];
+        record.OppositeBank = row.Cells[8];
+        record.TradeChannel = row.Cells[16];
+        record.Balance = balance;
+        record.BalanceAmount = balance;
+        ApplyCcbCorporateAccountDetailDebitCredit(record, debitText, creditText);
 
         SetFlowRaw(record, "日期", dateTime);
         SetFlowRaw(record, "交易时间", dateTime);
-        SetFlowRaw(record, "记账日期", GetPositionedCell(row, "PostingDate"));
+        SetFlowRaw(record, "记账日期", row.Cells[9]);
         SetFlowRaw(record, "摘要", summary);
         SetFlowRaw(record, "备注", remark);
         SetFlowRaw(record, "余额", balanceText);
-        SetFlowRaw(record, "交易流水号", serial);
-        SetFlowRaw(record, "账户明细编号-交易流水号", serial);
-        SetFlowRaw(record, "企业流水号", GetPositionedCell(row, "EnterpriseSerial"));
+        SetFlowRaw(record, "交易流水号", transactionSerial);
+        SetFlowRaw(record, "账户明细编号", detailNumber);
+        SetFlowRaw(record, "账户明细编号-交易流水号", compositeSerial);
+        SetFlowRaw(record, "企业流水号", row.Cells[13]);
         SetFlowRaw(record, "凭证种类", voucherType);
         SetFlowRaw(record, "凭证号码", voucherNum);
         SetFlowRaw(record, "凭证号", voucherNum);
@@ -4315,6 +4859,100 @@ public sealed partial class PdfImportService : IPdfImportService
         SetFlowRaw(record, "交易渠道", record.TradeChannel);
         SetFlowRaw(record, "交易介质编号", record.TradeChannel);
         return true;
+    }
+
+    private static double? ApplyCcbCorporateAccountDetailDebitCredit(
+        FlowRecord record,
+        string debitText,
+        string creditText)
+    {
+        var debit = ParseDoubleOrNull(debitText);
+        var credit = ParseDoubleOrNull(creditText);
+        var signedAmount = debit.HasValue && credit.HasValue
+            ? credit.Value - debit.Value
+            : (double?)null;
+        if (signedAmount.HasValue && Math.Abs(signedAmount.Value) <= 0.005d)
+        {
+            signedAmount = null;
+        }
+
+        record.TradeMoney = signedAmount;
+        ApplySignedAmountColumns(record, signedAmount);
+        SetFlowRaw(record, "借方", debitText);
+        SetFlowRaw(record, "贷方", creditText);
+        return signedAmount;
+    }
+
+    private static (string DetailNumber, string TransactionSerial) SplitCcbCorporateSerial(string value)
+    {
+        var composite = CleanPdfValue(value);
+        var separatorIndex = composite.IndexOf('-');
+        if (separatorIndex < 0)
+        {
+            return (string.Empty, NormalizeCcbTransactionSerialValue(composite));
+        }
+
+        return (
+            CleanPdfValue(composite[..separatorIndex]),
+            NormalizeCcbTransactionSerialValue(composite[(separatorIndex + 1)..]));
+    }
+
+    private static string NormalizeCcbTransactionSerialValue(string value)
+    {
+        var serial = CleanPdfValue(value);
+        return serial.Equals("null", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : serial;
+    }
+
+    private static void ApplyCcbCorporateOpeningBalance(
+        BankUser user,
+        Bank bank,
+        IReadOnlyList<FlowRecord> records)
+    {
+        if (user.OpeningBalance != 0
+            || records.FirstOrDefault() is not { Balance: { } balance, TradeMoney: { } amount })
+        {
+            return;
+        }
+
+        var openingBalance = Math.Round(balance - amount, 2, MidpointRounding.AwayFromZero);
+        user.OpeningBalance = (decimal)openingBalance;
+        SetUserNamed(user, bank, "期初余额", openingBalance.ToString("0.00", CultureInfo.InvariantCulture));
+    }
+
+    private static void ValidateCcbCorporateAccountDetailBalances(IReadOnlyList<FlowRecord> records)
+    {
+        if (records.FirstOrDefault() is not { Balance: { } firstBalance } firstRecord)
+        {
+            throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+        }
+
+        // Validate against the statement itself rather than a pre-existing user's
+        // saved opening balance, which may belong to a different import period.
+        var previousBalance = firstBalance - (firstRecord.TradeMoney ?? 0d);
+        foreach (var record in records)
+        {
+            if (!record.Balance.HasValue)
+            {
+                throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+            }
+
+            var balanceChange = Math.Round(
+                record.Balance.Value - previousBalance,
+                2,
+                MidpointRounding.AwayFromZero);
+            var signedAmount = Math.Round(
+                record.TradeMoney ?? 0d,
+                2,
+                MidpointRounding.AwayFromZero);
+            if (Math.Abs(balanceChange - signedAmount) > 0.015d)
+            {
+                throw new InvalidDataException(CreateUnsupportedCcbCorporateLayoutMessage());
+            }
+
+            previousBalance = record.Balance.Value;
+        }
     }
 
     private static bool TryParseBocomCorporateRecord(
@@ -4616,18 +5254,6 @@ public sealed partial class PdfImportService : IPdfImportService
             || value.StartsWith("银行盖章", StringComparison.Ordinal)
             || value.StartsWith("序号 交易日期", StringComparison.Ordinal)
             || value.StartsWith("第", StringComparison.Ordinal);
-    }
-
-    private static bool IsCcbCorporateHeaderWord(PdfTextWord word)
-    {
-        return word.Text is "账号" or "交易时" or "借方发" or "贷方发" or "余额" or "币种" or "对方户" or "对方账" or "对方开" or "记账日" or "摘要" or "备注" or "账户明" or "企业流" or "凭证种" or "凭证号" or "交易介";
-    }
-
-    private static bool IsCcbCorporateFooterWord(string text)
-    {
-        return text.StartsWith("第", StringComparison.Ordinal)
-            || text.StartsWith("中国建设银行", StringComparison.Ordinal)
-            || text.StartsWith("温馨提示", StringComparison.Ordinal);
     }
 
     private static bool IsBocomCorporateHeaderWord(PdfTextWord word)
@@ -10950,11 +11576,13 @@ public sealed partial class PdfImportService : IPdfImportService
     private static void FillMissingPdfRecordTimes(IList<FlowRecord> records, Bank bank)
     {
         if (string.Equals(bank.Name, "农行", StringComparison.Ordinal)
-            || string.Equals(bank.Name, "招行", StringComparison.Ordinal))
+            || string.Equals(bank.Name, "招行", StringComparison.Ordinal)
+            || string.Equals(bank.Name, "建行对公", StringComparison.Ordinal))
         {
-            // Personal ABC rows can omit time selectively, while personal CMB
-            // statements contain no transaction-time column at all. Preserve the
-            // source state as midnight instead of fabricating deterministic times.
+            // Personal ABC rows can omit time selectively, personal CMB statements
+            // contain no transaction-time column, and the CCB corporate paper ledger
+            // contains dates only. Preserve the source state as midnight instead of
+            // fabricating deterministic times.
             return;
         }
 
@@ -11805,6 +12433,10 @@ public sealed partial class PdfImportService : IPdfImportService
 
         public List<PdfTextWord> Characters { get; } = [];
 
+        public List<PdfTableCellBox> TableCells { get; } = [];
+
+        public List<PdfEmbeddedImage> Images { get; } = [];
+
         public List<PdfImportIssue> Issues { get; } = [];
     }
 
@@ -11821,9 +12453,23 @@ public sealed partial class PdfImportService : IPdfImportService
 
     private sealed record PdfPositionedRow(int PageNumber, double Top, Dictionary<string, string> Cells);
 
+    private sealed record CcbCorporateCellRow(int PageNumber, double Top, IReadOnlyList<string> Cells);
+
     private sealed record PdfTextLine(int PageNumber, int LineNumber, string Text);
 
     private sealed record PdfTextWord(int PageNumber, string Text, double Left, double Right, double Top, double Bottom);
+
+    private sealed record PdfTableCellBox(int PageNumber, double Left, double Right, double Top, double Bottom);
+
+    private sealed record PdfEmbeddedImage(
+        int PageNumber,
+        double Left,
+        double Right,
+        double Top,
+        double Bottom,
+        int PixelWidth,
+        int PixelHeight,
+        byte[] PngData);
 
     private sealed record PdfTableRow(int PageNumber, int LineNumber, string RawText, Dictionary<int, string> Cells);
 }

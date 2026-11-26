@@ -48,6 +48,9 @@
     <PackageReference Include="QuestPDF" Version="2026.7.1" />
     <PackageReference Include="Stimulsoft.Reports.Wpf" Version="2026.3.3" />
     <PackageReference Include="System.Text.Json" Version="10.0.0" />
+    <PackageReference Include="TesseractOCR" Version="5.5.2" />
+    <PackageReference Include="TesseractOCR.Languages.ChineseSimplified" Version="1.0.0" />
+    <PackageReference Include="TesseractOCR.Languages.English" Version="1.0.0" />
     <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
